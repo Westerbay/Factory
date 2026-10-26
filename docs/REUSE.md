@@ -28,6 +28,24 @@ were consulted during setup. Electron 45 no longer installs its binary at packag
 postinstall time. Its official `install-electron` executable is run by desktop start hooks
 so electron-vite can find the binary on a fresh checkout.
 
+## Execution contracts
+
+- [Core model and reducer](../packages/core/src/index.ts) own provider-neutral run,
+  agent and interaction rules. Use them from application and adapter mappings; do not
+  duplicate transitions in the renderer or persistence layer.
+- [AgentRuntime and RunStore](../packages/core/src/ports.ts) are the extension points
+  for provider and persistence adapters. Implement their confirmation, atomicity,
+  ownership and detached-read guarantees before composing them into a host.
+- [ExecutionService](../packages/application/src/execution-service.ts) owns start,
+  continuation, answers, cancellation and history. Host observations distinguish durable
+  projections from transient fragments; diagnostics expose background/storage failures.
+  Host ID and clock sources must supply stable unique IDs and ISO UTC timestamps.
+- [Desktop schemas](../packages/contracts/src/index.ts) validate commands, projections,
+  results and events with Zod 4.6.7. Start commands reference host-issued workspace and
+  skill selections; schema validation does not replace source/ownership checks in the
+  future bridge. Internal domain code does not depend on Zod. Schema/domain parity is
+  checked in both directions without adding a source dependency between these packages.
+
 ## Deliberately excluded
 
 API/NestJS, SSR/router/authentication/sample users, mail/Mailpit, Valkey and monitoring

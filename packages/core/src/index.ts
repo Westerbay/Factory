@@ -1,2 +1,3 @@
-// Reserved package boundary; implementation arrives in a later approved task.
-export {}
+export * from "./model.js"
+export * from "./ports.js"
+export { reduceEvent, requireActive, requireAgent } from "./reducer.js"

@@ -1,2 +1,6 @@
-// Reserved package boundary; implementation arrives in a later approved task.
-export {}
+export { ExecutionService } from "./execution-service.js"
+export type {
+  ExecutionDependencies,
+  ExecutionDiagnostics,
+  ExecutionObservation,
+} from "./execution-service.js"

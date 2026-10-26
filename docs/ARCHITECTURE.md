@@ -17,9 +17,40 @@ checks. Electron owns the host shell; React runs in an isolated renderer.
 | Desktop preload        | Narrow context bridge             | Preload and contracts; Electron boundary |
 | Desktop runtime host   | Concrete assembly                 | Application, core and concrete adapters  |
 
-The shared packages currently contain empty module entrypoints to reserve enforceable
-boundaries. They expose no invented business behavior. Runtime composition, IPC ports,
-provider contracts and database schemas will arrive with their owning code tasks.
+Core owns [domain entities and events](../packages/core/src/model.ts), the pure
+[projection reducer](../packages/core/src/reducer.ts) and
+[outbound ports](../packages/core/src/ports.ts). Application owns
+[execution orchestration](../packages/application/src/execution-service.ts) and depends
+only on core. Contracts independently owns [Zod wire schemas](../packages/contracts/src/index.ts);
+compile-time parity and application-to-schema tests protect the common shapes.
+Database and provider adapters still have empty entrypoints. No Electron bridge is
+implemented by these schemas.
+
+## Execution and persistence boundary
+
+The host creates one execution service with a runtime, store, ID source and clock.
+Mutations are serialized; provider effects are invoked after durable command reservation
+and awaited outside the mutation queue so synchronous callbacks cannot deadlock it.
+The store must atomically reserve one active root and commit each material event with
+its versioned projection. Expected-version conflicts and duplicate IDs must not create
+partial history. Reads return detached snapshots; history pages follow commit sequence,
+not provider timestamps. Stream fragments are explicitly transient; completed messages
+are durable. Repeated identical event IDs are idempotent, conflicting content is rejected.
+
+Question handles transition pending -> submitting -> resolved only after provider
+acceptance. Stop, disconnection and originating-agent termination invalidate them.
+Provider completion arriving during a response waits for its acceptance. Provider-owned
+permission decisions use a separate contract and never acquire consent from defaults.
+Continuation on a terminal conversation creates a new run with a provider-neutral prior
+run/agent reference; the adapter owns the conversation correlation. Active steering is
+explicit and does not infer questions from prose.
+
+Runtime interruption must confirm termination of all owned work including children.
+A failed stop stays cancelling and can be explicitly retried. Storage failures latch
+an unavailable state, initiate cleanup and retain diagnostics; the application does
+not publish the failed projection as durable. A new host must reconcile persisted active
+runs as interrupted before allowing execution; durable recovery is part of the upcoming
+database/runtime integration. No execution is automatically replayed.
 
 The dependency-cruiser configuration resolves TypeScript aliases and includes type-only
 imports. Its regression harness checks both violations and permitted composition.

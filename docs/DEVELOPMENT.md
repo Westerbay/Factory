@@ -36,7 +36,14 @@ pnpm build
 The Node test runner exercises temporary dependency graphs, rejecting forbidden imports
 including type-only, resolved aliases, dynamic imports and Node builtins. Temporary
 fixture directories are removed after each test; no persistent seed data is created.
-There are no synthetic business tests for empty package entrypoints.
+`pnpm execution:test` builds the domain/application/contracts packages, checks independent
+wire/domain type parity, and runs deterministic execution and schema tests with Node's
+built-in runner. It covers concurrent starts, parent/child scope, blocking/nonblocking
+questions, explicit continuation, provider permissions, duplicate/stale requests,
+response/stop/disconnect ordering and persistence cleanup failure. Test adapters are
+confined to test directories and do not start real agents or create persistent seed data.
+The package runtime exports use built `dist` entries; TypeScript consumers resolve source
+types. Build the owning packages before invoking their JavaScript entrypoints directly.
 
 For a manual smoke check, open `pnpm dev`, verify the Factory foundation message and
 that it states no agent is running/no database is open, then close the window. Repeat
