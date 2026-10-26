@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "baseUrl": "..",
+    "moduleResolution": "Bundler",
+    "module": "ESNext",
+    "paths": {
+      "@workspace/core": ["packages/core/src/index.ts"],
+      "@workspace/application": ["packages/application/src/index.ts"],
+      "@workspace/contracts": ["packages/contracts/src/index.ts"],
+      "@workspace/adapters": ["packages/adapters/src/index.ts"],
+      "@workspace/database": ["packages/database/src/index.ts"],
+      "@workspace/ui": ["packages/ui/src/index.ts"],
+      "@system/*": ["apps/desktop/src/main/*"]
+    }
+  },
+  "include": [
+    "../apps/**/*.ts",
+    "../apps/**/*.tsx",
+    "../packages/**/*.ts",
+    "../packages/**/*.tsx"
+  ]
+}

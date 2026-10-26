@@ -1,0 +1,21 @@
+{
+  "name": "@workspace/adapters",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@workspace/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@workspace/config": "workspace:*",
+    "typescript": "5.9.3"
+  }
+}

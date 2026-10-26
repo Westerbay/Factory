@@ -1,0 +1,10 @@
+node_modules/
+dist/
+out/
+.turbo/
+*.tsbuildinfo
+.DS_Store
+.env*
+!.env.example
+# Planning documents stay local unless publication is explicitly requested.
+docs/plans/
