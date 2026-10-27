@@ -103,12 +103,49 @@ snapshots. The migration has an annotated manual `DEFERRABLE INITIALLY DEFERRED`
 ownership foreign key, which Drizzle's schema DSL cannot express; preserve it and run
 integration after changes. No temporary fixture content belongs in migrations.
 
-## Agent integration: pending step
+## Codex integration
 
-The later Codex adapter will use an installed, compatible Codex CLI and the user's
-existing sign-in. This scaffold never starts it, signs in, calls a model, modifies global
-configuration or touches credentials. Protocol fixtures and the bounded live acceptance
-journey will be documented when implemented; they have not run here.
+The provider adapter targets **codex-cli 0.160.0**. Supply the absolute path of an existing
+compatible executable; Factory does not install or upgrade Codex. Sign in through Codex's
+own supported UI/CLI outside Factory. The adapter uses the existing managed ChatGPT
+sign-in and never reads token files, requests token refresh, changes global configuration,
+or accepts an API key. A missing sign-in or incompatible version reports unavailable.
+
+```bash
+pnpm adapters:test
+pnpm codex:protocol /absolute/path/to/codex --check
+pnpm codex:probe /absolute/path/to/codex
+```
+
+`adapters:test` is part of `pnpm check`: sanitized in-process stdio fixtures exercise the
+real transport and application layer without starting Codex, calling a model or reading
+credentials. They cover framing/correlation/errors, skills, questions/permissions,
+continuation, native child mappings and cancellation/disconnect races.
+
+`codex:probe` is explicit and outside routine checks/CI. It checks the executable version,
+initializes app-server, requests `account/read` with `refreshToken:false`, prints only
+availability/capability booleans and safe reasons, then closes the owned server. It does
+not start a thread or a model turn. Capability flags mean the pinned mapping is present,
+not that native delegation or every model feature has been verified with this account.
+The command may require permission to start local processes. Never paste account output,
+provider stderr, credential files or real `.env` contents into troubleshooting reports.
+
+For intentional binding regeneration, run `pnpm codex:protocol /absolute/path/to/codex`
+and inspect the generated closure and provenance hashes. The generator rejects a changed
+version: a provider upgrade requires a separate compatibility review, updated projections,
+fixtures and pin. Generated files are preserved verbatim apart from ESM import extensions;
+they are excluded from formatting. `--check` verifies exact installed-generator parity.
+
+Current limitations: the desktop does not yet compose this adapter or expose execution
+controls. Conversation correlation survives only within one runtime instance. Secret
+questions, file-change approvals without a supported patch presentation, and unsupported
+actionable requests fail visibly. Stop waits for terminal
+notifications from every observed native thread, including children discovered while
+stopping. If confirmation is absent, it closes its server and reports cleanup unconfirmed;
+it does not infer success from an interrupt RPC response or process exit. This unresolved
+ownership also blocks reconnection/new runs and makes shutdown fail after disconnect. Real model,
+skill execution, delegation and native cleanup remain unverified until the bounded live
+acceptance journey. No live inference is required or authorized by routine diagnostics.
 
 ## Adding code
 
@@ -116,3 +153,8 @@ Use the responsibilities in [architecture](ARCHITECTURE.md). Runtime and adapter
 contracts belong with actual behavior, not placeholder APIs. Keep the UI appearance
 replaceable. Run the boundary tests after changing path aliases or dependencies.
 All local planning artifacts remain ignored under `docs/plans/`.
+
+The provider's `serverRequest/resolved` notification can mean answered or cleared. Factory
+correlates it only after sending the exact response and applies invalidation guards; the
+non-inference diagnostic does not prove acceptance behavior for every possible provider
+notification race. That remains part of bounded live integration acceptance.

@@ -23,7 +23,7 @@ Core owns [domain entities and events](../packages/core/src/model.ts), the pure
 [execution orchestration](../packages/application/src/execution-service.ts) and depends
 only on core. Contracts independently owns [Zod wire schemas](../packages/contracts/src/index.ts);
 compile-time parity and application-to-schema tests protect the common shapes.
-The database adapter implements RunStore; the provider adapter remains an empty entrypoint. No Electron bridge is
+The database adapter implements RunStore; the [Codex adapter](../packages/adapters/src/codex/runtime.ts) implements AgentRuntime. No Electron bridge is
 implemented by these schemas.
 
 ## Execution and persistence boundary
@@ -104,3 +104,40 @@ adapters. PostgreSQL and Drizzle stay in `packages/database`; the renderer never
 ORM or provider protocol types. Adding a service means implementing a focused adapter;
 a new domain capability may also require a new port. No HTTP API is needed in the
 current local application. See [development](DEVELOPMENT.md) for the current commands.
+
+## Codex protocol boundary
+
+[Stdio connection](../packages/adapters/src/codex/process.ts) starts an explicitly selected
+Codex 0.160.0 executable with no shell, configuration overrides or credential access.
+[Transport](../packages/adapters/src/codex/transport.ts) owns bounded newline framing,
+request correlation, timeouts and process lifecycle. Raw stderr, provider errors, account
+metadata, reasoning and tool output never become durable events or user diagnostics.
+
+Generated types retain a focused transitive closure from the installed CLI with provenance
+hashes for additional inspected mappings. [Validated projections](../packages/adapters/src/codex/protocol.ts)
+strip unrelated incoming fields. Binding regeneration is explicit and version checked.
+Runtime capability flags describe mappings supported by this pinned protocol; they do not
+prove the current account/model will execute native delegation or every experimental tool.
+
+The runtime keeps thread/turn/item and server-request IDs private. Core agent identities
+come from observed native spawn relationships. Terminal root success is buffered until all
+observed descendants settle. Completed messages are durable; deltas remain transient.
+Multiple questions share one provider response and a correlated resolved notification
+after submission, guarded by stop/disconnect/terminal invalidation; pending
+answers fail on stop, clear-before-submit or disconnect. Permissions allow/deny one action
+without changing provider approval or sandbox policy. Unsupported secret-input, file-change approvals without inspectable patches, and richer
+permission requests fail closed instead of pretending the current core model supports them.
+
+Active conversation steering requires the exact active turn ID. Terminal continuation
+creates a new run on the prior owned conversation. This correlation is session-local;
+restart recovery interrupts persisted work, and durable provider resume metadata is not
+implemented. Native child execution and resource termination still need the bounded live
+acceptance journey; protocol fixtures alone cannot establish those guarantees.
+
+Connection failure latches belong to one transport generation. Shutdown marks the runtime
+closing before awaiting an in-flight connector and disposes its result before returning;
+readiness cannot reopen a closing host. Execution outcome and native cleanup confirmation
+are separate: disconnection can project an interrupted run while unresolved owned work
+still blocks restart and makes close fail. Native follow-up turns on an existing child
+thread create fresh core execution identities under the current native parent execution;
+delayed events from previous turns cannot settle the renewed execution.

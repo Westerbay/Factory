@@ -69,3 +69,18 @@ migrations and synthetic fixtures are original; template tables, credentials and
 volumes are not reused. Connection documentation was checked against the official
 [Drizzle PostgreSQL guide](https://orm.drizzle.team/docs/get-started-postgresql) and
 [postgres-js transaction documentation](https://github.com/porsager/postgres#transactions).
+
+## Codex runtime
+
+- [CodexRuntime](../packages/adapters/src/codex/runtime.ts) implements AgentRuntime for
+  the pinned app-server. Compose it only in a privileged host; keep provider IDs,
+  pending-request correlation and compatibility checks inside this adapter.
+- [createStdioConnector](../packages/adapters/src/codex/process.ts) owns executable version
+  checks and stdio startup. Host code supplies an explicit executable path; readiness
+  never performs sign-in, token refresh, inference or global configuration changes.
+- [Generated protocol provenance](../packages/adapters/src/codex/generated/provenance.json)
+  records installed CLI output and the focused binding closure. The types are generated
+  by Codex's ts-rs protocol generator; Factory's projections, transport and mappings are
+  original. Zod 4.6.7 is reused from the existing workspace validation stack rather than
+  introducing a second validator. Protocol behavior was checked against the installed
+  generator and official [app-server documentation](https://learn.chatgpt.com/docs/app-server).

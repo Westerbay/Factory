@@ -2,8 +2,8 @@
 
 A local desktop workspace for agent workflows, built with Electron, React and TypeScript.
 The workspace provides the developer foundation, provider-neutral execution rules and
-validated desktop contracts, and a PostgreSQL persistence adapter. The window remains an honest foundation screen.
-It does not execute agents or connect to a database yet.
+validated desktop contracts, a PostgreSQL persistence adapter and a pinned Codex app-server adapter. The window remains an honest foundation screen.
+The window does not execute agents or connect to a database yet.
 
 ## Get started
 
@@ -50,3 +50,7 @@ pnpm db:stop
 
 See [database lifecycle](docs/DEVELOPMENT.md#local-postgresql) before running these commands.
 Setup creates only Factory-owned infrastructure; the desktop is not connected to it yet.
+
+The Codex adapter is verified with deterministic protocol fixtures and an explicit
+non-inference readiness command. See [Codex integration](docs/DEVELOPMENT.md#codex-integration)
+for the pinned executable and verification limits. Desktop composition follows separately.

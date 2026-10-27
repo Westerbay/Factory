@@ -4,3 +4,4 @@ dist/
 out/
 .turbo/
 docs/plans/
+packages/adapters/src/codex/generated/

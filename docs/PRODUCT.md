@@ -25,7 +25,7 @@ the previous result intact and retaining the one-root limit.
 Only confirmed provider success can complete a run. Stop enters cancelling before
 confirmed cleanup; disconnection invalidates outstanding requests. A failed storage
 operation blocks further commands and initiates owned-runtime cleanup. Failure to
-confirm cleanup remains visible. These rules currently run only in deterministic tests;
+confirm cleanup remains visible. These rules and the Codex protocol mappings are exercised with deterministic fixtures;
 they are not desktop controls or a real-agent demonstration.
 
 ## Following steps
@@ -36,6 +36,27 @@ it never restarts tools. The persistence adapter is verified against isolated Po
 and is not yet connected to the window.
 
 The remaining sequence adds local runtime/desktop communication,
-the Codex adapter, the operator interface and a bounded real-agent acceptance journey.
+the operator interface and a bounded real-agent acceptance journey.
 Those integrations are not connected yet. Cross-provider orchestration,
 remote hosting, skill authoring and an inherited template visual identity are excluded.
+
+## Codex adapter limits
+
+Codex structured requests remain distinct from prose and permission decisions. A provider
+request containing multiple questions is answered once after all required answers arrive;
+each question can submit independently while awaiting the shared provider acknowledgement.
+Secret-input questions, file-change approvals without a supported patch presentation,
+and unsupported actionable requests are rejected visibly. Silence,
+timeouts and request invalidation never grant permission. Permission action details are
+bounded; oversized details are rejected rather than truncated into uninformed consent.
+
+Native agents are identified only from provider collaboration events. Success waits for
+observed descendants to finish. Stop requires terminal confirmation for every owned thread;
+a request acknowledgement or app-server exit alone is insufficient. Unconfirmed native
+cleanup closes the owned app-server and remains a visible cancelling failure.
+A provider disconnect can terminate the recorded execution while cleanup stays unconfirmed.
+That outstanding ownership blocks new execution and makes shutdown fail visibly.
+Native follow-up turns receive fresh core execution identities while retaining provider
+thread ownership; terminal core agents are never reopened.
+Conversation continuation is available within the current runtime session; provider IDs are
+kept inside the adapter and cannot currently resume a conversation after host restart.
