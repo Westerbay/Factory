@@ -50,12 +50,60 @@ that it states no agent is running/no database is open, then close the window. R
 with `pnpm build` and `pnpm start`. Resizing should not clip the content. There are no
 interactive controls or privileged renderer methods to exercise yet.
 
-## Persistence and agents: pending steps
+## Local PostgreSQL
 
-PostgreSQL with Drizzle is the approved persistence stack. Docker Compose, local target
-ownership checks, migrations and isolated database tests will be introduced in the
-persistence task. Do not run template database commands against Factory or point it at
-an existing/shared database. This increment requires no Docker, database or `.env` file.
+The desktop window remains independent of the database. `pnpm check` runs deterministic
+guard checks without Docker or secrets; `pnpm test:integration` explicitly requires a
+local Docker Engine and Compose with permission to access its socket. First use may
+pull the pinned official PostgreSQL 17.11 Bookworm image. No real `.env` file is read,
+created or changed. The Compose file is operated through the guarded scripts below;
+do not run template commands or supply an existing/shared database.
+
+```bash
+pnpm db:setup       # create/start owned factory-local PostgreSQL, then apply migrations
+pnpm db:status      # read-only readiness; never creates tables or reconciles runs
+pnpm db:migrate     # explicitly apply committed migrations to the verified local target
+pnpm db:stop        # stop the exact owned service; retain its volume and marker
+pnpm test:integration
+```
+
+Development uses project `factory-local`, database `factory_local`, user `factory`,
+port `127.0.0.1:55432` and volume `factory-local_postgres_data`. The password
+`local-fixture-only` is deliberately public synthetic local configuration, not a secret
+or a production credential. The ignored `.factory/database-owner` file contains a
+non-secret UUID ownership marker. Keep it with the checkout while its volume exists.
+Setup rejects unknown preexisting resources instead of adopting them. A missing marker
+with existing resources, conflicting port, Docker permission error or failed health
+check requires resolving that exact condition; never reset/prune volumes to bypass it.
+Running `db:setup` again preserves data and idempotently applies pending migrations.
+Keep the marker after `db:stop`; no database reset/delete command is provided.
+
+Every connection/migration target is checked against Docker project, owner and checkout
+labels, container name, database identity, credentials, volume and exact loopback port.
+Docker is pinned to `unix:///var/run/docker.sock`, independently of stored contexts or
+`DOCKER_HOST`. Compose receives `--env-file /dev/null` and a restricted environment. Remote, shared,
+unknown and mismatched targets are rejected before SQL. Database readiness returns
+`pending-migrations`, `unavailable` or `closed`; normal readiness has no migration,
+recovery or provisioning side effects. PostgreSQL clients and URLs remain privileged.
+
+Integration creates a unique `factory-test-<UUID>` Compose project and owner token with
+an OS-allocated loopback port and a separate durable test volume. It applies migrations
+twice and exercises the actual ExecutionService with PostgreSQL and a test-only runtime:
+created reservation, confirmed start, persisted question/answer and cancellation. It also
+verifies cross-run foreign keys, concurrent active roots and versions,
+idempotent event handling, full transaction/recovery rollback, answered and pending
+questions, history pagination, reconnect, explicit restart recovery, unavailable and
+closed connections. It never starts an agent or replays tools. Cleanup first checks all
+resource identities, then removes only that fixture's exact container, volume and
+network. Development resources are never deleted. If cleanup is interrupted, retain the
+reported failure and inspect that exact `factory-test-*` project before manual removal.
+
+For schema changes, run `pnpm --filter @workspace/database generate` and inspect SQL and
+snapshots. The migration has an annotated manual `DEFERRABLE INITIALLY DEFERRED` root
+ownership foreign key, which Drizzle's schema DSL cannot express; preserve it and run
+integration after changes. No temporary fixture content belongs in migrations.
+
+## Agent integration: pending step
 
 The later Codex adapter will use an installed, compatible Codex CLI and the user's
 existing sign-in. This scaffold never starts it, signs in, calls a model, modifies global
