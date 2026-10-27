@@ -214,7 +214,7 @@ importers:
         version: 19.2.3(@types/react@19.2.14)
       '@vitejs/plugin-react':
         specifier: 6.1.2
-        version: 6.1.2(vite@8.3.5(@types/node@24.5.2))
+        version: 6.1.2(vite@8.3.5(@types/node@24.5.2)(esbuild@0.28.2)(tsx@4.23.15))
       '@workspace/config':
         specifier: workspace:*
         version: link:../../packages/config
@@ -223,20 +223,26 @@ importers:
         version: 45.0.0(supports-color@7.2.0)
       electron-vite:
         specifier: 6.0.0
-        version: 6.0.0(supports-color@7.2.0)(vite@8.3.5(@types/node@24.5.2))
+        version: 6.0.0(supports-color@7.2.0)(vite@8.3.5(@types/node@24.5.2)(esbuild@0.28.2)(tsx@4.23.15))
       typescript:
         specifier: 5.9.3
         version: 5.9.3
       vite:
         specifier: 8.3.5
-        version: 8.3.5(@types/node@24.5.2)
+        version: 8.3.5(@types/node@24.5.2)(esbuild@0.28.2)(tsx@4.23.15)
 
   packages/adapters:
     dependencies:
       '@workspace/core':
         specifier: workspace:*
         version: link:../core
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
+      '@types/node':
+        specifier: 24.5.2
+        version: 24.5.2
       '@workspace/config':
         specifier: workspace:*
         version: link:../config
@@ -2656,10 +2662,10 @@ snapshots:
       '@typescript-eslint/types': 8.72.0
       eslint-visitor-keys: 5.0.1
 
-  '@vitejs/plugin-react@6.1.2(vite@8.3.5(@types/node@24.5.2))':
+  '@vitejs/plugin-react@6.1.2(vite@8.3.5(@types/node@24.5.2)(esbuild@0.28.2)(tsx@4.23.15))':
     dependencies:
       '@rolldown/pluginutils': 1.0.1
-      vite: 8.3.5(@types/node@24.5.2)
+      vite: 8.3.5(@types/node@24.5.2)(esbuild@0.28.2)(tsx@4.23.15)
 
   acorn-jsx-walk@2.0.0: {}
 
@@ -2790,7 +2796,7 @@ snapshots:
 
   electron-to-chromium@1.5.464: {}
 
-  electron-vite@6.0.0(supports-color@7.2.0)(vite@8.3.5(@types/node@24.5.2)):
+  electron-vite@6.0.0(supports-color@7.2.0)(vite@8.3.5(@types/node@24.5.2)(esbuild@0.28.2)(tsx@4.23.15)):
     dependencies:
       '@babel/core': 7.29.7(supports-color@7.2.0)
       '@babel/plugin-transform-arrow-functions': 7.29.7(@babel/core@7.29.7(supports-color@7.2.0))
@@ -2798,7 +2804,7 @@ snapshots:
       magic-string: 1.4.3
       picocolors: 1.1.1
       rolldown: 1.2.15
-      vite: 8.3.5(@types/node@24.5.2)
+      vite: 8.3.5(@types/node@24.5.2)(esbuild@0.28.2)(tsx@4.23.15)
     transitivePeerDependencies:
       - supports-color
 
@@ -3389,7 +3395,7 @@ snapshots:
     dependencies:
       punycode: 2.3.1
 
-  vite@8.3.5(@types/node@24.5.2):
+  vite@8.3.5(@types/node@24.5.2)(esbuild@0.28.2)(tsx@4.23.15):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.7
@@ -3398,7 +3404,9 @@ snapshots:
       tinyglobby: 0.2.17
     optionalDependencies:
       '@types/node': 24.5.2
+      esbuild: 0.28.2
       fsevents: 2.3.3
+      tsx: 4.23.15
 
   watskeburt@6.0.0: {}
 

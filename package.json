@@ -19,7 +19,7 @@
     "format:check": "prettier --check .",
     "boundaries:check": "depcruise --config packages/config/dependency-cruiser.mjs apps packages",
     "boundaries:test": "node --test scripts/test/boundaries.test.mjs",
-    "test": "pnpm execution:test && pnpm database:test && pnpm boundaries:test",
+    "test": "pnpm execution:test && pnpm adapters:test && pnpm database:test && pnpm boundaries:test",
     "docs:check": "node scripts/docs-check.mjs",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm boundaries:check && pnpm docs:check && pnpm build",
     "execution:test": "pnpm --filter @workspace/application... build && pnpm --filter @workspace/contracts build && tsc --project packages/contracts/test/tsconfig.json && node --test packages/application/test/*.test.mjs packages/contracts/test/*.test.mjs",
@@ -29,7 +29,10 @@
     "db:status": "pnpm db:build && node scripts/database/local.mjs status",
     "db:stop": "pnpm db:build && node scripts/database/local.mjs stop",
     "database:test": "pnpm db:build && node --test packages/database/test/target.test.mjs",
-    "test:integration": "pnpm --filter @workspace/database... --filter @workspace/application... build && node scripts/database/integration.mjs"
+    "test:integration": "pnpm --filter @workspace/database... --filter @workspace/application... build && node scripts/database/integration.mjs",
+    "adapters:test": "pnpm --filter @workspace/adapters... --filter @workspace/application... build && node --test packages/adapters/test/*.test.mjs",
+    "codex:protocol": "node packages/adapters/scripts/generate-protocol.mjs",
+    "codex:probe": "pnpm --filter @workspace/adapters... build && node packages/adapters/scripts/probe.mjs"
   },
   "devDependencies": {
     "dependency-cruiser": "18.6.0",
