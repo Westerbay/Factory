@@ -2,8 +2,9 @@
 
 A local desktop workspace for agent workflows, built with Electron, React and TypeScript.
 The workspace provides the developer foundation, provider-neutral execution rules and
-validated desktop contracts, a PostgreSQL persistence adapter and a pinned Codex app-server adapter. The window remains an honest foundation screen.
-The window does not execute agents or connect to a database yet.
+validated desktop contracts, a PostgreSQL persistence adapter and a pinned Codex app-server adapter. A separate Electron utility host connects these implementations to a minimal operator
+interface: native workspace selection, tasks/skills, agent relationships, inert output,
+explicit questions/permissions, stop, conversation continuation and persisted history.
 
 ## Get started
 
@@ -12,6 +13,7 @@ required to open the desktop window.
 
 ```bash
 pnpm install --frozen-lockfile
+pnpm db:setup   # explicitly provision/migrate the verified local Docker target
 pnpm dev
 ```
 
@@ -49,8 +51,14 @@ pnpm db:stop
 ```
 
 See [database lifecycle](docs/DEVELOPMENT.md#local-postgresql) before running these commands.
-Setup creates only Factory-owned infrastructure; the desktop is not connected to it yet.
+Setup creates only Factory-owned infrastructure. Desktop startup verifies it and recovers
+abandoned runs without provisioning, migration or tool replay. Missing setup is visible
+in the window.
 
 The Codex adapter is verified with deterministic protocol fixtures and an explicit
 non-inference readiness command. See [Codex integration](docs/DEVELOPMENT.md#codex-integration)
-for the pinned executable and verification limits. Desktop composition follows separately.
+for the pinned executable and verification limits. The desktop resolves compatible `codex`
+from its host PATH and uses its existing managed sign-in. Live Codex execution remains a
+separate bounded acceptance step. `pnpm desktop:smoke` explicitly exercises the built window
+with a separate synthetic provider and isolated real PostgreSQL, without inference or
+credentials; it requires Docker and a graphical session.
