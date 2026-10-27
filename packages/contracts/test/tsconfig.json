@@ -1,0 +1,5 @@
+{
+  "extends": "../../config/typescript/base.json",
+  "compilerOptions": { "noEmit": true, "lib": ["ES2022"], "types": [] },
+  "include": ["contract-parity.ts"]
+}

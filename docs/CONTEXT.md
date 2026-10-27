@@ -4,8 +4,10 @@ Factory is a local Electron application for building and observing agent workflo
 The user wants modular hexagonal boundaries, local execution, existing skills as the
 workflow source of truth, and frequent review after each code task.
 
-The first increment adapts the English WebApp Template foundation into a desktop
-workspace. The source template stays unchanged. Development is Linux-first; distributing
+The workspace adapts the English WebApp Template foundation for desktop. Provider-neutral
+execution rules and validated desktop contracts are implemented and exercised with
+test-only deterministic adapters. The Electron window remains the foundation screen;
+no execution service, real provider or persistence adapter is connected to it yet. The source template stays unchanged. Development is Linux-first; distributing
 installers and running a VPS service are outside this increment.
 
 Local execution describes the agent tools and host. A provider may still call a remote

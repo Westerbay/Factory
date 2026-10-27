@@ -5,15 +5,21 @@
   "type": "module",
   "license": "MIT",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
   },
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {},
+  "dependencies": {
+    "zod": "4.6.7"
+  },
   "devDependencies": {
     "@workspace/config": "workspace:*",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "@workspace/core": "workspace:*"
   }
 }

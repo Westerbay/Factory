@@ -13,9 +13,24 @@ Opening Factory shows a minimal desktop foundation screen. It explicitly states 
 no agent is running and no database has been opened. There are no simulated execution
 controls, invented running agents or sample history.
 
+## Implemented execution rules
+
+The application layer reserves one active root run, observes real-agent parent/child
+identity and scopes blocking questions to their originating execution. Nonblocking
+questions do not suspend it. Structured answers and provider permission decisions are
+separate, explicit, single-use operations. Ordinary prose never creates a blocking
+question. An explicit reply to a terminal conversation starts a new linked run, leaving
+the previous result intact and retaining the one-root limit.
+
+Only confirmed provider success can complete a run. Stop enters cancelling before
+confirmed cleanup; disconnection invalidates outstanding requests. A failed storage
+operation blocks further commands and initiates owned-runtime cleanup. Failure to
+confirm cleanup remains visible. These rules currently run only in deterministic tests;
+they are not desktop controls or a real-agent demonstration.
+
 ## Following steps
 
-The approved sequence adds local runtime/desktop communication, PostgreSQL persistence,
+The remaining sequence adds PostgreSQL persistence, local runtime/desktop communication,
 the Codex adapter, the operator interface and a bounded real-agent acceptance journey.
-Those are not implemented by the foundation step. Cross-provider orchestration,
+Those integrations are not connected yet. Cross-provider orchestration,
 remote hosting, skill authoring and an inherited template visual identity are excluded.

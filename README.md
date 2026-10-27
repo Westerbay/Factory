@@ -1,7 +1,8 @@
 # Factory
 
 A local desktop workspace for agent workflows, built with Electron, React and TypeScript.
-This first increment provides the developer foundation and an honest startup screen.
+The workspace provides the developer foundation, provider-neutral execution rules and
+validated desktop contracts. The window remains an honest foundation screen.
 It does not execute agents or connect to a database yet.
 
 ## Get started
@@ -22,7 +23,8 @@ pnpm start
 ```
 
 Run `pnpm check` for formatting, lint, types, boundary regression tests, dependency
-rules, documentation links and the production build. No check requires model calls,
+rules, deterministic execution/interaction tests, wire-schema parity, documentation links
+and the production build. No check requires model calls,
 credentials, Docker or a database in this increment.
 
 ## Documentation
