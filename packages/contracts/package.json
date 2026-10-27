@@ -8,6 +8,10 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./desktop": {
+      "types": "./src/desktop.ts",
+      "default": "./dist/desktop.js"
     }
   },
   "scripts": {

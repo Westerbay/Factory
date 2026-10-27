@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.node.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "./out/test",
+    "rootDir": "./src"
+  },
+  "include": [
+    "src/runtime/host.ts",
+    "src/runtime/worker-loop.ts",
+    "src/main/runtime-client.ts",
+    "src/main/security.ts",
+    "src/runtime/observation-relay.ts"
+  ]
+}

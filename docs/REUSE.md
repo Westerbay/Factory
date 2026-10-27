@@ -43,7 +43,7 @@ so electron-vite can find the binary on a fresh checkout.
 - [Desktop schemas](../packages/contracts/src/index.ts) validate commands, projections,
   results and events with Zod 4.6.7. Start commands reference host-issued workspace and
   skill selections; schema validation does not replace source/ownership checks in the
-  future bridge. Internal domain code does not depend on Zod. Schema/domain parity is
+  privileged bridge. Internal domain code does not depend on Zod. Schema/domain parity is
   checked in both directions without adding a source dependency between these packages.
 
 ## Deliberately excluded
@@ -76,7 +76,7 @@ volumes are not reused. Connection documentation was checked against the officia
   the pinned app-server. Compose it only in a privileged host; keep provider IDs,
   pending-request correlation and compatibility checks inside this adapter.
 - [createStdioConnector](../packages/adapters/src/codex/process.ts) owns executable version
-  checks and stdio startup. Host code supplies an explicit executable path; readiness
+  checks and stdio startup. Host code supplies the trusted executable (the desktop currently resolves `codex` from its host PATH); readiness
   never performs sign-in, token refresh, inference or global configuration changes.
 - [Generated protocol provenance](../packages/adapters/src/codex/generated/provenance.json)
   records installed CLI output and the focused binding closure. The types are generated
@@ -84,3 +84,25 @@ volumes are not reused. Connection documentation was checked against the officia
   original. Zod 4.6.7 is reused from the existing workspace validation stack rather than
   introducing a second validator. Protocol behavior was checked against the installed
   generator and official [app-server documentation](https://learn.chatgpt.com/docs/app-server).
+
+## Desktop integration
+
+- [Desktop bridge contracts](../packages/contracts/src/desktop.ts) own the narrow API,
+  host status and generation-correlated utility messages. Reuse them across main, preload
+  and renderer; validate untrusted IPC at each process boundary and check sender identity
+  separately. They do not grant arbitrary paths or executable configuration.
+- [DesktopHost](../apps/desktop/src/runtime/host.ts) is the privileged composition adapter
+  for real application commands, native-granted workspace/skill references and sanitized
+  execution observations. Compose additional adapters here rather than in presentation.
+- [RuntimeClient](../apps/desktop/src/main/runtime-client.ts) owns bounded request correlation
+  and process-loss handling. Human responses remain independent and have no human deadline;
+  utility death never proves provider cleanup.
+- [Owned PostgreSQL opening](../apps/desktop/src/runtime/database.ts) reuses the CLI's original
+  Docker inspection module without bundling away its checkout identity. Setup and migration
+  stay explicit; desktop initialization only verifies readiness and performs recovery.
+
+The implementation follows Electron's official [utility-process API](https://www.electronjs.org/docs/latest/api/utility-process),
+[context bridge guidance](https://www.electronjs.org/docs/latest/api/context-bridge) and
+[security guidance](https://www.electronjs.org/docs/latest/tutorial/security), checked against
+the installed Electron 45 types. No extra IPC, state-management or UI dependency was needed;
+React's external-store subscription owns renderer synchronization without effect hooks.

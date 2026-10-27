@@ -196,12 +196,30 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@workspace/adapters':
+        specifier: workspace:*
+        version: link:../../packages/adapters
+      '@workspace/application':
+        specifier: workspace:*
+        version: link:../../packages/application
+      '@workspace/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@workspace/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@workspace/database':
+        specifier: workspace:*
+        version: link:../../packages/database
       react:
         specifier: 19.2.6
         version: 19.2.6
       react-dom:
         specifier: 19.2.6
         version: 19.2.6(react@19.2.6)
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@types/node':
         specifier: 24.5.2

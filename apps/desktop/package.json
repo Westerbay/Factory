@@ -9,12 +9,18 @@
     "start": "electron-vite preview --skipBuild",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.renderer.json",
-    "predev": "install-electron",
+    "predev": "pnpm --filter @workspace/desktop^... build && install-electron",
     "prestart": "install-electron"
   },
   "dependencies": {
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "@workspace/core": "workspace:*",
+    "@workspace/contracts": "workspace:*",
+    "@workspace/application": "workspace:*",
+    "@workspace/adapters": "workspace:*",
+    "@workspace/database": "workspace:*",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@workspace/config": "workspace:*",

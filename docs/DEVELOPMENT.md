@@ -9,15 +9,20 @@
 
 ```bash
 pnpm install --frozen-lockfile
+pnpm db:setup   # explicit owned local Docker setup and migrations
 pnpm dev
 ```
 
 `pnpm dev` starts the desktop main/preload build and the Vite loopback renderer.
-The desktop `predev` / `prestart` hooks run the official `install-electron` command:
+The desktop `predev` hook first builds its workspace dependency closure. Both `predev`
+and `prestart` run the official `install-electron` command:
 Electron 45 downloads its binary on demand, while electron-vite expects it to exist.
 The installer reuses an already verified installation; first launch needs network access.
-Close the window or press Ctrl+C to stop development. The current application owns no
-agent, database or background service. `pnpm start` previews an existing production
+The native close dialog defaults to keep open; choose stop and close to wait for owned
+provider cleanup and pool shutdown. Do not use Ctrl+C as a substitute for confirmed agent
+cleanup. A failed cleanup remains visible and keeps the window open. Stop active work
+before editing main/utility source: development hot restarts and externally forced exits
+cannot establish native descendant cleanup. `pnpm start` previews an existing production
 build; run `pnpm build` first. Installers and packaging are not part of this increment.
 
 ## Checks
@@ -45,14 +50,35 @@ confined to test directories and do not start real agents or create persistent s
 The package runtime exports use built `dist` entries; TypeScript consumers resolve source
 types. Build the owning packages before invoking their JavaScript entrypoints directly.
 
-For a manual smoke check, open `pnpm dev`, verify the Factory foundation message and
-that it states no agent is running/no database is open, then close the window. Repeat
-with `pnpm build` and `pnpm start`. Resizing should not clip the content. There are no
-interactive controls or privileged renderer methods to exercise yet.
+`pnpm desktop:test` builds the real host/application boundary and checks generation/source
+validation, native workspace ownership, concurrent multi-question replies, persistence
+readiness/recovery failure, stop/history and worker loss using deterministic doubles. It is
+part of `pnpm check` and never connects to Docker or Codex.
+
+For an explicit built-window acceptance, run `pnpm desktop:smoke`. It requires the same
+graphical Linux session as the application and permission to access local Docker. It
+creates only a unique identity-verified `factory-test-*` project, applies migrations,
+builds a **separate test-only main and utility entry**, and uses a synthetic provider with
+no model, tools or account. The production entry has no fixture/provider environment flag.
+The journey exercises actual sandboxed preload IPC, workspace selection, independently
+pending questions, explicit permission, inert malicious markup, stop, linked continuation,
+worker death and restart recovery/history against PostgreSQL. Wide/narrow PNGs and bounded
+logs are written to the reported temporary directory. Cleanup removes only that fixture's
+verified container, volume and network. No development database is created or deleted.
+This is desktop integration evidence, not native Codex execution or cleanup proof.
+
+For manual UI inspection, run `pnpm dev` or `pnpm build && pnpm start`. Confirm readiness,
+choose a workspace, inspect enabled skill names/paths and persisted history, and verify
+narrow layout, focus outlines and explicit request states. Provider probe starts the
+installed app-server only for managed-account metadata. Starting a task or continuing a
+conversation invokes a model and should be deliberate. The bounded real-agent journey is
+a separate acceptance step. Missing database setup should leave the interface unavailable
+with recovery instructions; startup must not silently provision or migrate it.
 
 ## Local PostgreSQL
 
-The desktop window remains independent of the database. `pnpm check` runs deterministic
+The utility host requires the verified owned database; renderer and preload remain
+independent of database implementations. `pnpm check` runs deterministic
 guard checks without Docker or secrets; `pnpm test:integration` explicitly requires a
 local Docker Engine and Compose with permission to access its socket. First use may
 pull the pinned official PostgreSQL 17.11 Bookworm image. No real `.env` file is read,
@@ -106,7 +132,8 @@ integration after changes. No temporary fixture content belongs in migrations.
 ## Codex integration
 
 The provider adapter targets **codex-cli 0.160.0**. Supply the absolute path of an existing
-compatible executable; Factory does not install or upgrade Codex. Sign in through Codex's
+compatible executable to diagnostics; the desktop uses `codex` from its trusted host PATH.
+Factory does not install or upgrade Codex. Sign in through Codex's
 own supported UI/CLI outside Factory. The adapter uses the existing managed ChatGPT
 sign-in and never reads token files, requests token refresh, changes global configuration,
 or accepts an API key. A missing sign-in or incompatible version reports unavailable.
@@ -136,8 +163,8 @@ version: a provider upgrade requires a separate compatibility review, updated pr
 fixtures and pin. Generated files are preserved verbatim apart from ESM import extensions;
 they are excluded from formatting. `--check` verifies exact installed-generator parity.
 
-Current limitations: the desktop does not yet compose this adapter or expose execution
-controls. Conversation correlation survives only within one runtime instance. Secret
+Current limitations: the current skill runtime port returns enabled names/paths without
+descriptions or disabled entries; the complete intended catalog is not yet implemented. Conversation correlation survives only within one runtime instance. Secret
 questions, file-change approvals without a supported patch presentation, and unsupported
 actionable requests fail visibly. Stop waits for terminal
 notifications from every observed native thread, including children discovered while
