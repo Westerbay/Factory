@@ -30,7 +30,12 @@ they are not desktop controls or a real-agent demonstration.
 
 ## Following steps
 
-The remaining sequence adds PostgreSQL persistence, local runtime/desktop communication,
+PostgreSQL persistence preserves execution history and completed messages. Explicit
+startup recovery interrupts unfinished runs and invalidates pending interaction handles;
+it never restarts tools. The persistence adapter is verified against isolated PostgreSQL,
+and is not yet connected to the window.
+
+The remaining sequence adds local runtime/desktop communication,
 the Codex adapter, the operator interface and a bounded real-agent acceptance journey.
 Those integrations are not connected yet. Cross-provider orchestration,
 remote hosting, skill authoring and an inherited template visual identity are excluded.

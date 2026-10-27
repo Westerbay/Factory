@@ -1,0 +1,30 @@
+# Only Factory PostgreSQL. Scripts supply sanitized variables explicitly.
+services:
+  postgres:
+    image: postgres:17.11-bookworm@sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27
+    environment:
+      POSTGRES_DB: ${FACTORY_DB_NAME:?Use pnpm db:setup}
+      POSTGRES_USER: factory
+      POSTGRES_PASSWORD: local-fixture-only
+    ports:
+      - "127.0.0.1:${FACTORY_DB_PORT:?Use pnpm db:setup}:5432"
+    labels:
+      io.factory.owner: ${FACTORY_DB_OWNER:?Use pnpm db:setup}
+      io.factory.directory: ${FACTORY_DB_DIRECTORY:?Use pnpm db:setup}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U factory -d $$POSTGRES_DB"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+volumes:
+  postgres_data:
+    labels:
+      io.factory.owner: ${FACTORY_DB_OWNER:?Use pnpm db:setup}
+      io.factory.directory: ${FACTORY_DB_DIRECTORY:?Use pnpm db:setup}
+networks:
+  default:
+    labels:
+      io.factory.owner: ${FACTORY_DB_OWNER:?Use pnpm db:setup}
+      io.factory.directory: ${FACTORY_DB_DIRECTORY:?Use pnpm db:setup}

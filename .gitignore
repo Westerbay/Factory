@@ -8,3 +8,6 @@ out/
 !.env.example
 # Planning documents stay local unless publication is explicitly requested.
 docs/plans/
+
+# Local non-secret database ownership marker.
+.factory/

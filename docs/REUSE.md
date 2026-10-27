@@ -52,6 +52,20 @@ API/NestJS, SSR/router/authentication/sample users, mail/Mailpit, Valkey and mon
 are absent from runtime dependencies and scripts. No template stylesheet, font or page
 layout is retained. Shadcn is deferred until a real control is needed.
 
-PostgreSQL/Drizzle connection lifecycle and guarded local infrastructure patterns will be
-adapted in the persistence task, with Factory-owned schema and identities. No source
-schema, SQL migration or database service is copied in this foundation task.
+## Persistence lifecycle
+
+- [createDatabase](../packages/database/src/client.ts) adapts the template's Drizzle and
+  postgres-js connection/ready/close pattern. It owns the PostgreSQL RunStore, explicit
+  migration and startup reconciliation lifecycle. Use it only in a privileged host with
+  a verified Factory target; never import it into renderer or preload.
+- [Target verification](../packages/database/src/target.ts) strengthens the template's
+  local-target guard with project, checkout, ownership and published-port identity.
+  [Docker inspection](../scripts/database/owned.mjs) supplies the actual resource proof
+  before setup/migration/integration work. A loopback address alone is insufficient.
+
+Drizzle ORM 0.45.4, Drizzle Kit 0.31.11 and postgres-js 3.4.9 are pinned from official
+registry metadata. PostgreSQL 17.11 Bookworm is pinned by image digest. The Factory schema,
+migrations and synthetic fixtures are original; template tables, credentials and existing
+volumes are not reused. Connection documentation was checked against the official
+[Drizzle PostgreSQL guide](https://orm.drizzle.team/docs/get-started-postgresql) and
+[postgres-js transaction documentation](https://github.com/porsager/postgres#transactions).

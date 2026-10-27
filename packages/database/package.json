@@ -5,17 +5,25 @@
   "type": "module",
   "license": "MIT",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
   },
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "generate": "drizzle-kit generate"
   },
   "dependencies": {
-    "@workspace/core": "workspace:*"
+    "@workspace/core": "workspace:*",
+    "drizzle-orm": "0.45.4",
+    "postgres": "3.4.9"
   },
   "devDependencies": {
+    "@types/node": "24.5.2",
     "@workspace/config": "workspace:*",
+    "drizzle-kit": "0.31.11",
     "typescript": "5.9.3"
   }
 }

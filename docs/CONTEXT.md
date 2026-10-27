@@ -6,7 +6,8 @@ workflow source of truth, and frequent review after each code task.
 
 The workspace adapts the English WebApp Template foundation for desktop. Provider-neutral
 execution rules and validated desktop contracts are implemented and exercised with
-test-only deterministic adapters. The Electron window remains the foundation screen;
+test-only deterministic adapters. PostgreSQL persistence, guarded local setup, explicit
+restart recovery and isolated database integration checks are now implemented. The Electron window remains the foundation screen;
 no execution service, real provider or persistence adapter is connected to it yet. The source template stays unchanged. Development is Linux-first; distributing
 installers and running a VPS service are outside this increment.
 
