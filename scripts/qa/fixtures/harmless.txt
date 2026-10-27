@@ -1,0 +1,4 @@
+Factory acceptance inventory (synthetic, public fixture)
+- Amber triangle: 2
+- Blue circle: 3
+Total objects: 5

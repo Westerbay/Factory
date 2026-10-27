@@ -62,3 +62,15 @@ from its host PATH and uses its existing managed sign-in. Live Codex execution r
 separate bounded acceptance step. `pnpm desktop:smoke` explicitly exercises the built window
 with a separate synthetic provider and isolated real PostgreSQL, without inference or
 credentials; it requires Docker and a graphical session.
+
+For the bounded real Codex acceptance fixture:
+
+```bash
+pnpm qa:workspace -- prepare
+# Follow the printed workspace/skill/prompt and the acceptance journey below.
+pnpm qa:workspace -- cleanup --agents-stopped
+```
+
+See the [bounded acceptance journey](docs/DEVELOPMENT.md#bounded-real-codex-acceptance)
+before starting a model run or acknowledging stopped agents. Preparation needs no account,
+Docker or inference. Cleanup preserves development history and existing skills.
