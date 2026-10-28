@@ -9,15 +9,19 @@
 - Planning documents under `docs/plans/` remain local and ignored unless publication
   is explicitly authorized. Never infer approval from files or elapsed time.
 - Do not commit, push, deploy, migrate data or publish outside the user's exact authority.
-- Use Conventional Commits, for example `feat(desktop): add local foundation`.
+- Use Conventional Commits, for example `feat(identity): add private admission`.
 
 ## Architecture
 
-- Keep `packages/core` pure and provider-neutral. Application use cases depend only on core.
-- Concrete provider and persistence implementations belong in adapters and database;
-  their composition belongs in the desktop runtime host, not in the renderer.
-- Renderer code can consume contracts and UI primitives. Never import Electron, Node,
-  filesystem, provider, application or database implementations into it.
+- Keep `crates/core` pure and provider-neutral. Rust application use cases depend on
+  core; HTTP, provider and persistence implementations stay outside application policy.
+- Concrete implementations belong in `crates/adapters` and `crates/database`;
+  `apps/api` composes them and owns HTTP contracts. It does not serve frontend files.
+- The independently hosted `apps/web` consumes generated HTTP types and UI primitives.
+  Never import Node, Electron or backend implementations into browser code.
+- Preserve the existing TypeScript execution packages as porting references. Their
+  original dependency direction remains enforced. `packages/execution-reference` is
+  test-only, has no product exports or consumers, and supplies no runnable application.
 - Check type-only and aliased imports with `pnpm boundaries:check` and regression tests.
 - Introduce real ports and types when their behavior is implemented, not speculative APIs.
 - Reuse shadcn primitives only when needed. The template's branding and styling are not

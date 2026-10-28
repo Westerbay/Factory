@@ -49,25 +49,41 @@ export default {
       to: { pathNot: "^packages/contracts/src/|(^|/)node_modules/zod/" },
     },
     {
-      name: "renderer-no-system",
+      name: "reference-renderer-no-system",
       severity: "error",
-      from: { path: "^apps/desktop/src/renderer/" },
+      from: { path: "^packages/execution-reference/src/renderer/" },
       to: {
-        path: "^(?:apps/desktop/src/(?!renderer/)|packages/(?!ui/|contracts/)|@workspace/(?!ui(?:/|$)|contracts(?:/|$)))|^(?:node:|electron$)|(^|/)node_modules/electron/",
+        path: "^(?:apps/|crates/|packages/(?!execution-reference/src/renderer/|ui/|contracts/)|@workspace/(?!ui(?:/|$)|contracts(?:/|$)))|^(?:node:|electron$)|(^|/)node_modules/electron/",
       },
     },
     {
-      name: "renderer-no-node-builtins",
+      name: "reference-renderer-no-node-builtins",
       severity: "error",
-      from: { path: "^apps/desktop/src/renderer/" },
+      from: { path: "^packages/execution-reference/src/renderer/" },
       to: { dependencyTypes: ["core"] },
     },
     {
-      name: "preload-no-implementations",
+      name: "no-product-execution-reference",
       severity: "error",
-      from: { path: "^apps/desktop/src/preload/" },
+      from: { path: "^(?:apps/|packages/(?!execution-reference/))" },
       to: {
-        path: "^(?:packages/(?!contracts/)|apps/desktop/src/(?!preload/)|@workspace/(?!contracts(?:/|$)))",
+        path: "^packages/execution-reference/|^@workspace/execution-reference(?:/|$)|(^|/)node_modules/@workspace/execution-reference/",
+      },
+    },
+    {
+      name: "execution-reference-only-legacy",
+      severity: "error",
+      from: { path: "^packages/execution-reference/src/" },
+      to: {
+        path: "^(?:apps/|crates/|packages/(?!execution-reference/|core/|application/|contracts/|ui/)|@workspace/(?!execution-reference(?:/|$)|core(?:/|$)|application(?:/|$)|contracts(?:/|$)|ui(?:/|$)))",
+      },
+    },
+    {
+      name: "execution-reference-no-electron",
+      severity: "error",
+      from: { path: "^packages/execution-reference/" },
+      to: {
+        path: "^electron(?:-vite)?$|(^|/)node_modules/electron(?:-vite)?/",
       },
     },
     {

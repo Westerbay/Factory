@@ -64,6 +64,11 @@ Connection patterns were checked against the official
 
 ## Execution porting reference
 
+The temporary `packages/execution-reference` package preserves the former host and
+presentation behavior for regression tests only. It is not a reusable product
+dependency: port the relevant behavior to Rust before adding web execution. Native
+window and process-launch mechanisms are retired rather than exposed to the browser.
+
 - [Core model and reducer](../packages/core/src/index.ts) define provider-neutral run,
   agent and interaction rules. Do not duplicate transitions in a UI or store.
 - [AgentRuntime and RunStore](../packages/core/src/ports.ts) require confirmation,

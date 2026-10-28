@@ -10,7 +10,7 @@
       "@workspace/adapters": ["packages/adapters/src/index.ts"],
       "@workspace/database": ["packages/database/src/index.ts"],
       "@workspace/ui": ["packages/ui/src/index.ts"],
-      "@system/*": ["apps/desktop/src/main/*"]
+      "@workspace/execution-reference/*": ["packages/execution-reference/src/*"]
     }
   },
   "include": [

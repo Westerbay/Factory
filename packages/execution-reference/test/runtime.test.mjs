@@ -1,15 +1,14 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
-import { DesktopHost } from "../out/test/runtime/host.js"
-import { RuntimeClient } from "../out/test/main/runtime-client.js"
-import { serveWorker } from "../out/test/runtime/worker-loop.js"
-import { rendererAddress, isTrustedSender } from "../out/test/main/security.js"
+import { DesktopHost } from "../out/runtime/host.js"
+import { RuntimeClient } from "../out/runtime/runtime-client.js"
+import { serveWorker } from "../out/runtime/worker-loop.js"
 import {
   DeterministicRuntime,
   MemoryRunStore,
   deferred,
-} from "../../../packages/application/test/doubles.mjs"
+} from "../../application/test/doubles.mjs"
 
 async function setup({ available = true, recoverFailure = false } = {}) {
   const runtime = new DeterministicRuntime(),
@@ -261,50 +260,6 @@ test("strict utility messages reject forged roots and stale workspace handles", 
   }
 })
 
-test("sender identity requires the exact owned window, top frame and document URL", () => {
-  const frame = { url: "file:///app/index.html" },
-    contents = { mainFrame: frame }
-  const window = { isDestroyed: () => false, webContents: contents }
-  assert.equal(
-    isTrustedSender(
-      { sender: contents, senderFrame: frame },
-      window,
-      frame.url
-    ),
-    true
-  )
-  assert.equal(
-    isTrustedSender(
-      { sender: contents, senderFrame: { url: frame.url } },
-      window,
-      frame.url
-    ),
-    false
-  )
-  assert.equal(
-    isTrustedSender({ sender: {}, senderFrame: frame }, window, frame.url),
-    false
-  )
-  assert.equal(
-    isTrustedSender(
-      { sender: contents, senderFrame: frame },
-      window,
-      frame.url + "?evil"
-    ),
-    false
-  )
-  assert.throws(() =>
-    rendererAddress("http://localhost:5173/", false, "file:///app/index.html")
-  )
-  assert.throws(() =>
-    rendererAddress(
-      "http://127.0.0.1:5173/evil",
-      false,
-      "file:///app/index.html"
-    )
-  )
-})
-
 test("pending-capacity pressure keeps an independent stop lane available", async () => {
   const fixture = await setup()
   try {
@@ -361,7 +316,7 @@ test("a latched communication failure still permits explicit owned cleanup witho
 
 test("bounded observation bursts preserve completed snapshots and signal temporary feed coalescing", async () => {
   const { ObservationRelay } =
-    await import("../out/test/runtime/observation-relay.js")
+    await import("../out/runtime/observation-relay.js")
   const delivered = [],
     relay = new ObservationRelay((event) => delivered.push(event))
   for (let i = 0; i < 1000; i++)

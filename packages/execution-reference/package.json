@@ -1,0 +1,25 @@
+{
+  "name": "@workspace/execution-reference",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {},
+  "scripts": {
+    "build": "tsc -p tsconfig.runtime.json && tsc -p tsconfig.renderer.json",
+    "typecheck": "tsc --noEmit -p tsconfig.runtime.json && tsc --noEmit -p tsconfig.renderer.json",
+    "test": "node --test --test-isolation=none test/runtime.test.mjs test/renderer.test.mjs"
+  },
+  "devDependencies": {
+    "@workspace/application": "workspace:*",
+    "@workspace/core": "workspace:*",
+    "@workspace/contracts": "workspace:*",
+    "@workspace/config": "workspace:*",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "@types/node": "24.5.2",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "typescript": "5.9.3"
+  }
+}

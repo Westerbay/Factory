@@ -1,7 +1,10 @@
 {
   "extends": "@workspace/config/typescript/react.json",
   "compilerOptions": {
-    "types": ["vite/client"]
+    "types": ["react", "react-dom"],
+    "noEmit": false,
+    "rootDir": "./src/renderer",
+    "outDir": "./out/renderer"
   },
   "include": ["src/renderer/**/*.ts", "src/renderer/**/*.tsx"]
 }

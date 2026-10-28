@@ -10,8 +10,8 @@
     "pnpm": ">=12 <13"
   },
   "scripts": {
-    "dev": "pnpm --filter @workspace/desktop dev",
-    "start": "pnpm --filter @workspace/desktop start",
+    "dev": "pnpm --parallel --filter @workspace/api --filter @workspace/web dev",
+    "start": "pnpm --parallel --filter @workspace/api --filter @workspace/web start",
     "build": "turbo build",
     "lint": "eslint .",
     "typecheck": "turbo typecheck",
@@ -19,13 +19,14 @@
     "format:check": "prettier --check .",
     "boundaries:check": "depcruise --config packages/config/dependency-cruiser.mjs apps packages && node scripts/rust/boundaries.mjs",
     "boundaries:test": "node --test scripts/test/boundaries.test.mjs scripts/test/rust-boundaries.test.mjs",
-    "test": "pnpm execution:test && pnpm adapters:test && pnpm database:test && pnpm desktop:test && pnpm boundaries:test && pnpm --filter @workspace/web test",
+    "test": "pnpm execution:test && pnpm adapters:test && pnpm database:test && pnpm execution-reference:test && pnpm boundaries:test && pnpm --filter @workspace/web test",
     "docs:check": "node scripts/docs-check.mjs",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm boundaries:check && pnpm docs:check && pnpm build && pnpm rust:check && pnpm api:contract",
     "execution:test": "pnpm --filter @workspace/application... build && pnpm --filter @workspace/contracts build && tsc --project packages/contracts/test/tsconfig.json && node --test packages/application/test/*.test.mjs packages/contracts/test/*.test.mjs",
     "db:build": "pnpm --filter @workspace/database... build",
     "db:setup": "pnpm db:build && node scripts/database/local.mjs setup",
     "db:migrate": "pnpm db:build && node scripts/database/local.mjs migrate",
+    "db:migrate:identity": "node scripts/rust/run.mjs run --locked --package factory-api --bin migrate-identity",
     "db:status": "pnpm db:build && node scripts/database/local.mjs status",
     "db:stop": "pnpm db:build && node scripts/database/local.mjs stop",
     "database:test": "pnpm db:build && node --test packages/database/test/target.test.mjs scripts/test/database-docker.test.mjs scripts/test/target-parity.test.mjs",
@@ -33,8 +34,7 @@
     "adapters:test": "pnpm --filter @workspace/adapters... --filter @workspace/application... build && node --test packages/adapters/test/*.test.mjs",
     "codex:protocol": "node packages/adapters/scripts/generate-protocol.mjs",
     "codex:probe": "pnpm --filter @workspace/adapters... build && node packages/adapters/scripts/probe.mjs",
-    "desktop:test": "pnpm --filter @workspace/desktop^... build && tsc -p apps/desktop/tsconfig.test.json && tsc -p apps/desktop/tsconfig.renderer-test.json && node --test --test-isolation=none apps/desktop/test/runtime.test.mjs apps/desktop/test/renderer.test.mjs",
-    "desktop:smoke": "pnpm --filter @workspace/desktop... build && pnpm --filter @workspace/desktop exec electron-vite build --config electron.smoke.config.ts && node apps/desktop/test/smoke.mjs",
+    "execution-reference:test": "pnpm --filter @workspace/execution-reference... build && node --test --test-isolation=none packages/execution-reference/test/*.test.mjs",
     "dev:web": "pnpm --filter @workspace/web dev",
     "preview:web": "pnpm --filter @workspace/web preview",
     "dev:api": "node scripts/rust/run.mjs run --locked --package factory-api",
@@ -43,8 +43,7 @@
     "rust:check": "node scripts/rust/run.mjs fmt --all -- --check && node scripts/rust/run.mjs clippy --locked --workspace --all-targets -- -D warnings && node scripts/rust/run.mjs test --locked --workspace",
     "rust:build": "node scripts/rust/run.mjs build --release --locked --workspace",
     "api:contract": "node scripts/api-contract.mjs --check",
-    "api:generate": "node scripts/api-contract.mjs",
-    "db:migrate:identity": "node scripts/rust/run.mjs run --locked --package factory-api --bin migrate-identity"
+    "api:generate": "node scripts/api-contract.mjs"
   },
   "devDependencies": {
     "dependency-cruiser": "18.6.0",

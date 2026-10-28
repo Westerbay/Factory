@@ -2,8 +2,8 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { OperatorModel } from "../out/test-renderer/model.js"
-import { ExecutionView } from "../out/test-renderer/ExecutionView.js"
+import { OperatorModel } from "../out/renderer/model.js"
+import { ExecutionView } from "../out/renderer/ExecutionView.js"
 const projection = (id, status = "completed") => ({
   id,
   workspacePath: "/fixture",
