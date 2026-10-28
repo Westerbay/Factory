@@ -20,6 +20,10 @@ model; offline inference is not promised. Routine checks never access a provider
 can start the installed app-server and inspect managed sign-in metadata without refreshing
 tokens or requesting inference. The built desktop is exercised with an explicitly test-only provider and isolated real
 PostgreSQL; native Codex execution and cleanup still require bounded live acceptance.
+A guarded acceptance-only temporary workspace now provides harmless text and a one-question,
+one-child skill; its prepare/cleanup commands do not invoke a model or touch development
+history. Live capability outcomes must be recorded from the explicit journey in development
+documentation, including conversational fallback and native-cleanup blockers.
 The current skill port exposes enabled names and paths only, without descriptions or
 disabled catalog entries. Conversation references remain session-local.
 

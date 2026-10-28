@@ -37,7 +37,8 @@ pnpm docs:check
 pnpm build
 ```
 
-`pnpm check` runs all of these. `pnpm format` applies formatting when needed.
+`pnpm check` runs all of these, including `pnpm qa:test` for the acceptance workspace
+ownership, content, path, link and explicit stopped-work guards. `pnpm format` applies formatting when needed.
 The Node test runner exercises temporary dependency graphs, rejecting forbidden imports
 including type-only, resolved aliases, dynamic imports and Node builtins. Temporary
 fixture directories are removed after each test; no persistent seed data is created.
@@ -173,6 +174,85 @@ it does not infer success from an interrupt RPC response or process exit. This u
 ownership also blocks reconnection/new runs and makes shutdown fail after disconnect. Real model,
 skill execution, delegation and native cleanup remain unverified until the bounded live
 acceptance journey. No live inference is required or authorized by routine diagnostics.
+
+## Bounded real Codex acceptance
+
+This explicit journey uses the existing managed Codex account and can consume its model
+allowance. Routine checks, fixture preparation and readiness diagnostics never infer.
+Use the pinned compatible CLI, a graphical Linux session and the owned local PostgreSQL
+setup described above. No API key, account change, global configuration change, new skill
+installation or database reset is needed. Resolve unavailable prerequisites before starting.
+
+```bash
+pnpm check
+pnpm test:integration
+pnpm desktop:smoke
+pnpm db:setup
+pnpm db:status
+pnpm qa:workspace -- prepare
+pnpm dev
+```
+
+Preparation creates or safely reuses one checkout-specific `/tmp/factory-qa-<hash>`
+workspace and prints JSON with its absolute workspace/skill paths and exact task prompt.
+Only `harmless.txt`, the `factory-acceptance` skill under that workspace's `.agents/skills`,
+and a non-secret ownership marker are generated. Existing local/global skills and the
+checkout's `.factory/database-owner` remain untouched. The fixture is acceptance-only,
+not application bootstrap data. If the operating system clears `/tmp`, prepare it again.
+
+1. In Factory choose the printed workspace through the native directory picker. Refresh
+   skills and select `factory-acceptance`; the enabled name/path list is the currently
+   implemented catalog. Paste the printed prompt and deliberately start the task.
+2. Observe the one explicit question asking for `amber` or `blue`. If a structured request
+   appears, have the human answer that exact pending question. Record which execution
+   receives it. If structured input is unavailable, the skill ends its turn with the
+   question; use **Continue conversation** with the human's explicit answer. Record this
+   as conversational continuation, not structured question acceptance. Do not change
+   provider mode/configuration to manufacture a request or invent a pending handle.
+3. After the answer, observe at most one real native child reading only `harmless.txt`.
+   Expect its result to identify two amber triangles, three blue circles and five objects
+   total, followed by a summary using the chosen label. Confirm the parent/child
+   relationship and provider terminal outcome. If delegation is unavailable, record the
+   limitation; a parent answer or synthetic event cannot replace a real child result.
+4. In a separate bounded run using the same prompt, exercise **Stop** while a question or
+   the one child is active. Do not answer after stopping. Check the interrupted state,
+   invalidated pending handles and native child termination/cleanup evidence. A visible
+   interrupted projection alone is not proof of native cleanup. If the run finishes
+   before Stop, record the missed timing; do not claim cancellation coverage. A cleanup
+   failure must remain visible and unresolved until the provider confirms it.
+5. Stop all fixture work and close through the normal stop-and-close flow. Restart and
+   inspect the persisted completed/interrupted history: no tools should replay. Use
+   keyboard navigation to choose/start/answer/stop/read history; inspect focus, accessible
+   names and a narrow window. Record actual observations separately from automated smoke
+   evidence. `pnpm db:status` and unavailable provider/database diagnostics expose exact
+   prerequisites; do not stop a database under active work to provoke a failure.
+
+The skill is interpreted instruction text. Read-only task limits are not an OS sandbox
+guarantee: Factory preserves the installed Codex policy and does not change global
+configuration or enable a test provider. Retain provider restrictions and deny unexpected
+permissions, file changes, network or out-of-workspace access. Report an unavailable or
+incompatible native capability as a blocker. Only actual runtime observations establish
+structured questions, delegation, provider completion and native cleanup; generated files,
+protocol mappings and doubles establish none of those live outcomes.
+
+After confirmed native cleanup and normal desktop closure, explicitly acknowledge that
+all fixture agents are stopped:
+
+```bash
+pnpm qa:workspace -- cleanup --agents-stopped
+```
+
+This acknowledgement is supplied by the operator; the filesystem script cannot prove
+provider termination. Cleanup accepts no caller-selected target. It checks the exact
+canonical checkout-derived path, ownership marker, current-user ownership, directory
+entries and original file contents, rejecting symlinks and hard-linked files before
+removing any entry. It unlinks only the generated files and removes only their empty
+directories; it never recursively deletes a workspace or touches the database/history.
+Unknown files, edits, missing files or a mismatched marker cause a visible refusal; retain
+and inspect that exact path manually instead of forcing cleanup. Interrupted preparation
+or cleanup may also require manual inspection. Do not edit or concurrently use this
+fixture during preparation/cleanup. The command cannot remove arbitrary user content or
+adopt an existing unowned directory. Re-running prepare safely reuses an unchanged fixture.
 
 ## Adding code
 

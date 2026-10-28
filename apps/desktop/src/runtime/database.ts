@@ -5,7 +5,7 @@ import { createDatabase, verifyDatabaseTarget } from "@workspace/database"
 import { z } from "zod"
 /** Reuses the CLI's Docker inspection; no URL/env configuration or implicit provisioning. */
 export async function openOwnedDatabase() {
-  const root = fileURLToPath(new URL("../../../../", import.meta.url))
+  const root = resolve(fileURLToPath(new URL("../../../../", import.meta.url)))
   const owner = (
     await readFile(resolve(root, ".factory/database-owner"), "utf8")
   ).trim()
