@@ -1,10 +1,47 @@
 // Browser credential policy follows WebApp Template; see LICENSE and docs/REUSE.md.
 import { z } from "zod"
+import createClient from "openapi-fetch"
 
 import { parseApiOrigin } from "./config"
+import type { paths } from "./schema"
 
-const API_ORIGIN = parseApiOrigin(import.meta.env.VITE_API_BASE_URL)
+export const API_ORIGIN = parseApiOrigin(import.meta.env.VITE_API_BASE_URL)
 const livenessSchema = z.object({ status: z.literal("ok") })
+const authorizationListeners = new Set<(status: number) => void>()
+
+export const apiClient = createClient<paths>({
+  baseUrl: API_ORIGIN,
+  credentials: "include",
+  cache: "no-store",
+  redirect: "error",
+})
+
+apiClient.use({
+  onResponse({ request, response }) {
+    const path = new URL(request.url).pathname
+    if (
+      [401, 403].includes(response.status) &&
+      path !== "/api/session" &&
+      path !== "/api/auth/logout"
+    ) {
+      for (const listener of authorizationListeners) listener(response.status)
+    }
+    return response
+  },
+})
+
+export function onAuthorizationFailure(listener: (status: number) => void) {
+  authorizationListeners.add(listener)
+  return () => {
+    authorizationListeners.delete(listener)
+  }
+}
+
+export class ApiFailure extends Error {
+  constructor(public readonly status: number) {
+    super("The request could not be completed")
+  }
+}
 
 export async function readLiveness(signal: AbortSignal) {
   const response = await fetch(`${API_ORIGIN}/health/live`, {
