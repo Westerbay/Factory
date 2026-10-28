@@ -1,0 +1,596 @@
+[
+  {
+    "name": "owned POSIX fixture",
+    "accepted": true,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "/tmp/factory-fixture",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321
+    }
+  },
+  {
+    "name": "owned C:\\Users\\Factory User\\Factory",
+    "accepted": true,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "C:\\Users\\Factory User\\Factory",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "C:\\Users\\Factory User\\Factory"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321
+    }
+  },
+  {
+    "name": "owned d:/work/Factory",
+    "accepted": true,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "d:/work/Factory",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "d:/work/Factory"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321
+    }
+  },
+  {
+    "name": "owned local database",
+    "accepted": true,
+    "proof": {
+      "project": "factory-local",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "/tmp/factory-fixture",
+      "database": "factory_local",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 55432,
+      "container": "factory-local-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-local",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 55432
+    }
+  },
+  {
+    "name": "remote host",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "/tmp/factory-fixture",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "example.com",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321
+    }
+  },
+  {
+    "name": "ambiguous host",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "/tmp/factory-fixture",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "localhost",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321
+    }
+  },
+  {
+    "name": "wrong user",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "/tmp/factory-fixture",
+      "database": "factory_test",
+      "username": "other",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321
+    }
+  },
+  {
+    "name": "wrong password",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "/tmp/factory-fixture",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "other",
+      "host": "127.0.0.1",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321
+    }
+  },
+  {
+    "name": "relative path",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "relative",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321
+    }
+  },
+  {
+    "name": "drive relative path",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "C:relative",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321
+    }
+  },
+  {
+    "name": "rooted Windows path",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "\\rooted",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321
+    }
+  },
+  {
+    "name": "UNC path",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "\\\\server\\share\\Factory",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321
+    }
+  },
+  {
+    "name": "all-interface publication",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "/tmp/factory-fixture",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "0.0.0.0",
+      "publishedPort": 54321
+    }
+  },
+  {
+    "name": "wrong container",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "/tmp/factory-fixture",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 54321,
+      "container": "shared-postgres",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321
+    }
+  },
+  {
+    "name": "privileged port",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "/tmp/factory-fixture",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 80,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 80
+    }
+  },
+  {
+    "name": "overflow port",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "/tmp/factory-fixture",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 65536,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 65536
+    }
+  },
+  {
+    "name": "fractional port",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "/tmp/factory-fixture",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 54321.5,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321.5
+    }
+  },
+  {
+    "name": "shared project",
+    "accepted": false,
+    "proof": {
+      "project": "shared",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "/tmp/factory-fixture",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321
+    }
+  },
+  {
+    "name": "empty fixture suffix",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "/tmp/factory-fixture",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321
+    }
+  },
+  {
+    "name": "invalid fixture suffix",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-ABC",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "/tmp/factory-fixture",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321
+    }
+  },
+  {
+    "name": "wrong database",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "/tmp/factory-fixture",
+      "database": "template",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321
+    }
+  },
+  {
+    "name": "wrong UUID",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "unknown",
+      "directory": "/tmp/factory-fixture",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321
+    }
+  },
+  {
+    "name": "uppercase UUID",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "B52C14B8-A06E-48EE-AB1D-2194CDA60568",
+      "directory": "/tmp/factory-fixture",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321
+    }
+  },
+  {
+    "name": "port mismatch",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "/tmp/factory-fixture",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 123
+    }
+  },
+  {
+    "name": "owner label mismatch",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "/tmp/factory-fixture",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "other",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321
+    }
+  },
+  {
+    "name": "directory label mismatch",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "/tmp/factory-fixture",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "factory-test-abc",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/other"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321
+    }
+  },
+  {
+    "name": "project label mismatch",
+    "accepted": false,
+    "proof": {
+      "project": "factory-test-abc",
+      "owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+      "directory": "/tmp/factory-fixture",
+      "database": "factory_test",
+      "username": "factory",
+      "password": "local-fixture-only",
+      "host": "127.0.0.1",
+      "port": 54321,
+      "container": "factory-test-abc-postgres-1",
+      "labels": {
+        "com.docker.compose.project": "other",
+        "io.factory.owner": "b52c14b8-a06e-48ee-ab1d-2194cda60568",
+        "io.factory.directory": "/tmp/factory-fixture"
+      },
+      "publishedHost": "127.0.0.1",
+      "publishedPort": 54321
+    }
+  }
+]
