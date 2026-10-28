@@ -71,7 +71,7 @@ async fn owned_migrations_are_isolated_locked_and_fail_closed() {
         assert_eq!(db.ready().await.unwrap(), Readiness::Invalid);
         assert!(db.migrate().await.is_err());
         sqlx::query(
-            "UPDATE factory_identity._sqlx_migrations SET version=1,success=true,checksum=$1",
+            "UPDATE factory_identity._sqlx_migrations SET version=1,success=true,checksum=$1 WHERE version IN (1,999)",
         )
         .bind(&original)
         .execute(&sql)
@@ -108,5 +108,97 @@ async fn owned_migrations_are_isolated_locked_and_fail_closed() {
     db.close().await;
     assert!(db.ready().await.is_err());
     assert!(db.migrate().await.is_err());
+    sql.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires the explicitly owned PostgreSQL integration fixture"]
+async fn environment_upgrade_preserves_identity_and_rolls_back_partial_ddl() {
+    let (db, sql) = fixture().await;
+    sqlx::query("DROP SCHEMA IF EXISTS factory_identity CASCADE")
+        .execute(&sql)
+        .await
+        .unwrap();
+    sqlx::query("CREATE SCHEMA factory_identity")
+        .execute(&sql)
+        .await
+        .unwrap();
+    // Start with the real version-one migration and SQLx checksum ledger.
+    let all = sqlx::migrate!("./migrations");
+    let first = sqlx::migrate::Migrator {
+        migrations: std::borrow::Cow::Owned(
+            all.iter().filter(|m| m.version == 1).cloned().collect(),
+        ),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    let mut connection = sql.acquire().await.unwrap();
+    sqlx::query("SET search_path TO factory_identity")
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+    first.run(&mut *connection).await.unwrap();
+    drop(connection);
+    let id = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO factory_identity.users(id,display_name,role,status) VALUES($1,'Preserved member','member','pending')")
+        .bind(id).execute(&sql).await.unwrap();
+    let checksum: Vec<u8> = sqlx::query_scalar(
+        "SELECT checksum FROM factory_identity._sqlx_migrations WHERE version=1",
+    )
+    .fetch_one(&sql)
+    .await
+    .unwrap();
+    assert_eq!(db.ready().await.unwrap(), Readiness::Pending);
+    // Deliberately collide late in migration 2. SQLx must roll back its prior CREATE TABLE.
+    sqlx::query("CREATE INDEX environments_reconcile ON factory_identity.users(display_name)")
+        .execute(&sql)
+        .await
+        .unwrap();
+    assert!(db.migrate().await.is_err());
+    let absent: bool =
+        sqlx::query_scalar("SELECT to_regclass('factory_identity.environments') IS NULL")
+            .fetch_one(&sql)
+            .await
+            .unwrap();
+    assert!(absent);
+    let versions: Vec<i64> = sqlx::query_scalar(
+        "SELECT version FROM factory_identity._sqlx_migrations ORDER BY version",
+    )
+    .fetch_all(&sql)
+    .await
+    .unwrap();
+    assert_eq!(versions, vec![1]);
+    sqlx::query("DROP INDEX factory_identity.environments_reconcile")
+        .execute(&sql)
+        .await
+        .unwrap();
+    db.migrate().await.unwrap();
+    assert_eq!(db.ready().await.unwrap(), Readiness::Ready);
+    let name: String =
+        sqlx::query_scalar("SELECT display_name FROM factory_identity.users WHERE id=$1")
+            .bind(id)
+            .fetch_one(&sql)
+            .await
+            .unwrap();
+    assert_eq!(name, "Preserved member");
+    let preserved: Vec<u8> = sqlx::query_scalar(
+        "SELECT checksum FROM factory_identity._sqlx_migrations WHERE version=1",
+    )
+    .fetch_one(&sql)
+    .await
+    .unwrap();
+    assert_eq!(preserved, checksum);
+    sqlx::query("DROP TABLE factory_identity.environments")
+        .execute(&sql)
+        .await
+        .unwrap();
+    assert_eq!(db.ready().await.unwrap(), Readiness::Invalid);
+    assert!(db.migrate().await.is_err());
+    // Restore this disposable schema for the next suite.
+    sqlx::query("DROP SCHEMA factory_identity CASCADE")
+        .execute(&sql)
+        .await
+        .unwrap();
+    db.migrate().await.unwrap();
+    db.close().await;
     sql.close().await;
 }
