@@ -1,1 +1,2 @@
-//! Persistence adapters. Database access requires the later owned-target verifier.
+//! Persistence adapters. Connections require fresh proof of local resource ownership.
+pub mod local_target;
