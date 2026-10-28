@@ -26,7 +26,7 @@ export default defineConfig({
         name: "Factory",
         short_name: "Factory",
         description: "Your private workspace",
-        start_url: "/",
+        start_url: "/app",
         scope: "/",
         display: "standalone",
         background_color: "#f7f8fa",

@@ -1,102 +1,61 @@
 # Product
 
-## Intended outcome
+## Current capabilities
 
-An operator will select a local workspace and skills, submit tasks, observe agents and
-native delegation, answer questions emitted by skills, stop work and revisit history.
-Skills define their questions and workflow gates; Factory will transport and display them.
-A missing response will never be interpreted as approval.
+Factory offers a private member space and an administrator backoffice. Sign-in uses
+GitHub only; there are no passwords, email invitations or additional agent connections
+in this increment. A successful GitHub identity check does not itself grant membership.
 
-## Current increment
+Only the explicitly configured immutable GitHub ID can become the initial administrator.
+Another verified account becomes pending without a member session. The administrator
+can activate that account, after which the member must begin a new sign-in. Handles and
+display names identify people visually but never determine authorization.
 
-Opening Factory starts one isolated utility host. It verifies the owned local PostgreSQL
-identity, checks migrations and explicitly interrupts abandoned persisted work before
-accepting commands. Startup never provisions, migrates or replays tools. Missing database
-setup leaves the interface visibly unavailable with documented recovery steps.
+The member home shows the signed-in user and an honest empty workspace. Repository
+selection, cloning, terminal, agent execution, history and skills are not available there.
+GitHub sign-in does not request repository permissions or save a provider access token.
 
-The operator chooses a directory through a native dialog and optionally selects a
-provider-discovered skill. Provider readiness is distinct from database/host readiness.
-Tasks, hierarchy, inert plain-text output, independently submittable questions, explicit
-one-action permissions, stop, active steering, linked terminal continuation and paged
-persisted history are available. An empty history contains no example runs.
+## Access and sessions
 
-The skill list shows actual enabled names and paths returned by the runtime. The current
-port has no description or disabled-entry metadata; the complete intended catalog is not
-yet implemented. A capability flag describes protocol support, not live delegation proof.
+The administrator can browse bounded pages of pending, active and suspended users,
+activate members, and suspend them after explicit confirmation. A stale edit refreshes
+the list for review instead of overwriting a newer decision. There is no role editing,
+second-administrator creation, user deletion or suspension of the administrator.
 
-## Implemented execution rules
+Suspension revokes all target sessions immediately on the server. Reactivation never
+restores an old session and requires a new OAuth attempt started after activation.
+Signing out revokes the current session. Sessions survive API restarts until their fixed
+expiry, provided storage is available; activity does not silently extend their lifetime.
 
-The application layer reserves one active root run, observes real-agent parent/child
-identity and scopes blocking questions to their originating execution. Nonblocking
-questions do not suspend it. Structured answers and provider permission decisions are
-separate, explicit, single-use operations. Ordinary prose never creates a blocking
-question. An explicit reply to a terminal conversation starts a new linked run, leaving
-the previous result intact and retaining the one-root limit.
+The server rechecks authorization for protected operations. The browser hides private
+content during session verification, on connection failure and while offline. Sign-out
+and account changes invalidate other open tabs. Private query data and provider credentials
+are not persisted in localStorage, sessionStorage or IndexedDB. If sign-out cannot be
+confirmed, private content stays hidden and the user can explicitly retry it.
 
-Only confirmed provider success can complete a run. Stop enters cancelling before
-confirmed cleanup; disconnection invalidates outstanding requests. A failed storage
-operation blocks further commands and initiates owned-runtime cleanup. Failure to
-confirm cleanup remains visible. These rules and the Codex protocol mappings are exercised with deterministic fixtures.
-The built Electron journey uses a separate synthetic provider and actual owned fixture
-PostgreSQL; it is not a live Codex demonstration.
+## Installation and updates
 
-## Following steps
+The built frontend is installable in supported browsers. Its offline fallback is a public
+page explaining that a connection is needed; installation does not make private work
+available offline. Service-worker updates are checked on focus, reconnection and
+periodically. A user chooses when to apply the available update and reload the current
+tab; another tab's choice does not automatically reload it.
 
-PostgreSQL persistence preserves execution history and completed messages. Explicit
-startup recovery interrupts unfinished runs and invalidates pending interaction handles;
-it never restarts tools. The persistence adapter is verified against isolated PostgreSQL,
-and is connected only through the privileged utility host.
+## Direction and preserved execution behavior
 
-The remaining sequence performs a bounded real-agent acceptance journey. Cross-provider orchestration,
-remote hosting, skill authoring and an inherited template visual identity are excluded.
+Future work will connect each user's isolated server environment to repository providers
+and an agent subscription, with a terminal and global skills. Providers should remain
+replaceable. Containers, repository authorization, Codex connection and execution are
+separate increments, not hidden actions of sign-in.
 
-## Codex adapter limits
+The retained TypeScript execution implementation defines behavior to preserve during
+porting: explicit task start and continuation, provider-observed parent/child agents,
+independently answerable questions, explicit one-action permissions, cancellation with
+confirmed cleanup, and durable history. Reading history never resumes tools. Silence,
+timeouts or prose never grant approval. Only confirmed provider success completes a run;
+a process exit or interrupt acknowledgement alone cannot prove descendant cleanup.
 
-Codex structured requests remain distinct from prose and permission decisions. A provider
-request containing multiple questions is answered once after all required answers arrive;
-each question can submit independently while awaiting the shared provider acknowledgement.
-Secret-input questions, file-change approvals without a supported patch presentation,
-and unsupported actionable requests are rejected visibly. Silence,
-timeouts and request invalidation never grant permission. Permission action details are
-bounded; oversized details are rejected rather than truncated into uninformed consent.
-
-Native agents are identified only from provider collaboration events. Success waits for
-observed descendants to finish. Stop requires terminal confirmation for every owned thread;
-a request acknowledgement or app-server exit alone is insufficient. Unconfirmed native
-cleanup closes the owned app-server and remains a visible cancelling failure.
-A provider disconnect can terminate the recorded execution while cleanup stays unconfirmed.
-That outstanding ownership blocks new execution and makes shutdown fail visibly.
-Native follow-up turns receive fresh core execution identities while retaining provider
-thread ownership; terminal core agents are never reopened.
-Conversation continuation is available within the current runtime session; provider IDs are
-kept inside the adapter and cannot currently resume a conversation after host restart.
-
-## Desktop safety and failure behavior
-
-Every question and permission requires an explicit response. Submitting one question does
-not disable another question while their shared provider response is incomplete. Reading
-history or selecting an old run never executes or resumes it. Active steering and terminal
-continuation are explicit separate actions.
-
-Closing the native window asks whether to keep it open or stop and close. Successful close
-waits for owned execution cleanup and the database pool. A failed close stays visible and
-keeps the window open; cleanup is not inferred from utility-process death. Host loss blocks
-new commands, clears temporary output and labels the visible projection as the last
-persisted state. Restart recovery marks abandoned work interrupted without replaying it.
-
-Transient output is bounded and may be coalesced under load; completed messages and durable
-history remain authoritative. Rich Markdown, graph rendering, workflow editing, remote
-hosting, installers and a fixed visual identity are outside this increment.
-
-Execution history uses bounded pages of 50 runs with previous/next navigation; there is
-no 200-run access limit. The selected detail and knowledge of the active root remain
-independent of the visible page. Failed stop confirmation leaves an explicit retry
-available once its pending request settles. Failed shutdown preserves persistence until
-owned execution cleanup can be confirmed on an explicit retry; ordinary admission stays
-closed throughout shutdown.
-
-If execution cleanup succeeds but pool closure rejects, the host retains that specific
-unconfirmed persistence-closure error. The current database adapter marks itself closed
-before awaiting its underlying connection shutdown, so a second no-op cannot establish
-confirmation. No normal work is readmitted; check local connections before quitting
-externally or restarting. This is distinct from retryable execution cleanup failure.
+Those mechanisms currently reserve one global active root and do not implement web-user
+ownership. They are reference code, not an available web capability. Existing history
+must remain intact and unassigned until an explicit ownership migration is designed.
+Live Codex execution, delegation and cleanup remain separate acceptance work.

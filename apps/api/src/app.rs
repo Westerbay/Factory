@@ -1,26 +1,69 @@
-use crate::{config::RuntimeConfig, health, http};
+use crate::{
+    admin,
+    auth::{self, AuthError, AuthState},
+    config::RuntimeConfig,
+    health, http,
+};
 use axum::{
     Router,
     http::{HeaderValue, Method, header},
     middleware,
-    routing::get,
+    routing::{get, patch, post},
 };
+use factory_core::identity::IdentityError;
+use factory_database::identity::IdentityDatabase;
+use std::{sync::Arc, time::Duration};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 /// Composition has no provider, database, filesystem or environment side effects.
-pub fn router(config: &RuntimeConfig) -> Result<Router, &'static str> {
+#[derive(Clone)]
+pub struct IdentityRuntime {
+    pub auth: AuthState,
+    pub database: Arc<IdentityDatabase>,
+}
+
+pub fn router(
+    config: &RuntimeConfig,
+    identity: Option<IdentityRuntime>,
+) -> Result<Router, &'static str> {
     let origin = HeaderValue::from_str(config.web_origin()).map_err(|_| "WEB_ORIGIN_INVALID")?;
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list([origin]))
         .allow_credentials(true)
-        .allow_methods([Method::GET])
-        .allow_headers([header::CONTENT_TYPE]);
-    Ok(Router::new()
+        .allow_methods([Method::GET, Method::POST, Method::PATCH])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            axum::http::HeaderName::from_static("x-csrf-token"),
+        ])
+        .max_age(Duration::from_secs(60));
+    let database = identity.as_ref().map(|runtime| runtime.database.clone());
+    let routes = match identity {
+        Some(runtime) => auth::router(runtime.auth.clone()).merge(admin::router(runtime.auth)),
+        None => Router::new()
+            .route("/api/auth/github/start", get(unavailable))
+            .route("/api/auth/github/callback", get(unavailable))
+            .route("/api/session", get(unavailable))
+            .route("/api/auth/logout", post(unavailable))
+            .route("/api/admin/users", get(unavailable))
+            .route("/api/admin/users/{id}/access", patch(unavailable)),
+    };
+    Ok(routes
         .route("/health/live", get(health::live))
-        .route("/health/ready", get(health::ready))
+        .route(
+            "/health/ready",
+            get(move || health::ready(database.clone())),
+        )
         .fallback(http::not_found)
+        .layer(middleware::from_fn_with_state(
+            config.web_origin().to_owned(),
+            http::oauth_navigation_errors,
+        ))
         .layer(cors)
         .layer(middleware::from_fn(http::response_headers)))
+}
+
+async fn unavailable() -> AuthError {
+    IdentityError::Unavailable.into()
 }
 
 #[cfg(test)]
@@ -31,7 +74,7 @@ mod tests {
 
     async fn request(method: Method, path: &str, origin: &str) -> axum::response::Response {
         let config = RuntimeConfig::from_values(|_| None).unwrap();
-        router(&config)
+        router(&config, None)
             .unwrap()
             .oneshot(
                 Request::builder()

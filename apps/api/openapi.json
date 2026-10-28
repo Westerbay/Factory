@@ -425,10 +425,11 @@
     },
     "/api/auth/github/start": {
       "get": {
+        "description": "An explicit Accept: text/html with nonzero quality returns start failures to the fixed frontend sign-in page. Other clients retain JSON errors and HTTP status. Retry-After is preserved for rate limits.",
         "operationId": "startGithubLogin",
         "responses": {
           "302": {
-            "description": "Redirect to GitHub with state and PKCE"
+            "description": "Redirect to GitHub with state and PKCE, or browser recovery at the fixed frontend sign-in page"
           },
           "429": {
             "content": {

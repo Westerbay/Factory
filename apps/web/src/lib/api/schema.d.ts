@@ -54,6 +54,7 @@ export interface paths {
       path?: never
       cookie?: never
     }
+    /** @description An explicit Accept: text/html with nonzero quality returns start failures to the fixed frontend sign-in page. Other clients retain JSON errors and HTTP status. Retry-After is preserved for rate limits. */
     get: operations["startGithubLogin"]
     put?: never
     post?: never
@@ -396,7 +397,7 @@ export interface operations {
     }
     requestBody?: never
     responses: {
-      /** @description Redirect to GitHub with state and PKCE */
+      /** @description Redirect to GitHub with state and PKCE, or browser recovery at the fixed frontend sign-in page */
       302: {
         headers: {
           [name: string]: unknown

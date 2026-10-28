@@ -1,28 +1,39 @@
 # Design
 
-The operator interface uses semantic HTML, system fonts and small replaceable CSS.
-There is no inherited template theme, fixed product branding or animation. Runtime
-readiness, workspace/task controls and persisted execution history precede the selected
-execution's agent relationships, output, questions, permissions and continuation.
+The web interface uses semantic HTML, system fonts and small replaceable styles. Template
+branding and page layouts are not requirements. Shared presentation belongs in components;
+session and API behavior belongs in shared libraries, not copied between features.
 
-Use shadcn primitives when a real interaction benefits from them; no unused catalog is
-copied. Keep visible labels, keyboard access, native focus behavior, focus outlines and
-inline errors. Status uses explicit text rather than color alone. Native close dialogs
-default to keeping the window open.
+The public sign-in screen has one GitHub action and readable pending, suspended, denied,
+unavailable and invalid-login states. The authenticated header identifies the user, links
+to their workspace, exposes user administration only to administrators and offers sign-out.
+The workspace communicates which capabilities are still unavailable without fake data or
+inactive controls that imply working agents or projects.
 
-Question forms are scoped to exact question and agent identities. One pending response
-never disables unrelated forms. Permission controls explicitly say allow once or deny.
-No default answer is selected. Resolved, submitting and invalidated states stay visible.
-History selection only reads; execution requires a separate explicit action. Previous/next
-page controls keep older records reachable with bounded list memory, while the selected
-execution remains visible. A failed stop can be explicitly retried after the pending
-request ends; it is never retried automatically.
+Private routes show content only after a current session check. Loading, offline and
+unavailable states replace stale private content. Errors offer an explicit recovery
+action; an unconfirmed sign-out keeps private content hidden and offers retry. Status
+messages use text and accessible live regions, not color alone.
 
-Agent output is rendered as inert, wrapping plain text inside bounded scroll regions.
-Live fragments are temporary and reconciled against completed messages. No HTML, rich
-Markdown, graph engine or workflow editor is enabled. Long IDs, paths and prose wrap; the
-two-column operator layout becomes one column on narrow windows.
+The access backoffice uses readable user cards with provider, role and status. Filters
+and pagination remain in the URL. Pending mutations disable only the affected row;
+access is not changed optimistically. A conflict refreshes server state and asks the user
+to review it. Administrators display a protected label instead of access-edit controls.
 
-English messages live in the renderer catalog. Introduce an actual localization runtime
-before adding locales or variable/plural messages. Styling can evolve independently of
-the domain, provider and persistence boundaries.
+Suspension opens a native modal dialog describing session revocation. Focus begins on
+Cancel; Escape cancels and returns focus to the originating button. Confirmation is
+explicit. Submitting an access change moves focus to a stable result message that
+remains present after the affected row disappears. Completion does not steal focus
+from a subsequent interaction. Visible focus outlines, labels and accessible control
+names are required.
+Controls and identity text wrap at narrow widths, including a 360-pixel viewport.
+
+The PWA update notice is non-blocking and provides an explicit update/reload action.
+The offline page contains only public instructions. No installed-app state should suggest
+that a cached private session remains usable without server verification.
+
+Keep English UI text close to its owning component until an actual localization runtime
+is needed. Reuse shadcn primitives when an implemented interaction benefits from them;
+do not copy an unused catalog. Future agent output must remain inert until a deliberate
+rich-content policy is implemented, and questions and permissions must retain separate,
+explicit actions.

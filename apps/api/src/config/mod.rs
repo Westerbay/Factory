@@ -1,5 +1,7 @@
 //! Validate public local configuration before opening sockets. Never load .env.
+use factory_core::identity::BootstrapAdmin;
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use url::{Host, Url};
 
 #[derive(Clone)]
@@ -7,6 +9,16 @@ pub struct RuntimeConfig {
     bind: SocketAddr,
     web_origin: String,
     api_origin: String,
+    workspace: PathBuf,
+    identity: Option<IdentityConfig>,
+}
+
+// Never derive Debug: the provider secret must stay server-side.
+#[derive(Clone)]
+pub struct IdentityConfig {
+    pub client_id: String,
+    pub client_secret: String,
+    pub bootstrap: BootstrapAdmin,
 }
 
 impl RuntimeConfig {
@@ -28,10 +40,41 @@ impl RuntimeConfig {
         if api_url.port_or_known_default() != Some(bind.port()) {
             return Err("API_ORIGIN_PORT_MISMATCH");
         }
+        let web_url = Url::parse(&web_origin).map_err(|_| "ORIGIN_INVALID")?;
+        if web_url.host() != api_url.host() {
+            return Err("ORIGINS_MUST_SHARE_LOCAL_HOST");
+        }
+        let workspace = match get("FACTORY_WORKSPACE_ROOT") {
+            Some(value) => PathBuf::from(value),
+            None => std::env::current_dir().map_err(|_| "WORKSPACE_UNAVAILABLE")?,
+        };
+        if !workspace.is_absolute() {
+            return Err("WORKSPACE_MUST_BE_ABSOLUTE");
+        }
+        let identity = match (
+            get("FACTORY_GITHUB_CLIENT_ID"),
+            get("FACTORY_GITHUB_CLIENT_SECRET"),
+            get("FACTORY_BOOTSTRAP_GITHUB_ID"),
+        ) {
+            (Some(client_id), Some(client_secret), Some(subject))
+                if !client_id.is_empty() && !client_secret.is_empty() =>
+            {
+                BootstrapAdmin::github(&subject)
+                    .ok()
+                    .map(|bootstrap| IdentityConfig {
+                        client_id,
+                        client_secret,
+                        bootstrap,
+                    })
+            }
+            _ => None,
+        };
         Ok(Self {
             bind,
             web_origin,
             api_origin: api,
+            workspace,
+            identity,
         })
     }
 
@@ -45,6 +88,13 @@ impl RuntimeConfig {
 
     pub fn api_origin(&self) -> &str {
         &self.api_origin
+    }
+
+    pub fn workspace(&self) -> &Path {
+        &self.workspace
+    }
+    pub fn identity(&self) -> Option<&IdentityConfig> {
+        self.identity.as_ref()
     }
 }
 
@@ -106,5 +156,25 @@ mod tests {
         let config = RuntimeConfig::from_values(|_| None).unwrap();
         assert_eq!(config.bind(), "127.0.0.1:3001".parse().unwrap());
         assert_eq!(config.web_origin(), "http://localhost:3000");
+    }
+
+    #[test]
+    fn local_cookies_require_matching_browser_hosts() {
+        assert!(configured("FACTORY_WEB_ORIGIN", "http://127.0.0.1:3000").is_err());
+        assert!(configured("FACTORY_WORKSPACE_ROOT", "relative/path").is_err());
+    }
+
+    #[test]
+    fn missing_or_invalid_bootstrap_never_enables_identity() {
+        for subject in [None, Some(""), Some("0"), Some("username")] {
+            let config = RuntimeConfig::from_values(|key| match key {
+                "FACTORY_GITHUB_CLIENT_ID" => Some("synthetic-client".into()),
+                "FACTORY_GITHUB_CLIENT_SECRET" => Some("synthetic-secret".into()),
+                "FACTORY_BOOTSTRAP_GITHUB_ID" => subject.map(str::to_owned),
+                _ => None,
+            })
+            .unwrap();
+            assert!(config.identity().is_none());
+        }
     }
 }

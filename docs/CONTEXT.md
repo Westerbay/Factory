@@ -1,39 +1,41 @@
 # Context
 
-Factory is moving from Electron to a private web/PWA application with a Rust backend.
-React/TypeScript compiles to static assets hosted independently of the API. The target
-keeps agent execution outside the HTTP process, with a persistent environment per user,
-GitHub-backed projects and global skills. GitHub OAuth, administrator-controlled access
-and personal Codex subscription connection are the selected direction; their behavior
-is not implemented by the initial web foundation.
+Factory is a private web/PWA application with a Rust backend. React/TypeScript compiles
+to static files hosted independently of the API; there is no frontend SSR process or
+Rust static-file server. The current increment runs on loopback only.
 
-The current web increment supplies only the static React shell, an Axum health API,
-explicit loopback origins and build/dependency checks. It does not connect to the database
-or an agent. API readiness stays unavailable until the next identity/storage work.
-The desktop remains runnable until its planned retirement; existing execution semantics,
-history and user changes are preserved. Delivery remains local with feedback per code task.
+GitHub OAuth identifies users by a stable provider identity. One explicitly configured
+GitHub numeric ID can bootstrap the administrator. Other verified users remain pending
+until that administrator activates them. The backoffice lists pending, active and
+suspended users and changes member access with version checks. Sessions persist in
+PostgreSQL until fixed expiry or revocation; suspension revokes all of a member's
+sessions. Missing configuration or storage leaves access unavailable.
 
-The existing desktop adapts the English WebApp Template foundation. Provider-neutral
-execution rules and validated desktop contracts are implemented and exercised with
-test-only deterministic adapters. PostgreSQL persistence, guarded local setup, explicit
-restart recovery and isolated database integration checks are implemented. The Codex
-0.160.0 app-server adapter now maps workspace skills, conversations, native child events,
-questions and explicit permissions through the provider-neutral runtime port. A separate Electron utility process now composes those implementations with the execution
-service. The operator interface selects native-granted workspaces, starts tasks, observes
-agent relationships and output, handles explicit questions/permissions, stops execution
-and reads persisted history. The source template stays unchanged. Development is Linux-first;
-local PostgreSQL setup and runtime inspection also support Windows Docker Desktop through
-its local named pipe and Windows checkout paths. Native Codex acceptance on Windows is
-not established by this database compatibility work. Distributing
-installers and running a VPS service are outside this increment.
+The PWA caches public static assets and a public offline page. It does not offer offline
+access to private screens or cache API/OAuth responses. Updates are detected in the
+background, with an explicit reload action for each open tab.
 
-Local execution describes the agent tools and host. A provider may still call a remote
-model; offline inference is not promised. Routine checks never access a provider or account. The explicit Codex readiness command
-can start the installed app-server and inspect managed sign-in metadata without refreshing
-tokens or requesting inference. The built desktop is exercised with an explicitly test-only provider and isolated real
-PostgreSQL; native Codex execution and cleanup still require bounded live acceptance.
-Human acceptance and its temporary scripts remain local and ignored; unit and integration regressions remain versioned.
-The current skill port exposes enabled names and paths only, without descriptions or
-disabled catalog entries. Conversation references remain session-local.
+The intended next stages separate execution from HTTP serving, give each user a
+persistent container environment, connect GitHub projects and a personal ChatGPT/Codex
+subscription, and provide a terminal with global skills. These capabilities are not
+connected to the web application yet. GitLab, Azure and Claude remain future adapters;
+GitHub identity currently grants no repository access.
+
+The TypeScript core, application, contracts, Codex adapter and PostgreSQL execution store
+remain tested references for the later Rust execution port. Their existing tables and
+Drizzle migration ledger are preserved. Historical runs have no web-user ownership and
+must not be assigned or exposed to users by inference. The separate SQLx identity schema
+does not rewrite that history.
+
+Local PostgreSQL ownership checks support Linux Docker Engine and Windows Docker Desktop
+using exact checkout paths and the local socket or named pipe. Windows database support
+does not establish live Codex execution or native cleanup. The Codex reference adapter
+targets CLI 0.160.0, but no agent is started by the web runtime or routine checks.
+
+This increment does not deploy to a VPS, register an OAuth application or configure real
+credentials. Unit and integration regressions use synthetic principals and owned local
+fixtures. Live GitHub sign-in with two accounts and installed-PWA behavior require
+separate human acceptance; temporary QA scripts and observations remain local and ignored.
+Performance under concurrent agents and production hosting requirements remain unverified.
 
 See [architecture](ARCHITECTURE.md), [product](PRODUCT.md) and [development](DEVELOPMENT.md).

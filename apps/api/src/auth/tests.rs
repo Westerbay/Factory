@@ -176,6 +176,10 @@ fn fixture() -> (Router, Arc<Store>, Arc<Provider>) {
         router(AuthState::new(
             service,
             &RuntimeConfig::from_values(|_| None).unwrap(),
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            "http://localhost:3000".to_owned(),
+            crate::http::oauth_navigation_errors,
         )),
         store,
         provider,
@@ -529,6 +533,71 @@ async fn anonymous_login_work_has_a_bounded_process_quota() {
     let response = call(&app, Method::GET, "/api/auth/github/start", "", None, None).await;
     assert_eq!(response.status(), 429);
     assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    let browser = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/github/start")
+                .header(header::ACCEPT, "text/html")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(browser.status(), 302);
+    assert_eq!(
+        browser.headers()[header::LOCATION],
+        "http://localhost:3000/sign-in?reason=unavailable"
+    );
+    assert_eq!(browser.headers()[header::RETRY_AFTER], "60");
+    assert_eq!(browser.headers()[header::CACHE_CONTROL], "no-store");
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(browser.into_body(), 4096).await.unwrap()).unwrap();
+    assert_eq!(body["code"], "rate-limited");
+}
+
+#[tokio::test]
+async fn browser_start_recovers_from_store_failure_or_invalid_input_without_clearing_sessions() {
+    let (app, store, _) = fixture();
+    let session = sign_in(&app, "").await;
+    store.unavailable.store(true, Ordering::SeqCst);
+    let json = call(&app, Method::GET, "/api/auth/github/start", "", None, None).await;
+    assert_eq!(json.status(), 503);
+    assert!(!json.headers().contains_key(header::LOCATION));
+    for (path, reason) in [
+        ("/api/auth/github/start".to_owned(), "unavailable"),
+        (
+            format!("/api/auth/github/start?invalid={}", "x".repeat(8192)),
+            "invalid-login",
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header(header::ACCEPT, "text/html")
+                    .header(header::COOKIE, &session)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 302);
+        assert_eq!(
+            response.headers()[header::LOCATION],
+            format!("http://localhost:3000/sign-in?reason={reason}")
+        );
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert!(!response.headers().contains_key(header::SET_COOKIE));
+    }
+    store.unavailable.store(false, Ordering::SeqCst);
+    assert_eq!(
+        call(&app, Method::GET, "/api/session", &session, None, None)
+            .await
+            .status(),
+        200
+    );
 }
 
 #[tokio::test]
