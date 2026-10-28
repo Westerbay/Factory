@@ -135,11 +135,7 @@ impl IdentityProvider for Provider {
 async fn fixture() -> (IdentityService, Arc<MemoryStore>, Arc<Provider>) {
     let store = Arc::new(MemoryStore::default());
     let provider = Arc::new(Provider::default());
-    let service = IdentityService::new(
-        store.clone(),
-        provider.clone(),
-        BootstrapAdmin::github("123").unwrap(),
-    );
+    let service = IdentityService::new(store.clone(), provider.clone());
     service
         .begin_login(
             NewLoginAttempt {
@@ -284,35 +280,23 @@ async fn member_or_revoked_session_cannot_request_access_changes() {
 }
 
 #[test]
-fn admission_requires_latest_activation_and_explicit_bootstrap_identity() {
-    let mut member = user(Role::Member, AccessStatus::Active);
+fn admission_requires_latest_activation_even_for_the_administrator() {
     let old = Utc.timestamp_opt(999, 0).unwrap();
-    assert_eq!(
-        admission_decision(&member, old, false),
-        AdmissionDecision::StaleLogin
-    );
-    assert_eq!(
-        admission_decision(&member, old, true),
-        AdmissionDecision::StaleLogin
-    );
-    member.status = AccessStatus::Suspended;
-    assert_eq!(
-        admission_decision(&member, Utc::now(), false),
-        AdmissionDecision::Suspended
-    );
-    let admin = user(Role::Admin, AccessStatus::Active);
-    assert_eq!(
-        admission_decision(&admin, old, true),
-        AdmissionDecision::Active
-    );
-    let bootstrap = BootstrapAdmin::github("123").unwrap();
-    assert!(bootstrap.matches(&identity()));
-    let mut renamed = identity();
-    renamed.handle = "administrator".into();
-    renamed.subject = "124".into();
-    assert!(!bootstrap.matches(&renamed));
-    for value in ["", "0", "00123", "handle", "-1"] {
-        assert!(BootstrapAdmin::github(value).is_err());
+    for role in [Role::Member, Role::Admin] {
+        let mut account = user(role, AccessStatus::Active);
+        assert_eq!(
+            admission_decision(&account, old),
+            AdmissionDecision::StaleLogin
+        );
+        assert_eq!(
+            admission_decision(&account, Utc::now()),
+            AdmissionDecision::Active
+        );
+        account.status = AccessStatus::Suspended;
+        assert_eq!(
+            admission_decision(&account, Utc::now()),
+            AdmissionDecision::Suspended
+        );
     }
 }
 

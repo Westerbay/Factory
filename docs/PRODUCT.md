@@ -6,7 +6,10 @@ Factory offers a private member space and an administrator backoffice. Sign-in u
 GitHub only; there are no passwords, email invitations or additional agent connections
 in this increment. A successful GitHub identity check does not itself grant membership.
 
-Only the explicitly configured immutable GitHub ID can become the initial administrator.
+An operator configures the first administrator with the local CLI, selecting a GitHub
+username and confirming the resolved profile. The stable provider ID is stored in the
+database; web sign-in never creates an administrator. Setup refuses to replace an
+existing administrator.
 Another verified account becomes pending without a member session. The administrator
 can activate that account, after which the member must begin a new sign-in. Handles and
 display names identify people visually but never determine authorization.

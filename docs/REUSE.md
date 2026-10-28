@@ -49,6 +49,8 @@ is required. Shadcn primitives remain deferred until an actual interaction needs
 - [IdentityDatabase and PgIdentityStore](../crates/database/src/identity/mod.rs) own SQLx
   connection/readiness/close and transactional identity persistence. Explicit migrations
   use the isolated identity schema and ledger, preserving existing execution data.
+  Operator-only administrator setup shares identity locking/upsert with login but is
+  deliberately excluded from the HTTP `IdentityStore` port.
 - [Rust target verification](../crates/database/src/local_target/mod.rs) and the retained
   [TypeScript verifier](../packages/database/src/target.ts) enforce equivalent ownership
   expectations. [Docker inspection](../scripts/database/owned.mjs) supplies the local

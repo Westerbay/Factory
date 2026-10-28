@@ -1,6 +1,7 @@
 mod admission;
 mod attempts;
 mod sessions;
+mod setup;
 mod users;
 
 use crate::{

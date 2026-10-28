@@ -4,20 +4,11 @@ use std::sync::Arc;
 pub struct IdentityService {
     store: Arc<dyn IdentityStore>,
     provider: Arc<dyn IdentityProvider>,
-    bootstrap: BootstrapAdmin,
 }
 
 impl IdentityService {
-    pub fn new(
-        store: Arc<dyn IdentityStore>,
-        provider: Arc<dyn IdentityProvider>,
-        bootstrap: BootstrapAdmin,
-    ) -> Self {
-        Self {
-            store,
-            provider,
-            bootstrap,
-        }
+    pub fn new(store: Arc<dyn IdentityStore>, provider: Arc<dyn IdentityProvider>) -> Self {
+        Self { store, provider }
     }
 
     pub async fn begin_login(
@@ -79,7 +70,6 @@ impl IdentityService {
             .admit(LoginAdmission {
                 identity,
                 login_started_at: attempt.created_at,
-                bootstrap: self.bootstrap.clone(),
                 session,
             })
             .await

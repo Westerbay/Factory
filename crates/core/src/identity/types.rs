@@ -75,31 +75,6 @@ impl VerifiedIdentity {
     }
 }
 
-#[derive(Clone)]
-pub struct BootstrapAdmin {
-    github_subject: String,
-}
-
-impl BootstrapAdmin {
-    pub fn github(subject: &str) -> Result<Self, IdentityError> {
-        let id = subject
-            .parse::<u64>()
-            .map_err(|_| IdentityError::InvalidInput)?;
-        if id == 0 || subject != id.to_string() {
-            return Err(IdentityError::InvalidInput);
-        }
-        Ok(Self {
-            github_subject: subject.to_owned(),
-        })
-    }
-
-    pub fn matches(&self, identity: &VerifiedIdentity) -> bool {
-        identity.provider == "github"
-            && identity.issuer == "https://github.com"
-            && identity.subject == self.github_subject
-    }
-}
-
 /// No Debug implementation: PKCE verifiers and session credentials must not enter logs.
 pub struct NewLoginAttempt {
     pub state_hash: CredentialHash,
@@ -121,7 +96,6 @@ pub struct NewSession {
 pub struct LoginAdmission {
     pub identity: VerifiedIdentity,
     pub login_started_at: DateTime<Utc>,
-    pub bootstrap: BootstrapAdmin,
     pub session: NewSession,
 }
 

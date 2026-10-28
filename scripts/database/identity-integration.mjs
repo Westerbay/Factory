@@ -26,6 +26,7 @@ function retainedEnvironment(targetPath) {
     "TEMP",
     "TMP",
     "CARGO_HOME",
+    "CARGO_TARGET_DIR",
     "RUSTUP_HOME",
     "LIB",
     "INCLUDE",

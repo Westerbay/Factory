@@ -37,7 +37,6 @@ async fn identity(config: &RuntimeConfig) -> Result<IdentityRuntime, &'static st
     let service = Arc::new(IdentityService::new(
         Arc::new(database.store()),
         Arc::new(provider),
-        settings.bootstrap.clone(),
     ));
     Ok(IdentityRuntime {
         auth: AuthState::new(service, config),

@@ -4,8 +4,8 @@ Factory is a private web/PWA application with a Rust backend. React/TypeScript c
 to static files hosted independently of the API; there is no frontend SSR process or
 Rust static-file server. The current increment runs on loopback only.
 
-GitHub OAuth identifies users by a stable provider identity. One explicitly configured
-GitHub numeric ID can bootstrap the administrator. Other verified users remain pending
+GitHub OAuth identifies users by a stable provider identity. The operator CLI resolves a GitHub
+username and stores the selected account as the first administrator. Other verified users remain pending
 until that administrator activates them. The backoffice lists pending, active and
 suspended users and changes member access with version checks. Sessions persist in
 PostgreSQL until fixed expiry or revocation; suspension revokes all of a member's
