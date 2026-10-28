@@ -15,6 +15,9 @@ export function AppHeader() {
             {state.session.user.displayName || state.session.user.handle}
           </span>
           <Link to="/app">Workspace</Link>
+          {state.session.user.role === "admin" && (
+            <Link to="/admin/users">User access</Link>
+          )}
           <button type="button" onClick={() => void controller.logout()}>
             Sign out
           </button>

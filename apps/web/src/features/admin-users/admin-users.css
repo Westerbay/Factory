@@ -1,0 +1,114 @@
+.admin-toolbar,
+.admin-filters,
+.admin-actions,
+.admin-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+.admin-toolbar {
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+}
+.admin-filters button[aria-pressed="true"] {
+  background: #5340ac;
+  color: #fff;
+  border-color: #5340ac;
+}
+.admin-notice {
+  padding: 1rem;
+  border: 1px solid #d6d1e4;
+  border-radius: 0.5rem;
+  background: #fff;
+  margin: 1rem 0;
+  line-height: 1.6;
+}
+.admin-user-list {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 1rem;
+}
+.admin-user-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 1.25rem;
+  background: #fff;
+  border: 1px solid #dcdee5;
+  border-radius: 0.75rem;
+}
+.admin-identity {
+  overflow-wrap: anywhere;
+}
+.admin-identity h2 {
+  font-weight: 650;
+}
+.admin-identity p,
+.admin-details,
+.admin-protected,
+.admin-pagination span {
+  color: #5d6069;
+  font-size: 0.875rem;
+}
+.admin-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 0;
+}
+.admin-details dt {
+  font-size: 0.75rem;
+  margin-bottom: 0.25rem;
+}
+.admin-details dd {
+  margin: 0;
+  color: #242529;
+  text-transform: capitalize;
+}
+.admin-user-card > .admin-actions {
+  grid-column: 1 / -1;
+}
+.admin-pagination {
+  justify-content: space-between;
+  margin-top: 1.5rem;
+}
+.admin-empty {
+  padding: 2rem 0;
+  color: #5d6069;
+}
+.suspend-dialog {
+  width: min(30rem, calc(100vw - 2rem));
+  margin: auto;
+  border: 1px solid #d6d1e4;
+  border-radius: 0.75rem;
+  padding: 1.5rem;
+  background: #fff;
+  color: #242529;
+}
+.suspend-dialog::backdrop {
+  background: #15111c80;
+}
+.suspend-dialog h2 {
+  font-size: 1.25rem;
+  overflow-wrap: anywhere;
+}
+.suspend-dialog p {
+  margin: 1rem 0 1.5rem;
+  line-height: 1.6;
+}
+.danger-action {
+  background: #a72e36;
+  border-color: #a72e36;
+  color: #fff;
+}
+.danger-action:hover:enabled {
+  background: #85242b;
+}
+@media (max-width: 42rem) {
+  .admin-user-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
