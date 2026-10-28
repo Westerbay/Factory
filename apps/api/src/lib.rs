@@ -3,5 +3,7 @@
 pub mod app;
 pub mod bootstrap;
 pub mod config;
+pub mod contracts;
 mod health;
 mod http;
+pub mod openapi;

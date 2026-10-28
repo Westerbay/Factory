@@ -1,1 +1,3 @@
-//! Pure Factory domain. Identity models enter with their implementing use cases.
+//! Pure Factory domain, independent of transport, providers and persistence.
+
+pub mod identity;
