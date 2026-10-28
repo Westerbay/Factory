@@ -143,6 +143,7 @@ async function runFixture(populated) {
     await writeFile(targetPath, `${JSON.stringify(target)}\n`, { flag: "wx" })
     for (const [packageName, suite] of [
       ["factory-database", "migrations"],
+      ["factory-api", "composition"],
       ["factory-database", "identity"],
     ]) {
       const result = runCargo(

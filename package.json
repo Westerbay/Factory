@@ -43,7 +43,8 @@
     "rust:check": "node scripts/rust/run.mjs fmt --all -- --check && node scripts/rust/run.mjs clippy --locked --workspace --all-targets -- -D warnings && node scripts/rust/run.mjs test --locked --workspace",
     "rust:build": "node scripts/rust/run.mjs build --release --locked --workspace",
     "api:contract": "node scripts/api-contract.mjs --check",
-    "api:generate": "node scripts/api-contract.mjs"
+    "api:generate": "node scripts/api-contract.mjs",
+    "db:migrate:identity": "node scripts/rust/run.mjs run --locked --package factory-api --bin migrate-identity"
   },
   "devDependencies": {
     "dependency-cruiser": "18.6.0",

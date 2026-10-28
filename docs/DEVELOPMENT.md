@@ -2,194 +2,197 @@
 
 ## Prerequisites
 
-- Node.js 24.22.1, pinned in `.node-version`.
-- pnpm 12.11.2 (also pinned in `package.json`).
-- Rust 1.90.0 with rustfmt and clippy; a native linker and platform SDK for Rust builds.
-- A Windows desktop or a graphical Linux session (with Electron's Linux system libraries).
-- Local Docker Engine and Compose; on Windows, Docker Desktop running Linux containers.
-- Network access for a first dependency install and the Electron binary download.
+- Node.js 24.22.1, pinned in `.node-version`, and pnpm 12.11.2.
+- Rust 1.90.0 with rustfmt, clippy and a native linker/platform SDK.
+- On Windows, MSVC C++ build tools and the Windows SDK, preferably from Developer PowerShell.
+- Local Docker Engine and Compose for explicit database setup and integration;
+  on Windows, Docker Desktop running Linux containers.
+- Network access for initial dependency/toolchain downloads.
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm db:setup   # explicit owned local Docker setup and migrations
-pnpm dev
 ```
 
-`pnpm dev` starts the desktop main/preload build and the Vite loopback renderer.
-The desktop `predev` hook first builds its workspace dependency closure. Both `predev`
-and `prestart` run the official `install-electron` command:
-Electron 45 downloads its binary on demand, while electron-vite expects it to exist.
-The installer reuses an already verified installation; first launch needs network access.
-The native close dialog defaults to keep open; choose stop and close to wait for owned
-provider cleanup and pool shutdown. Do not use Ctrl+C as a substitute for confirmed agent
-cleanup. A failed cleanup remains visible and keeps the window open. Stop active work
-before editing main/utility source: development hot restarts and externally forced exits
-cannot establish native descendant cleanup. `pnpm start` previews an existing production
-build; run `pnpm build` first. Installers and packaging are not part of this increment.
+The Rust wrapper uses installed Cargo by default. If `.factory/toolchains/cargo/bin`
+contains a project-local installation, it selects that installation with matching
+Cargo/Rustup homes. This ignored directory is optional, not required on a fresh checkout.
+Scripts do not change global defaults. Rustup may download the pinned toolchain and
+components into its selected home when missing. Missing tools remain visible failures.
 
 ## Web foundation
 
-The frontend and API are independent services. Use the default frontend URL
-`http://localhost:3000` (not `127.0.0.1`) so it matches the API origin allowlist.
+Run the independent API and frontend in separate terminals from the repository root:
 
 ```bash
 pnpm dev:api
-# In another terminal:
 pnpm dev:web
 ```
 
-The static build can be checked locally with `pnpm --filter @workspace/web build`
-and `pnpm preview:web`, while the API runs with `pnpm start:api`. Vite preview is
-for local validation only; deploy the `apps/web/dist` assets to a static host when
-hosting is separately authorized. Neither development nor preview uses a frontend
-SSR process or a Rust static-file handler.
+Open `http://localhost:3000`, using `localhost` consistently for the frontend and API.
+The API binds to `127.0.0.1:3001` but is addressed by the browser as
+`http://localhost:3001`. Do not mix `localhost` and `127.0.0.1`: origin checks and
+same-site cookies depend on consistent host configuration. Rust serves HTTP API routes,
+not frontend files. The browser app is static; no SSR server is used.
 
-Frontend configuration is the explicitly supplied `VITE_API_BASE_URL` environment
-variable (default `http://localhost:3001`). It is public build-time data, never a place
-for secrets. Vite does not load `.env` files. This increment accepts only loopback
-HTTP origins without credentials, paths, queries or fragments. API configuration and
-validation are owned by `apps/api/src/config`; no OAuth settings exist yet.
+Without identity configuration, owned PostgreSQL and applied identity migrations, the
+application remains accessible but sign-in is unavailable. `/health/live` means the
+process responds; `/health/ready` reflects configured identity/storage readiness.
+A successful liveness response does not establish usable authentication or a live
+GitHub exchange. Runtime startup does not create infrastructure, apply migrations or
+load `.env` files. After correcting startup configuration, database ownership or missing
+migrations, restart the API so it can compose the identity runtime again.
 
-Rust tooling uses the installed Cargo by default. If `.factory/toolchains/cargo/bin`
-contains a project-local Rust installation, the wrapper selects it with the matching
-local Cargo/Rustup homes. This directory is ignored and is not a dependency of a
-fresh checkout. Windows users need the MSVC C++ tools and Windows SDK, preferably
-from a Developer PowerShell session. Missing tools must remain visible failures.
-Project scripts do not change global toolchain defaults. Rustup may download the
-pinned toolchain and components into its selected home when they are missing.
+### Explicit configuration
 
-`/health/live` reports that the process responds. `/health/ready` returns 503 with
-`foundation-incomplete`; it must not claim users, sessions or persistence work.
-The current screen has no login action, admin controls or runnable agent controls.
+| Variable                       | Default or purpose                                                       |
+| ------------------------------ | ------------------------------------------------------------------------ |
+| `FACTORY_API_BIND`             | `127.0.0.1:3001`; loopback socket only                                   |
+| `FACTORY_WEB_ORIGIN`           | `http://localhost:3000`; exact allowed browser origin                    |
+| `FACTORY_API_ORIGIN`           | `http://localhost:3001`; public callback/API origin, matching bind port  |
+| `FACTORY_WORKSPACE_ROOT`       | Current working directory; absolute checkout path for database ownership |
+| `FACTORY_GITHUB_CLIENT_ID`     | Explicit OAuth application client ID                                     |
+| `FACTORY_GITHUB_CLIENT_SECRET` | Server-only OAuth client secret                                          |
+| `FACTORY_BOOTSTRAP_GITHUB_ID`  | Immutable numeric GitHub ID of the initial administrator                 |
+| `VITE_API_BASE_URL`            | `http://localhost:3001`; public frontend build-time origin               |
 
-## Checks
+Both origins must use the same local host. Current configuration accepts canonical
+loopback HTTP origins without credentials, trailing slash, paths, query or fragment.
+It intentionally does not support public deployment origins. Do not put secrets in
+`VITE_*` variables: their values can be included in the public bundle. Vite also does
+not read `.env` files.
+
+For a separately authorized live GitHub setup, the OAuth callback is
+`http://localhost:3001/api/auth/github/callback` with the default API origin.
+Supply the server variables through an explicitly chosen process environment. The
+client ID, client secret and bootstrap numeric ID must all be valid for identity to
+be enabled. The administrator is not selected by email, handle or first sign-in order.
+Do not paste secret values into source, screenshots, logs or troubleshooting reports.
+Routine installation and checks neither register an OAuth app nor configure credentials.
+
+### Built frontend and PWA
 
 ```bash
-pnpm format:check
-pnpm lint
-pnpm typecheck
-pnpm boundaries:check
-pnpm test
-pnpm docs:check
-pnpm build
+pnpm --filter @workspace/web build
+pnpm preview:web
+# In another terminal:
+pnpm start:api
 ```
 
-`pnpm check` runs the routine checks. `pnpm format` applies formatting when needed.
-The web and Cargo checks are also part of the workspace. `pnpm web:check` validates the
-web shell without Rust; `pnpm rust:check` runs Cargo formatting, Clippy and unit tests.
-`pnpm rust:build` builds the Rust release workspace. The API never needs a database or
-provider credentials for these checks. Node and Cargo lockfiles remain versioned.
+The frontend output is `apps/web/dist`. Vite preview is local inspection tooling,
+not a production server. Development mode does not register the service worker; use
+the built preview for installation, offline and update acceptance.
 
-The Node test runner exercises temporary dependency graphs, rejecting forbidden imports
-including type-only, resolved aliases, dynamic imports and Node builtins. Temporary
-fixture directories are removed after each test; no persistent seed data is created.
-`pnpm execution:test` builds the domain/application/contracts packages, checks independent
-wire/domain type parity, and runs deterministic execution and schema tests with Node's
-built-in runner. It covers concurrent starts, parent/child scope, blocking/nonblocking
-questions, explicit continuation, provider permissions, duplicate/stale requests,
-response/stop/disconnect ordering and persistence cleanup failure. Test adapters are
-confined to test directories and do not start real agents or create persistent seed data.
-The package runtime exports use built `dist` entries; TypeScript consumers resolve source
-types. Build the owning packages before invoking their JavaScript entrypoints directly.
+The worker caches public JS/CSS/icons and the public offline page only. API/OAuth
+responses and private pages must not appear in CacheStorage. The entry HTML, manifest
+and worker must be revalidated when configuring a future static host; hashed assets
+may be cached immutably. SPA navigation fallback belongs to that static host and must
+not rewrite requests at the API origin. Deployment is not part of this increment.
 
-`pnpm desktop:test` builds the real host/application boundary and checks generation/source
-validation, native workspace ownership, concurrent multi-question replies, persistence
-readiness/recovery failure, stop/history and worker loss using deterministic doubles. It is
-part of `pnpm check` and never connects to Docker or Codex.
-
-For an explicit built-window acceptance, run `pnpm desktop:smoke`. It requires the same
-graphical Linux session as the application and permission to access local Docker. It
-creates only a unique identity-verified `factory-test-*` project, applies migrations,
-builds a **separate test-only main and utility entry**, and uses a synthetic provider with
-no model, tools or account. The production entry has no fixture/provider environment flag.
-The journey exercises actual sandboxed preload IPC, workspace selection, independently
-pending questions, explicit permission, inert malicious markup, stop, linked continuation,
-worker death and restart recovery/history against PostgreSQL. Wide/narrow PNGs and bounded
-logs are written to the reported temporary directory. Cleanup removes only that fixture's
-verified container, volume and network. No development database is created or deleted.
-This is desktop integration evidence, not native Codex execution or cleanup proof.
-
-For manual UI inspection, run `pnpm dev` or `pnpm build && pnpm start`. Confirm readiness,
-choose a workspace, inspect enabled skill names/paths and persisted history, and verify
-narrow layout, focus outlines and explicit request states. Provider probe starts the
-installed app-server only for managed-account metadata. Starting a task or continuing a
-conversation invokes a model and should be deliberate. The bounded real-agent journey is
-a separate acceptance step. Missing database setup should leave the interface unavailable
-with recovery instructions; startup must not silently provision or migrate it.
-
-## Local PostgreSQL
-
-The utility host requires the verified owned database; renderer and preload remain
-independent of database implementations. `pnpm check` runs deterministic
-guard checks without Docker or secrets; `pnpm test:integration` explicitly requires a
-local Docker Engine and Compose with permission to access its socket. First use may
-pull the pinned official PostgreSQL 17.11 Bookworm image. No real `.env` file is read,
-created or changed. The Compose file is operated through the guarded scripts below;
-do not run template commands or supply an existing/shared database.
+## Checks and generated contracts
 
 ```bash
-pnpm db:setup       # create/start owned factory-local PostgreSQL, then apply migrations
-pnpm db:status      # read-only readiness; never creates tables or reconciles runs
-pnpm db:migrate     # explicitly apply committed migrations to the verified local target
-pnpm db:stop        # stop the exact owned service; retain its volume and marker
+pnpm check
+pnpm web:check
+pnpm rust:build
 pnpm test:integration
 ```
 
+`pnpm check` runs formatting, lint, types, behavioral tests, dependency boundaries,
+documentation links, OpenAPI parity and builds, including Cargo formatting, Clippy and
+tests. It does not require provider credentials, Docker or a database. `web:check`
+targets frontend types/tests/build; `rust:build` produces a locked release build.
+Node and Cargo lockfiles remain versioned. `pnpm format` applies formatting.
+
+The Rust HTTP contracts own generated OpenAPI and browser types:
+
+```bash
+pnpm api:generate
+pnpm api:contract
+```
+
+Generation and parity checks are inert: they do not listen on a socket, initialize
+provider credentials or connect to PostgreSQL. Inspect both generated files after
+contract changes; do not hand-edit them.
+
+`pnpm test:integration` explicitly requires Docker and exercises retained execution
+persistence, SQLx identity persistence and API composition with synthetic identities.
+Fixtures use unique verified projects and isolated volumes, not the development target.
+A synthetic provider is test-only; production has no fixture-provider switch.
+These regressions do not replace human acceptance or prove live OAuth behavior.
+
+## Local PostgreSQL
+
+Database setup and migrations are explicit operations. Use only the guarded commands;
+do not supply a shared database or reuse template resources. No command below reads,
+creates or changes a real `.env` file.
+
+```bash
+pnpm db:setup             # provision/start owned local PostgreSQL and migrate legacy execution
+pnpm db:migrate:identity  # explicitly apply SQLx identity migrations to the verified local target
+pnpm db:status            # read-only legacy-store readiness
+pnpm db:migrate           # explicitly apply legacy execution migrations
+pnpm db:stop              # stop the owned service; retain volume and marker
+```
+
+`db:status` checks the retained execution store; use API readiness for the configured
+identity runtime. Applying legacy migrations alone does not initialize identity.
+The runtime never performs either migration on startup. Identity objects and the SQLx
+ledger live in `factory_identity`; execution tables and the Drizzle ledger remain intact.
+No legacy run is assigned to a web user.
+
 Development uses project `factory-local`, database `factory_local`, user `factory`,
 port `127.0.0.1:55432` and volume `factory-local_postgres_data`. The password
-`local-fixture-only` is deliberately public synthetic local configuration, not a secret
-or a production credential. The ignored `.factory/database-owner` file contains a
-non-secret UUID ownership marker. Keep it with the checkout while its volume exists.
-Setup rejects unknown preexisting resources instead of adopting them. A missing marker
+`local-fixture-only` is deliberately public synthetic local configuration, not a
+production credential. The ignored `.factory/database-owner` contains a non-secret UUID
+ownership marker. Keep it with the checkout while its volume exists.
+
+Setup rejects unknown preexisting resources rather than adopting them. A missing marker
 with existing resources, conflicting port, Docker permission error or failed health
-check requires resolving that exact condition; never reset/prune volumes to bypass it.
-Running `db:setup` again preserves data and idempotently applies pending migrations.
-Keep the marker after `db:stop`; no database reset/delete command is provided.
+check requires resolving that exact condition. Do not reset or prune volumes to bypass
+it. Repeated setup retains data and applies pending legacy migrations idempotently.
+Keep the marker after stopping; no development reset/delete command is provided.
 
-Every connection/migration target is checked against Docker project, owner and checkout
-labels, container name, database identity, credentials, volume and exact loopback port.
-Docker is pinned to `npipe:////./pipe/docker_engine` on Windows and
-`unix:///var/run/docker.sock` on Linux, independently of stored contexts or `DOCKER_HOST`.
-Compose receives the variable-free [environment file](../scripts/database/empty-env)
-through `--env-file` and a restricted environment. On Windows, only `SystemRoot`,
-`USERPROFILE` and `ProgramFiles` are additionally inherited for process startup and
-installed Docker CLI plugin discovery. Checkout identity accepts absolute POSIX paths
-and Windows drive paths, with exact label matching. Remote, shared,
-unknown and mismatched targets are rejected before SQL. Database readiness returns
-`pending-migrations`, `unavailable` or `closed`; normal readiness has no migration,
-recovery or provisioning side effects. PostgreSQL clients and URLs remain privileged.
+Every target is checked against Docker project, owner and checkout labels, container,
+database identity, credentials, volume and exact loopback port before SQL. Docker is
+pinned to `npipe:////./pipe/docker_engine` on Windows and
+`unix:///var/run/docker.sock` on Linux, independently of stored contexts or
+`DOCKER_HOST`. Compose uses the variable-free
+[environment file](../scripts/database/empty-env) and a restricted environment.
+On Windows, `SystemRoot`, `USERPROFILE` and `ProgramFiles` are inherited for process
+startup and installed Docker CLI plugin discovery. Checkout identity accepts absolute
+POSIX paths and Windows drive paths, with exact label matching.
 
-On Windows, run `pnpm db:setup`, then `pnpm db:status` from PowerShell before restarting
-Factory. If the named pipe is unavailable, check that Docker Desktop is running with
-Linux containers. Setup remains explicit and retains existing owned data. Deterministic
-checks cover Windows/Linux invocation and ownership guards; a successful setup/status
-on the actual machine is still required to establish database readiness.
+From PowerShell, run setup and status before starting the configured API. If the named
+pipe is unavailable, check that Docker Desktop is running with Linux containers.
+A successful setup/status on the actual machine is needed to establish database
+readiness; deterministic Windows guard checks alone do not establish it. Rust SQLx
+connections reject ambient PostgreSQL connection overrides and do not read pgpass.
 
-Integration creates a unique `factory-test-<UUID>` Compose project and owner token with
-an OS-allocated loopback port and a separate durable test volume. It applies migrations
-twice and exercises the actual ExecutionService with PostgreSQL and a test-only runtime:
-created reservation, confirmed start, persisted question/answer and cancellation. It also
-verifies cross-run foreign keys, concurrent active roots and versions,
-idempotent event handling, full transaction/recovery rollback, answered and pending
-questions, history pagination, reconnect, explicit restart recovery, unavailable and
-closed connections. It never starts an agent or replays tools. Cleanup first checks all
-resource identities, then removes only that fixture's exact container, volume and
-network. Development resources are never deleted. If cleanup is interrupted, retain the
-reported failure and inspect that exact `factory-test-*` project before manual removal.
+Integration uses a unique `factory-test-<UUID>` project and ownership token, an
+OS-allocated loopback port and a separate test volume. Cleanup rechecks identities,
+then removes only that fixture's exact container, volume and network. Development
+resources are not deleted. If cleanup is interrupted, retain the reported failure
+and inspect that exact project before any manual removal.
 
-For schema changes, run `pnpm --filter @workspace/database generate` and inspect SQL and
-snapshots. The migration has an annotated manual `DEFERRABLE INITIALLY DEFERRED` root
-ownership foreign key, which Drizzle's schema DSL cannot express; preserve it and run
-integration after changes. No temporary fixture content belongs in migrations.
+For retained execution schema changes, use `pnpm --filter @workspace/database generate`
+and inspect SQL/snapshots. Preserve the annotated manual
+`DEFERRABLE INITIALLY DEFERRED` root-ownership foreign key that Drizzle's schema DSL
+cannot express. Identity migrations live under `crates/database/migrations` and use
+the separate SQLx ledger. Run the appropriate integration checks after schema changes;
+temporary fixture content never belongs in migrations.
 
-## Codex integration
+## Execution reference and Codex diagnostics
 
-The provider adapter targets **codex-cli 0.160.0**. Supply the absolute path of an existing
-compatible executable to diagnostics; the desktop uses `codex` from its trusted host PATH.
-Factory does not install or upgrade Codex. Sign in through Codex's
-own supported UI/CLI outside Factory. The adapter uses the existing managed ChatGPT
-sign-in and never reads token files, requests token refresh, changes global configuration,
-or accepts an API key. A missing sign-in or incompatible version reports unavailable.
+The TypeScript execution packages are maintained as porting references. They are not
+wired to member routes or a web terminal. Their deterministic checks remain in
+`pnpm check`; package JavaScript exports use built `dist` entries, while TypeScript
+consumers resolve source types. Build packages before invoking their JavaScript directly.
+
+The retained provider adapter targets **codex-cli 0.160.0**. Factory does not install
+or upgrade it. An intentional diagnostic must select an existing compatible executable
+by absolute path. Sign-in belongs to Codex's supported UI/CLI outside Factory; these
+diagnostics never read token files, refresh tokens, change global configuration or
+accept an API key.
 
 ```bash
 pnpm adapters:test
@@ -197,48 +200,48 @@ pnpm codex:protocol /absolute/path/to/codex --check
 pnpm codex:probe /absolute/path/to/codex
 ```
 
-`adapters:test` is part of `pnpm check`: sanitized in-process stdio fixtures exercise the
-real transport and application layer without starting Codex, calling a model or reading
-credentials. They cover framing/correlation/errors, skills, questions/permissions,
-continuation, native child mappings and cancellation/disconnect races.
+`adapters:test` uses sanitized protocol fixtures without real Codex or model calls.
+`codex:probe` is explicit and outside routine checks: it verifies the executable,
+initializes app-server, requests `account/read` with `refreshToken:false`, prints
+safe availability/capability information and closes its owned server. It does not
+start a thread or a turn. Capabilities describe pinned mappings, not live delegation
+or cleanup proof. Never include raw account output, stderr or credential files in reports.
 
-`codex:probe` is explicit and outside routine checks/CI. It checks the executable version,
-initializes app-server, requests `account/read` with `refreshToken:false`, prints only
-availability/capability booleans and safe reasons, then closes the owned server. It does
-not start a thread or a model turn. Capability flags mean the pinned mapping is present,
-not that native delegation or every model feature has been verified with this account.
-The command may require permission to start local processes. Never paste account output,
-provider stderr, credential files or real `.env` contents into troubleshooting reports.
+Intentional regeneration uses `pnpm codex:protocol /absolute/path/to/codex`. Inspect
+the generated closure and provenance hashes. A changed executable version is rejected
+and requires a separate compatibility change. Generated bindings are preserved apart
+from ESM import extensions and excluded from formatting.
 
-For intentional binding regeneration, run `pnpm codex:protocol /absolute/path/to/codex`
-and inspect the generated closure and provenance hashes. The generator rejects a changed
-version: a provider upgrade requires a separate compatibility review, updated projections,
-fixtures and pin. Generated files are preserved verbatim apart from ESM import extensions;
-they are excluded from formatting. `--check` verifies exact installed-generator parity.
+The current adapter exposes enabled skill names/paths only, keeps conversation
+correlation within one runtime instance, and rejects unsupported actionable requests
+visibly. Stop requires terminal confirmation for every observed owned thread, including
+children; interrupt acknowledgement or process exit alone is insufficient. Unconfirmed
+cleanup blocks further execution. No live inference is authorized by routine diagnostics.
 
-Current limitations: the current skill runtime port returns enabled names/paths without
-descriptions or disabled entries; the complete intended catalog is not yet implemented. Conversation correlation survives only within one runtime instance. Secret
-questions, file-change approvals without a supported patch presentation, and unsupported
-actionable requests fail visibly. Stop waits for terminal
-notifications from every observed native thread, including children discovered while
-stopping. If confirmation is absent, it closes its server and reports cleanup unconfirmed;
-it does not infer success from an interrupt RPC response or process exit. This unresolved
-ownership also blocks reconnection/new runs and makes shutdown fail after disconnect. Real model,
-skill execution, delegation and native cleanup remain unverified until the bounded live
-acceptance journey. No live inference is required or authorized by routine diagnostics.
+## Human acceptance
 
-## Bounded real Codex acceptance
+QA is accepted by a person. Agent-authored browser/acceptance scripts, screenshots and
+observations stay in ignored local scratch, never in the versioned suite. Meaningful
+unit/integration regressions protect implementation behavior separately.
 
-Human QA is accepted by a person. Keep agent-authored acceptance/browser scripts and artifacts in ignored local scratch. Meaningful unit and integration regression tests remain versioned. Live Codex work requires explicit authorization, a deliberately selected disposable workspace and confirmation that all owned agents have stopped.
+With separately authorized OAuth configuration and two chosen GitHub accounts, verify:
 
-## Adding code
+1. The configured numeric-ID account becomes administrator; the second account becomes
+   pending and cannot enter the member space.
+2. Activation enables a fresh sign-in. The member cannot open user administration or
+   invoke its API. Check readable errors, keyboard navigation and narrow layouts.
+3. Suspension requires confirmation and revokes the member's sessions. Reactivation
+   requires another fresh sign-in. Exercise conflict feedback with two admin tabs.
+4. Sign-out invalidates another tab. API loss or offline mode hides private data and
+   recovery rechecks the server instead of displaying a persisted session.
 
-Use the responsibilities in [architecture](ARCHITECTURE.md). Runtime and adapter
-contracts belong with actual behavior, not placeholder APIs. Keep the UI appearance
-replaceable. Run the boundary tests after changing path aliases or dependencies.
-All local planning artifacts remain ignored under `docs/plans/`.
+Using the built preview in a supported Chromium browser, install and reopen the PWA,
+check the public offline fallback, then build a visible local change. Verify the update
+notice appears after focus/reconnection and only an explicit action reloads the chosen
+tab. Check that another tab is not forced to reload and no private API/OAuth content
+appears in CacheStorage. Record actual observations and limits locally.
 
-The provider's `serverRequest/resolved` notification can mean answered or cleared. Factory
-correlates it only after sending the exact response and applies invalidation guards; the
-non-inference diagnostic does not prove acceptance behavior for every possible provider
-notification race. That remains part of bounded live integration acceptance.
+Live Codex acceptance belongs to the later execution increment. It may consume model
+allowance and requires an explicitly chosen disposable workspace, harmless content,
+deliberate questions/permissions and confirmed native cleanup. Synthetic fixtures or a
+UI projection cannot establish live agent execution, provider delegation or cleanup.
