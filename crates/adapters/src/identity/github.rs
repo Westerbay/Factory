@@ -18,6 +18,57 @@ const TOKEN_BODY_LIMIT: usize = 32 * 1024;
 const PROFILE_BODY_LIMIT: usize = 64 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Public account lookup for an operator-selected administrator. This does not
+/// authenticate the account; browser access still requires the normal OAuth flow.
+pub async fn lookup_github_account(username: &str) -> Result<VerifiedIdentity, IdentityError> {
+    if username.is_empty()
+        || username.len() > 39
+        || !username
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+        || username.starts_with('-')
+        || username.ends_with('-')
+        || username.contains("--")
+    {
+        return Err(IdentityError::InvalidInput);
+    }
+    let url = Url::parse(&format!("https://api.github.com/users/{username}"))
+        .map_err(|_| IdentityError::InvalidInput)?;
+    lookup_account_at(&http_client(REQUEST_TIMEOUT)?, url).await
+}
+
+async fn lookup_account_at(http: &Client, url: Url) -> Result<VerifiedIdentity, IdentityError> {
+    let response = http
+        .get(url)
+        .header(header::ACCEPT, "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send()
+        .await
+        .map_err(|_| IdentityError::Unavailable)?;
+    if response.status() == StatusCode::NOT_FOUND {
+        return Err(IdentityError::NotFound);
+    }
+    if response.status() != StatusCode::OK {
+        return Err(IdentityError::Unavailable);
+    }
+    let body = bounded_body(response, PROFILE_BODY_LIMIT)
+        .await
+        .map_err(|_| IdentityError::Unavailable)?;
+    #[derive(Deserialize)]
+    struct Account {
+        #[serde(flatten)]
+        profile: Profile,
+        #[serde(rename = "type")]
+        kind: String,
+    }
+    let account: Account =
+        serde_json::from_slice(&body).map_err(|_| IdentityError::InvalidInput)?;
+    if account.kind != "User" {
+        return Err(IdentityError::InvalidInput);
+    }
+    account.profile.into_identity()
+}
+
 type OAuthClient =
     BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet>;
 
@@ -171,21 +222,27 @@ impl IdentityProvider for GitHubProvider {
             .map_err(|_| IdentityError::Unavailable)?;
         let profile: Profile =
             serde_json::from_slice(&body).map_err(|_| IdentityError::InvalidLogin)?;
-        if profile.id == 0 {
+        // The token is dropped here; only verified identity metadata leaves this adapter.
+        profile.into_identity()
+    }
+}
+
+impl Profile {
+    fn into_identity(self) -> Result<VerifiedIdentity, IdentityError> {
+        if self.id == 0 {
             return Err(IdentityError::InvalidLogin);
         }
         let identity = VerifiedIdentity {
             provider: "github".into(),
             issuer: "https://github.com".into(),
-            subject: profile.id.to_string(),
-            display_name: profile
+            subject: self.id.to_string(),
+            display_name: self
                 .name
                 .filter(|name| !name.trim().is_empty())
-                .unwrap_or_else(|| profile.login.clone()),
-            handle: profile.login,
+                .unwrap_or_else(|| self.login.clone()),
+            handle: self.login,
         };
         identity.validate()?;
-        // The token is dropped here; only verified identity metadata leaves this adapter.
         Ok(identity)
     }
 }

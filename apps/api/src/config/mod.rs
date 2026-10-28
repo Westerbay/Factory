@@ -1,6 +1,5 @@
 //! Validate local runtime configuration before opening sockets.
 mod local;
-use factory_core::identity::BootstrapAdmin;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use url::{Host, Url};
@@ -19,7 +18,6 @@ pub struct RuntimeConfig {
 pub struct IdentityConfig {
     pub client_id: String,
     pub client_secret: String,
-    pub bootstrap: BootstrapAdmin,
 }
 
 impl RuntimeConfig {
@@ -55,18 +53,14 @@ impl RuntimeConfig {
         let identity = match (
             get("FACTORY_GITHUB_CLIENT_ID"),
             get("FACTORY_GITHUB_CLIENT_SECRET"),
-            get("FACTORY_BOOTSTRAP_GITHUB_ID"),
         ) {
-            (Some(client_id), Some(client_secret), Some(subject))
-                if !client_id.is_empty() && !client_secret.is_empty() =>
+            (Some(client_id), Some(client_secret))
+                if !client_id.trim().is_empty() && !client_secret.trim().is_empty() =>
             {
-                BootstrapAdmin::github(&subject)
-                    .ok()
-                    .map(|bootstrap| IdentityConfig {
-                        client_id,
-                        client_secret,
-                        bootstrap,
-                    })
+                Some(IdentityConfig {
+                    client_id,
+                    client_secret,
+                })
             }
             _ => None,
         };
@@ -166,12 +160,18 @@ mod tests {
     }
 
     #[test]
-    fn missing_or_invalid_bootstrap_never_enables_identity() {
-        for subject in [None, Some(""), Some("0"), Some("username")] {
+    fn oauth_configuration_does_not_require_an_admin_environment_variable() {
+        let config = RuntimeConfig::from_values(|key| match key {
+            "FACTORY_GITHUB_CLIENT_ID" => Some("synthetic-client".into()),
+            "FACTORY_GITHUB_CLIENT_SECRET" => Some("synthetic-secret".into()),
+            _ => None,
+        })
+        .unwrap();
+        assert!(config.identity().is_some());
+        for secret in [None, Some(""), Some(" ")] {
             let config = RuntimeConfig::from_values(|key| match key {
                 "FACTORY_GITHUB_CLIENT_ID" => Some("synthetic-client".into()),
-                "FACTORY_GITHUB_CLIENT_SECRET" => Some("synthetic-secret".into()),
-                "FACTORY_BOOTSTRAP_GITHUB_ID" => subject.map(str::to_owned),
+                "FACTORY_GITHUB_CLIENT_SECRET" => secret.map(str::to_owned),
                 _ => None,
             })
             .unwrap();

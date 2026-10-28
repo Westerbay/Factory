@@ -1,9 +1,6 @@
 use super::*;
 use uuid::Uuid;
 
-// Serializes the one-time administrator decision across all connections.
-const BOOTSTRAP_LOCK: i64 = 0x4641435441444d;
-
 pub(super) async fn admit(
     pool: &PgPool,
     admission: LoginAdmission,
@@ -13,76 +10,9 @@ pub(super) async fn admit(
         return Err(IdentityError::InvalidInput);
     }
     let mut tx = pool.begin().await.map_err(unavailable)?;
-    let mut admin_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM factory_identity.users WHERE role='admin')",
-    )
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(unavailable)?;
-    if !admin_exists {
-        sqlx::query("SELECT pg_advisory_xact_lock($1)")
-            .bind(BOOTSTRAP_LOCK)
-            .execute(&mut *tx)
-            .await
-            .map_err(unavailable)?;
-        admin_exists = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM factory_identity.users WHERE role='admin')",
-        )
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(unavailable)?;
-    }
-    let identity = admission.identity;
-    // Serialize creation of the same external identity without exposing provider-specific policy.
-    let key = serde_json::to_string(&[&identity.provider, &identity.issuer, &identity.subject])
-        .map_err(unavailable)?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 813357))")
-        .bind(key)
-        .execute(&mut *tx)
-        .await
-        .map_err(unavailable)?;
-    let sql = format!(
-        "SELECT {USER_COLUMNS} FROM factory_identity.users u JOIN factory_identity.external_identities e ON e.user_id=u.id WHERE e.provider=$1 AND e.issuer=$2 AND e.subject=$3 FOR UPDATE OF u"
-    );
-    let existing = sqlx::query(&sql)
-        .bind(&identity.provider)
-        .bind(&identity.issuer)
-        .bind(&identity.subject)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(unavailable)?;
-    let id = existing
-        .as_ref()
-        .map(user)
-        .transpose()?
-        .map(|u| u.id)
-        .unwrap_or_else(Uuid::new_v4);
-    let bootstrap = !admin_exists && admission.bootstrap.matches(&identity);
-    if existing.is_none() {
-        sqlx::query("INSERT INTO factory_identity.users(id,display_name,role,status,access_enabled_at) VALUES($1,$2,$3,$4,CASE WHEN $5 THEN clock_timestamp() ELSE NULL END)")
-            .bind(id).bind(&identity.display_name).bind(if bootstrap { "admin" } else { "member" })
-            .bind(if bootstrap { "active" } else { "pending" }).bind(bootstrap).execute(&mut *tx).await.map_err(unavailable)?;
-        sqlx::query("INSERT INTO factory_identity.external_identities(user_id,provider,issuer,subject,handle) VALUES($1,$2,$3,$4,$5)")
-            .bind(id).bind(&identity.provider).bind(&identity.issuer).bind(&identity.subject).bind(&identity.handle)
-            .execute(&mut *tx).await.map_err(unavailable)?;
-    } else {
-        sqlx::query("UPDATE factory_identity.users SET display_name=$2,updated_at=clock_timestamp() WHERE id=$1")
-            .bind(id).bind(&identity.display_name).execute(&mut *tx).await.map_err(unavailable)?;
-        sqlx::query("UPDATE factory_identity.external_identities SET handle=$2 WHERE user_id=$1")
-            .bind(id)
-            .bind(&identity.handle)
-            .execute(&mut *tx)
-            .await
-            .map_err(unavailable)?;
-        if bootstrap {
-            sqlx::query("UPDATE factory_identity.users SET role='admin',status='active',version=version+1,access_enabled_at=clock_timestamp() WHERE id=$1")
-                .bind(id).execute(&mut *tx).await.map_err(unavailable)?;
-        }
-    }
-    let row = sqlx::query(&format!("SELECT {USER_COLUMNS} FROM factory_identity.users u JOIN factory_identity.external_identities e ON e.user_id=u.id WHERE u.id=$1"))
-        .bind(id).fetch_one(&mut *tx).await.map_err(unavailable)?;
-    let user = user(&row)?;
-    let outcome = match admission_decision(&user, admission.login_started_at, bootstrap) {
+    let user = upsert_identity(&mut tx, &admission.identity).await?;
+    let id = user.id;
+    let outcome = match admission_decision(&user, admission.login_started_at) {
         AdmissionDecision::Pending => AdmissionOutcome::Pending,
         AdmissionDecision::Suspended => AdmissionOutcome::Suspended,
         AdmissionDecision::StaleLogin => AdmissionOutcome::StaleLogin,
@@ -108,4 +38,55 @@ pub(super) async fn admit(
     };
     tx.commit().await.map_err(unavailable)?;
     Ok(outcome)
+}
+
+/// Share the identity lock with operator setup so a concurrent first login cannot
+/// duplicate the account or overwrite the operator's role/status decision.
+pub(super) async fn upsert_identity(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    identity: &VerifiedIdentity,
+) -> Result<User, IdentityError> {
+    // Serialize creation of the same external identity without exposing provider-specific policy.
+    let key = serde_json::to_string(&[&identity.provider, &identity.issuer, &identity.subject])
+        .map_err(unavailable)?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 813357))")
+        .bind(key)
+        .execute(&mut **tx)
+        .await
+        .map_err(unavailable)?;
+    let sql = format!(
+        "SELECT {USER_COLUMNS} FROM factory_identity.users u JOIN factory_identity.external_identities e ON e.user_id=u.id WHERE e.provider=$1 AND e.issuer=$2 AND e.subject=$3 FOR UPDATE OF u"
+    );
+    let existing = sqlx::query(&sql)
+        .bind(&identity.provider)
+        .bind(&identity.issuer)
+        .bind(&identity.subject)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(unavailable)?;
+    let id = existing
+        .as_ref()
+        .map(user)
+        .transpose()?
+        .map(|u| u.id)
+        .unwrap_or_else(Uuid::new_v4);
+    if existing.is_none() {
+        sqlx::query("INSERT INTO factory_identity.users(id,display_name,role,status) VALUES($1,$2,'member','pending')")
+            .bind(id).bind(&identity.display_name).execute(&mut **tx).await.map_err(unavailable)?;
+        sqlx::query("INSERT INTO factory_identity.external_identities(user_id,provider,issuer,subject,handle) VALUES($1,$2,$3,$4,$5)")
+            .bind(id).bind(&identity.provider).bind(&identity.issuer).bind(&identity.subject).bind(&identity.handle)
+            .execute(&mut **tx).await.map_err(unavailable)?;
+    } else {
+        sqlx::query("UPDATE factory_identity.users SET display_name=$2,updated_at=clock_timestamp() WHERE id=$1")
+            .bind(id).bind(&identity.display_name).execute(&mut **tx).await.map_err(unavailable)?;
+        sqlx::query("UPDATE factory_identity.external_identities SET handle=$2 WHERE user_id=$1")
+            .bind(id)
+            .bind(&identity.handle)
+            .execute(&mut **tx)
+            .await
+            .map_err(unavailable)?;
+    }
+    let row = sqlx::query(&format!("SELECT {USER_COLUMNS} FROM factory_identity.users u JOIN factory_identity.external_identities e ON e.user_id=u.id WHERE u.id=$1"))
+        .bind(id).fetch_one(&mut **tx).await.map_err(unavailable)?;
+    user(&row)
 }

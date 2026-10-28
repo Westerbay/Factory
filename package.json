@@ -10,6 +10,7 @@
     "pnpm": ">=12 <13"
   },
   "scripts": {
+    "factory": "node scripts/rust/factory.mjs",
     "dev": "pnpm --parallel --filter @workspace/api --filter @workspace/web dev",
     "start": "pnpm --parallel --filter @workspace/api --filter @workspace/web start",
     "build": "turbo build",

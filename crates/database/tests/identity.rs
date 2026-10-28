@@ -62,7 +62,7 @@ async fn admission(store: &PgIdentityStore, subject: &str, token: u32) -> LoginA
             handle: format!("user{subject}"),
         },
         login_started_at: attempt.created_at,
-        bootstrap: BootstrapAdmin::github("1").unwrap(),
+
         session: NewSession {
             token_hash: hash(token),
             csrf_token: "c".repeat(32),
@@ -130,6 +130,72 @@ async fn lock_user(sql: &PgPool, id: Uuid) -> sqlx::Transaction<'_, sqlx::Postgr
 
 #[tokio::test]
 #[ignore = "requires the explicitly owned PostgreSQL integration fixture"]
+async fn operator_setup_is_atomic_preserves_sessions_on_failure_and_serializes_different_accounts()
+{
+    let (_, db, sql) = fixture().await;
+    db.migrate().await.unwrap();
+    sqlx::query("TRUNCATE factory_identity.users, factory_identity.login_attempts CASCADE")
+        .execute(&sql)
+        .await
+        .unwrap();
+    let store = db.store();
+    let first = admission(&store, "1", 1).await.identity;
+    let second = admission(&store, "2", 2).await.identity;
+    assert!(!db.has_administrator().await.unwrap());
+
+    // Failing promotion rolls back the new identity and pending user as well.
+    sqlx::raw_sql("CREATE FUNCTION factory_identity.reject_admin_setup() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic rollback'; END $$; CREATE TRIGGER reject_admin_setup BEFORE UPDATE ON factory_identity.users FOR EACH ROW EXECUTE FUNCTION factory_identity.reject_admin_setup();").execute(&sql).await.unwrap();
+    assert!(matches!(
+        db.setup_administrator(&first).await,
+        Err(IdentityError::Unavailable)
+    ));
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM factory_identity.users")
+        .fetch_one(&sql)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    sqlx::raw_sql("DROP TRIGGER reject_admin_setup ON factory_identity.users; DROP FUNCTION factory_identity.reject_admin_setup();").execute(&sql).await.unwrap();
+
+    let (one, two) = tokio::join!(
+        db.setup_administrator(&first),
+        db.setup_administrator(&second)
+    );
+    assert_eq!(usize::from(one.is_ok()) + usize::from(two.is_ok()), 1);
+    let (selected, rejected) = if one.is_ok() {
+        (&first, &second)
+    } else {
+        (&second, &first)
+    };
+    let admin = active(
+        store
+            .admit(admission(&store, &selected.subject, 10).await)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(admin.user.role, Role::Admin);
+    assert!(matches!(
+        db.setup_administrator(rejected).await,
+        Err(IdentityError::ProtectedAdministrator)
+    ));
+    assert!(matches!(
+        db.setup_administrator(selected).await,
+        Err(IdentityError::ProtectedAdministrator)
+    ));
+    assert_eq!(
+        store.active_session(hash(10)).await.unwrap().unwrap().user,
+        admin.user
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM factory_identity.users")
+        .fetch_one(&sql)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    db.close().await;
+    sql.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires the explicitly owned PostgreSQL integration fixture"]
 async fn owned_identity_transactions_cover_admission_revocation_and_races() {
     let (target, db, sql) = fixture().await;
     db.migrate().await.unwrap();
@@ -171,25 +237,44 @@ async fn owned_identity_transactions_cover_admission_revocation_and_races() {
         Err(IdentityError::InvalidLogin)
     ));
 
-    // Bootstrap is stable under concurrent callbacks and later configuration changes.
-    let a = admission(&store, "1", 101).await;
-    let b = admission(&store, "1", 102).await;
-    let (a, b) = tokio::join!(store.admit(a), store.admit(b));
-    let (admin_token, admin) = match (a.unwrap(), b.unwrap()) {
-        (AdmissionOutcome::Active(a), _) => (101, a.user),
-        (_, AdmissionOutcome::Active(b)) => (102, b.user),
-        _ => panic!("one bootstrap succeeds"),
-    };
-    let admins: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM factory_identity.users WHERE role='admin'")
-            .fetch_one(&sql)
-            .await
-            .unwrap();
-    assert_eq!(admins, 1);
-    let mut changed_config = admission(&store, "9", 109).await;
-    changed_config.bootstrap = BootstrapAdmin::github("9").unwrap();
+    // Login cannot create an administrator, even before setup has run.
+    let before_setup = admission(&store, "1", 101).await;
+    let selected = before_setup.identity.clone();
     assert!(matches!(
-        store.admit(changed_config).await.unwrap(),
+        store
+            .admit(admission(&store, "1", 100).await)
+            .await
+            .unwrap(),
+        AdmissionOutcome::Pending
+    ));
+    let (one, two) = tokio::join!(
+        db.setup_administrator(&selected),
+        db.setup_administrator(&selected)
+    );
+    assert_eq!(usize::from(one.is_ok()) + usize::from(two.is_ok()), 1);
+    assert!(matches!(
+        if one.is_err() { one } else { two },
+        Err(IdentityError::ProtectedAdministrator)
+    ));
+    assert!(matches!(
+        store.admit(before_setup).await.unwrap(),
+        AdmissionOutcome::StaleLogin
+    ));
+    let admin_token = 102;
+    let admin = active(
+        store
+            .admit(admission(&store, "1", admin_token).await)
+            .await
+            .unwrap(),
+    )
+    .user;
+    let other = admission(&store, "9", 109).await;
+    assert!(matches!(
+        db.setup_administrator(&other.identity).await,
+        Err(IdentityError::ProtectedAdministrator)
+    ));
+    assert!(matches!(
+        store.admit(other).await.unwrap(),
         AdmissionOutcome::Pending
     ));
     assert!(matches!(

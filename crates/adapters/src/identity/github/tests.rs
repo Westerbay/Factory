@@ -15,6 +15,7 @@ struct Fixture {
     token_body: String,
     token_status: StatusCode,
     profile_body: String,
+    profile_status: StatusCode,
     token_delay: Duration,
     token_calls: AtomicUsize,
     profile_calls: AtomicUsize,
@@ -30,6 +31,7 @@ impl Default for Fixture {
                     .into(),
             token_status: StatusCode::OK,
             profile_body: r#"{"id":1234567890123456789,"login":"fixture-user","name":null}"#.into(),
+            profile_status: StatusCode::OK,
             token_delay: Duration::ZERO,
             token_calls: AtomicUsize::new(0),
             profile_calls: AtomicUsize::new(0),
@@ -61,6 +63,7 @@ async fn profile(State(state): State<Arc<Fixture>>, headers: HeaderMap) -> impl 
     state.profile_calls.fetch_add(1, Ordering::SeqCst);
     *state.profile_headers.lock().unwrap() = Some(headers);
     (
+        state.profile_status,
         [(header::CONTENT_TYPE, "application/json")],
         state.profile_body.clone(),
     )
@@ -96,6 +99,77 @@ async fn fixture(state: Fixture) -> (GitHubProvider, Arc<Fixture>, Server) {
         .set_token_uri(TokenUrl::new(format!("http://{address}/token")).unwrap());
     provider.profile = Url::parse(&format!("http://{address}/profile")).unwrap();
     (provider, state, server)
+}
+
+#[tokio::test]
+async fn operator_lookup_uses_public_identity_without_credentials_and_rejects_non_users() {
+    let (provider, state, _server) = fixture(Fixture {
+        profile_body:
+            r#"{"id":1234567890123456789,"login":"renamed-user","name":null,"type":"User"}"#.into(),
+        ..Default::default()
+    })
+    .await;
+    let identity = lookup_account_at(&provider.http, provider.profile.clone())
+        .await
+        .unwrap();
+    assert_eq!(identity.subject, "1234567890123456789");
+    assert_eq!(identity.handle, "renamed-user");
+    assert!(
+        !state
+            .profile_headers
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .contains_key(header::AUTHORIZATION)
+    );
+    assert_eq!(state.token_calls.load(Ordering::SeqCst), 0);
+    for body in [
+        r#"{"id":1,"login":"org","type":"Organization"}"#,
+        r#"{"id":1,"login":"robot","type":"Bot"}"#,
+        r#"{"id":0,"login":"user","type":"User"}"#,
+        r#"{"id":1,"login":"bad\nuser","type":"User"}"#,
+        r#"{"id":1,"login":"user"}"#,
+    ] {
+        let (provider, _, _server) = fixture(Fixture {
+            profile_body: body.into(),
+            ..Default::default()
+        })
+        .await;
+        assert!(
+            lookup_account_at(&provider.http, provider.profile.clone())
+                .await
+                .is_err()
+        );
+    }
+    for (status, expected) in [
+        (StatusCode::NOT_FOUND, IdentityError::NotFound),
+        (StatusCode::TOO_MANY_REQUESTS, IdentityError::Unavailable),
+        (StatusCode::FOUND, IdentityError::Unavailable),
+    ] {
+        let (provider, _, _server) = fixture(Fixture {
+            profile_status: status,
+            ..Default::default()
+        })
+        .await;
+        assert!(
+            matches!(lookup_account_at(&provider.http, provider.profile.clone()).await, Err(error) if error == expected)
+        );
+    }
+    for username in [
+        "../user",
+        "user?token=x",
+        "user@example.com",
+        "-user",
+        "user-",
+        "a--b",
+        "",
+    ] {
+        assert!(matches!(
+            lookup_github_account(username).await,
+            Err(IdentityError::InvalidInput)
+        ));
+    }
 }
 
 #[test]

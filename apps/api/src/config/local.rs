@@ -64,8 +64,7 @@ mod tests {
     fn dotenv_enables_identity_and_process_values_override_it() {
         let fixture = Fixture::new(Some(
             "# Synthetic credentials only\nFACTORY_GITHUB_CLIENT_ID='file-client'\n\
-             FACTORY_GITHUB_CLIENT_SECRET=\"file-secret#quoted\"\n\
-             FACTORY_BOOTSTRAP_GITHUB_ID=123\n",
+             FACTORY_GITHUB_CLIENT_SECRET=\"file-secret#quoted\"\n",
         ));
         let config = RuntimeConfig::from_env_file(&fixture.path(), |_| None).unwrap();
         let identity = config.identity().unwrap();

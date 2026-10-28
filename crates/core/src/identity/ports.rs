@@ -27,10 +27,9 @@ pub trait IdentityStore: Send + Sync {
         binding_hash: CredentialHash,
     ) -> Result<LoginAttempt, IdentityError>;
 
-    /// One transaction upserts identity, bootstraps at most one configured admin,
-    /// locks the user, applies admission_decision and issues a fixed seven-day session.
-    /// Only initial admin creation sets just_bootstrapped; changing config never
-    /// promotes another identity after an admin exists. Revoke previous token when
+    /// One transaction upserts a pending member, locks the user, applies
+    /// admission_decision and issues a fixed seven-day session. HTTP login never
+    /// creates or promotes an administrator. Revoke previous token when
     /// issuing the replacement, and store only the new token hash. No raw token input.
     async fn admit(&self, admission: LoginAdmission) -> Result<AdmissionOutcome, IdentityError>;
 

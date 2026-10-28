@@ -30,7 +30,7 @@ provider and store ports without depending on Axum, SQLx or GitHub transport.
 The API composes their concrete implementations at startup.
 Its [configuration loader](../apps/api/src/config/local.rs) reads the working
 directory's `.env` without mutating process variables; explicit process values win.
-Only API startup loads this file. Tests and contract export use inert configuration,
+API startup and the operator CLI load this file. Tests and contract export use inert configuration,
 and the static frontend never receives server credentials.
 
 The [GitHub adapter](../crates/adapters/src/identity/github.rs) performs the provider
@@ -59,8 +59,15 @@ The server issues opaque HttpOnly, SameSite=Lax session cookies. Local HTTP does
 the Secure attribute; this loopback configuration is not a production cookie policy.
 Session credentials are hashed in PostgreSQL. Each protected request checks the current
 session and active user state; fixed expiry, logout or suspension ends admission.
-Unknown verified users are pending. Only the configured immutable GitHub ID may bootstrap
-the single administrator.
+Unknown verified users are pending. The [operator CLI](../apps/api/src/bin/factory.rs)
+resolves a public GitHub username without OAuth credentials, confirms the selected
+profile, and calls [administrator setup](../crates/database/src/identity/setup.rs) on
+the verified owned database. Setup serializes the one-admin decision, shares the
+identity lock with login, and creates or promotes the selected account atomically.
+It refuses all writes once an administrator exists and never issues a session.
+The existing unique administrator index remains the final concurrency guard.
+This operator capability is absent from the HTTP store port. Every subsequent login,
+including the administrator, must start after activation. No schema migration is needed.
 
 Mutations require the exact frontend Origin and the session CSRF token. Body mutations
 also require JSON. Credentialed CORS uses an exact allowlist and is not an authorization

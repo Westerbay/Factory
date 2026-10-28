@@ -50,9 +50,9 @@ identity runtime again.
 ### Explicit configuration
 
 Copy [the example](../.env.example) to `.env` in the repository root, then fill in
-the three GitHub values. On PowerShell, use `Copy-Item .env.example .env` only if
+the two GitHub OAuth values. On PowerShell, use `Copy-Item .env.example .env` only if
 `.env` does not already exist. On macOS/Linux, use `cp -n .env.example .env`.
-The file is ignored by Git. The API reads this exact file at startup, with existing
+The file is ignored by Git. The API and administrator CLI read this exact file at startup, with existing
 process variables taking precedence, including explicitly empty values. It does not
 search parent directories or load `.env.local` / mode-specific variants. A missing file
 is allowed; malformed or unreadable files fail startup with a sanitized error code.
@@ -66,7 +66,6 @@ Parsing does not mutate the process environment. Restart the API after editing t
 | `FACTORY_WORKSPACE_ROOT`       | Current working directory; absolute checkout path for database ownership |
 | `FACTORY_GITHUB_CLIENT_ID`     | Explicit OAuth application client ID                                     |
 | `FACTORY_GITHUB_CLIENT_SECRET` | Server-only OAuth client secret                                          |
-| `FACTORY_BOOTSTRAP_GITHUB_ID`  | Immutable numeric GitHub ID of the initial administrator                 |
 | `VITE_API_BASE_URL`            | `http://localhost:3001`; public frontend build-time origin               |
 
 Both origins must use the same local host. Current configuration accepts canonical
@@ -77,9 +76,9 @@ not read `.env` files: this file configures the server only. The default fronten
 already matches the example. A custom `VITE_API_BASE_URL` is still an explicit public
 frontend build-time process variable.
 
-The client ID, client secret and bootstrap numeric ID must all be valid for identity
-to be enabled. The administrator is not selected by email, handle or first sign-in
-order. Keep secret values out of source, screenshots, logs and troubleshooting reports.
+The client ID and client secret must be valid for identity to be enabled. The
+operator CLI selects the initial administrator and persists the stable provider ID;
+subsequent authorization never depends on an email, handle or first sign-in order. Keep secret values out of source, screenshots, logs and troubleshooting reports.
 Routine installation and checks neither read the real `.env` nor register an OAuth app.
 
 ### GitHub OAuth setup
@@ -97,12 +96,34 @@ scope. Repository access and GitHub App installations are not implemented yet.
 3. Register the application. Copy its **Client ID** into `FACTORY_GITHUB_CLIENT_ID`.
    Generate a **client secret** and put it only in `FACTORY_GITHUB_CLIENT_SECRET`
    in the local `.env`.
-4. Open `https://api.github.com/users/YOUR_GITHUB_USERNAME` and copy the numeric
-   `id` field (not `node_id`) into `FACTORY_BOOTSTRAP_GITHUB_ID`. This account is
-   the initial administrator.
-5. With Docker running, execute `pnpm db:setup` and `pnpm db:migrate:identity`
-   from the repository root, then start or restart the API and frontend with
-   `pnpm dev`. Open `http://localhost:3000/sign-in` and sign in with that account.
+4. With Docker running, execute `pnpm db:setup` and `pnpm db:migrate:identity`
+   from the repository root. These explicit commands prepare only the owned local database.
+5. Configure the initial administrator:
+
+   ```bash
+   pnpm factory admin setup --provider github --username YOUR_GITHUB_USERNAME
+   ```
+
+   The CLI verifies the owned database and migrated schema, resolves the public GitHub
+   account, and displays its canonical username, numeric ID and profile URL. Type the
+   displayed username to confirm; Enter, EOF or a different answer cancels without writes.
+   It stores the stable account ID, not the username or email, and requires no GitHub token.
+   An existing pending account can become the administrator. Existing sessions are revoked
+   on promotion, and OAuth attempts started before setup cannot grant access.
+
+6. Start or restart the API and frontend with `pnpm dev`. Open
+   `http://localhost:3000/sign-in` and sign in with the selected GitHub account.
+
+Setup never migrates the database or creates a browser session. It refuses to replace
+any existing administrator (`ADMIN_ALREADY_CONFIGURED`), including when the same command
+is repeated. Concurrent setup is serialized in the database. GitHub lookup failures,
+non-user accounts and absent confirmation do not create an administrator. Only GitHub is
+supported currently; other `--provider` values are rejected. Run `pnpm factory --help`
+for usage. Keep CLI access limited to trusted server operators.
+
+Existing installations keep their administrator. The old `FACTORY_BOOTSTRAP_GITHUB_ID`
+variable is no longer read and can be removed from local configuration. If setup has not
+run yet, OAuth sign-in is available but every new account stays pending.
 
 See GitHub's [OAuth application registration guide](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app).
 If `/health/ready` returns `identity-unavailable`, inspect the API startup warning
@@ -280,7 +301,7 @@ unit/integration regressions protect implementation behavior separately.
 
 With separately authorized OAuth configuration and two chosen GitHub accounts, verify:
 
-1. The configured numeric-ID account becomes administrator; the second account becomes
+1. Configure the first administrator with the CLI, then sign in; the second account becomes
    pending and cannot enter the member space.
 2. Activation enables a fresh sign-in. The member cannot open user administration or
    invoke its API. Check readable errors, keyboard navigation and narrow layouts.

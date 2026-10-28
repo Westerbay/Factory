@@ -158,7 +158,6 @@ fn fixture() -> (Router, Arc<Store>) {
     let service = Arc::new(IdentityService::new(
         store.clone(),
         Arc::new(UnusedProvider),
-        BootstrapAdmin::github("123").unwrap(),
     ));
     (
         router(AuthState::new(

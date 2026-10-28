@@ -15,17 +15,20 @@ outside the current local increment.
 Use Node.js 24.22.1, pnpm 12.11.2 and Rust 1.90.0 with rustfmt, clippy and a native
 linker. Windows Rust builds need the MSVC C++ tools and Windows SDK. After
 `pnpm install --frozen-lockfile`, copy [.env.example](.env.example) to `.env` at the
-repository root and fill in the three GitHub values. See the
+repository root and fill in the two GitHub OAuth values. See the
 [GitHub OAuth setup](docs/DEVELOPMENT.md#github-oauth-setup) for registration and the
-initial administrator ID. Existing terminal variables override `.env` values.
+administrator CLI setup. Existing terminal variables override `.env` values.
 
 With Docker running, initialize the owned local database explicitly:
 
 ```bash
 pnpm db:setup
 pnpm db:migrate:identity
+pnpm factory admin setup --provider github --username YOUR_GITHUB_USERNAME
 ```
 
+The CLI displays the selected profile and asks you to type its username to confirm.
+It stores the stable provider ID and refuses to replace an existing administrator.
 Then run these in separate terminals:
 
 ```bash

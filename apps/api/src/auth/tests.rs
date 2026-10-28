@@ -167,11 +167,7 @@ impl IdentityProvider for Provider {
 fn fixture() -> (Router, Arc<Store>, Arc<Provider>) {
     let store = Arc::new(Store::default());
     let provider = Arc::new(Provider::default());
-    let service = Arc::new(IdentityService::new(
-        store.clone(),
-        provider.clone(),
-        BootstrapAdmin::github("123").unwrap(),
-    ));
+    let service = Arc::new(IdentityService::new(store.clone(), provider.clone()));
     (
         router(AuthState::new(
             service,

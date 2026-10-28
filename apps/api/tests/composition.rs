@@ -11,7 +11,7 @@ use factory_api::{
     config::RuntimeConfig,
 };
 use factory_application::identity::IdentityService;
-use factory_core::identity::{BootstrapAdmin, IdentityError, IdentityProvider, VerifiedIdentity};
+use factory_core::identity::{IdentityError, IdentityProvider, VerifiedIdentity};
 use factory_database::{
     identity::IdentityDatabase,
     local_target::{VerifiedTarget, from_fixture},
@@ -79,7 +79,6 @@ fn configured_app(database: Arc<IdentityDatabase>) -> Router {
     let service = Arc::new(IdentityService::new(
         Arc::new(database.store()),
         Arc::new(FixtureProvider),
-        BootstrapAdmin::github("1").unwrap(),
     ));
     app::router(
         &config,
@@ -397,6 +396,10 @@ async fn oauth_start_negotiates_browser_recovery_without_changing_api_errors() {
 async fn owned_composition_preserves_identity_across_restart_and_revokes_access() {
     let target = target().await;
     let database = Arc::new(IdentityDatabase::connect(&target).await.unwrap());
+    database
+        .setup_administrator(&FixtureProvider.exchange("1", "").await.unwrap())
+        .await
+        .unwrap();
     let app = configured_app(database.clone());
     assert_eq!(
         request(&app, Method::GET, "/health/ready", "", None, None)
