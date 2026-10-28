@@ -15,8 +15,14 @@ The PWA caches public static assets and a public offline page. It does not offer
 access to private screens or cache API/OAuth responses. Updates are detected in the
 background, with an explicit reload action for each open tab.
 
-The intended next stages separate execution from HTTP serving, give each user a
-persistent container environment, connect GitHub projects and a personal ChatGPT/Codex
+Active users can start, inspect and stop their own local Docker environment from the
+member page. The first start creates a private persistent home volume; creating or
+activating a user does not create a container. The operator explicitly prepares a common
+image first. A visible member page renews the idle lease; expiration and suspension
+request a stop while the API and Docker are available. There is no independent watchdog
+when the API is stopped, and named volumes have no portable disk quota.
+
+The intended next stages connect GitHub projects and a personal ChatGPT/Codex
 subscription, and provide a terminal with global skills. These capabilities are not
 connected to the web application yet. GitLab, Azure and Claude remain future adapters;
 GitHub identity currently grants no repository access.
@@ -25,12 +31,17 @@ The TypeScript core, application, contracts, Codex adapter and PostgreSQL execut
 remain tested references for the later Rust execution port. Their existing tables and
 Drizzle migration ledger are preserved. Historical runs have no web-user ownership and
 must not be assigned or exposed to users by inference. The separate SQLx identity schema
-does not rewrite that history.
+does not rewrite that history. Its additive environment migration is manual; an existing
+unmigrated database remains Pending and cannot serve identity until the operator applies
+it. Missing image preparation affects only environment availability.
 
 Local PostgreSQL ownership checks support Linux Docker Engine and Windows Docker Desktop
 using exact checkout paths and the local socket or named pipe. Windows database support
 does not establish live Codex execution or native cleanup. The Codex reference adapter
 targets CLI 0.160.0, but no agent is started by the web runtime or routine checks.
+The new environment adapter uses Rust/Bollard directly against that local Docker
+transport. Environment integration has been exercised on Windows Docker Desktop with
+Linux containers; Linux Docker Engine and WSL environment behavior remain unverified.
 
 This increment does not deploy to a VPS, register an OAuth application or configure real
 credentials. Unit and integration regressions use synthetic principals and owned local

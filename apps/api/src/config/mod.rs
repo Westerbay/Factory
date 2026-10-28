@@ -1,5 +1,7 @@
 //! Validate local runtime configuration before opening sockets.
+mod environments;
 mod local;
+pub use environments::EnvironmentConfig;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use url::{Host, Url};
@@ -11,6 +13,7 @@ pub struct RuntimeConfig {
     api_origin: String,
     workspace: PathBuf,
     identity: Option<IdentityConfig>,
+    environments: EnvironmentConfig,
 }
 
 // Never derive Debug: the provider secret must stay server-side.
@@ -70,6 +73,7 @@ impl RuntimeConfig {
             api_origin: api,
             workspace,
             identity,
+            environments: EnvironmentConfig::from_values(&get)?,
         })
     }
 
@@ -90,6 +94,9 @@ impl RuntimeConfig {
     }
     pub fn identity(&self) -> Option<&IdentityConfig> {
         self.identity.as_ref()
+    }
+    pub fn environments(&self) -> &EnvironmentConfig {
+        &self.environments
     }
 }
 

@@ -8,6 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 factory-core = { path = "../../crates/core" }
 factory-application = { path = "../../crates/application" }
 factory-adapters = { path = "../../crates/adapters" }
@@ -33,7 +34,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
-async-trait.workspace = true
 tower.workspace = true
 
 [lints]

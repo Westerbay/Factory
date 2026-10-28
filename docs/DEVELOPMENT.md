@@ -5,7 +5,7 @@
 - Node.js 24.22.1, pinned in `.node-version`, and pnpm 12.11.2.
 - Rust 1.90.0 with rustfmt, clippy and a native linker/platform SDK.
 - On Windows, MSVC C++ build tools and the Windows SDK, preferably from Developer PowerShell.
-- Local Docker Engine and Compose for explicit database setup and integration;
+- Local Docker Engine and Compose for database setup, environment preparation and integration;
   on Windows, Docker Desktop running Linux containers.
 - Network access for initial dependency/toolchain downloads.
 
@@ -156,6 +156,8 @@ pnpm check
 pnpm web:check
 pnpm rust:build
 pnpm test:integration
+pnpm environments:test
+pnpm environments:integration
 ```
 
 `pnpm check` runs formatting, lint, types, behavioral tests, dependency boundaries,
@@ -163,6 +165,9 @@ documentation links, OpenAPI parity and builds, including Cargo formatting, Clip
 tests. It does not require provider credentials, Docker or a database. `web:check`
 targets frontend types/tests/build; `rust:build` produces a locked release build.
 Node and Cargo lockfiles remain versioned. `pnpm format` applies formatting.
+`environments:test` runs deterministic preparation-tool regressions and is included in
+routine checks. `environments:integration` explicitly builds a fixture image and runs
+real Docker environment isolation, persistence and resource-limit tests.
 
 `pnpm execution-reference:test` compiles and exercises the temporary Electron-free
 host/model/view reference in `packages/execution-reference`. It has no application
@@ -190,7 +195,8 @@ provider credentials or connect to PostgreSQL. Inspect both generated files afte
 contract changes; do not hand-edit them.
 
 `pnpm test:integration` explicitly requires Docker and exercises retained execution
-persistence, SQLx identity persistence and API composition with synthetic identities.
+persistence, SQLx identity/environment persistence, API composition with synthetic
+identities and real Docker environment integration.
 Fixtures use unique verified projects and isolated volumes, not the development target.
 A synthetic provider is test-only; production has no fixture-provider switch.
 These regressions do not replace human acceptance or prove live OAuth behavior.
@@ -214,6 +220,10 @@ identity runtime. Applying legacy migrations alone does not initialize identity.
 The runtime never performs either migration on startup. Identity objects and the SQLx
 ledger live in `factory_identity`; execution tables and the Drizzle ledger remain intact.
 No legacy run is assigned to a web user.
+The additive environment migration is part of `db:migrate:identity`. An existing database
+without it reports Pending: sign-in and backoffice remain unavailable until the operator
+explicitly applies it and restarts the API. Development and integration checks do not
+apply it to the real development database.
 
 Development uses project `factory-local`, database `factory_local`, user `factory`,
 port `127.0.0.1:55432` and volume `factory-local_postgres_data`. The password
@@ -255,6 +265,67 @@ and inspect SQL/snapshots. Preserve the annotated manual
 cannot express. Identity migrations live under `crates/database/migrations` and use
 the separate SQLx ledger. Run the appropriate integration checks after schema changes;
 temporary fixture content never belongs in migrations.
+
+## Local environments
+
+After preparing and migrating the owned database, explicitly prepare the shared image:
+
+```bash
+pnpm environments:prepare
+```
+
+This operator command builds the versioned [Dockerfile](../infra/environments/Dockerfile)
+from its pinned base image, so the initial preparation may require network access. It
+stores the stable installation UUID in `.factory/environments/installation.json` and
+the immutable image ID/policy in `prepared.json`. Preserve this ignored directory while
+its resources exist; do not regenerate its identity or delete `supervisor.lock` to bypass
+a conflict. Repeated preparation retains the installation identity. Existing environments
+keep their recorded image and policy; preparation does not migrate or replace them.
+
+Restart the API after preparation or configuration changes. Neither API startup, sign-in,
+account activation nor status reads create user containers. The member's first explicit
+Start creates a container and named home volume; Stop retains `/home/factory` and its
+`Documents` working directory. There is no user-volume deletion/reset command. Investigate
+a missing recorded volume or uncertain provisioning state instead of creating a substitute.
+
+Operator settings are validated by the
+[API configuration](../apps/api/src/config/mod.rs):
+
+| Variable                   | Default | Purpose                                                                         |
+| -------------------------- | ------- | ------------------------------------------------------------------------------- |
+| `FACTORY_ENV_MAX_RUNNING`  | `2`     | Maximum reserved local environments, including transitions and uncertain states |
+| `FACTORY_ENV_IDLE_MINUTES` | `15`    | Lease duration without a visible-page renewal                                   |
+| `FACTORY_ENV_MEMORY_MIB`   | `1024`  | Container memory ceiling; no additional swap                                    |
+| `FACTORY_ENV_CPUS`         | `1`     | Container CPU ceiling                                                           |
+| `FACTORY_ENV_PIDS`         | `128`   | Container process ceiling                                                       |
+
+These limits are server settings, not browser inputs or memory reservations. Containers
+run as a fixed non-root user with a read-only root, bounded tmpfs/logs, dropped capabilities,
+no-new-privileges, no network and no published ports. They receive neither host bind mounts,
+platform credentials nor the Docker socket. Named volumes have no portable disk quota;
+monitor available host disk space. No repository clone, terminal or agent runs in this lot.
+
+Missing preparation leaves the environment card unavailable while otherwise-ready
+authentication and administration remain usable. Docker failures produce environment
+errors and retries; loss of supervisor ownership disables environment operations until
+restart. The API holds both a process file lock and a dedicated database guard, so run
+only one environment supervisor per installation. Do not remove lock files or change
+installation metadata to force a second instance.
+
+A visible authenticated page renews the lease on return and at least every minute,
+sooner when needed before expiry. Hidden/offline pages,
+sign-out and session loss stop renewal; expiry requests a stop. Suspension records stop
+intent atomically with access revocation. Actual shutdown requires available API/Docker
+supervision; stopping the API does not guarantee containers stop, and there is no separate
+watchdog. Stop environments and wait for confirmed Stopped before intentionally stopping
+the API when containers should not remain running.
+
+The runtime uses Bollard against the local Linux socket or Windows Docker named pipe,
+independently of `DOCKER_HOST` or stored contexts. Real environment integration has been
+tested on Windows Docker Desktop with Linux containers. Linux Docker Engine and WSL
+environment behavior remain unverified; their installations and checkout identities must
+not be assumed interchangeable. Integration commands create their own labeled fixtures
+and verify ownership before cleanup; they never prune or remove user volumes.
 
 ## Execution reference and Codex diagnostics
 
@@ -309,6 +380,14 @@ With separately authorized OAuth configuration and two chosen GitHub accounts, v
    requires another fresh sign-in. Exercise conflict feedback with two admin tabs.
 4. Sign-out invalidates another tab. API loss or offline mode hides private data and
    recovery rechecks the server instead of displaying a persisted session.
+
+After explicit image preparation and database migration, verify each account sees only
+its own environment. Check first start, observed Running, Stop and restart with retained
+data using owned fixtures; there is no file editor in the member UI. Check capacity
+refusals, idle expiry and suspension with the service running. Confirm polling and lease
+renewal pause on hidden/offline pages and stop at logout, and inspect keyboard/narrow-screen
+behavior. Record actual platforms and outcomes; synthetic checks do not establish human
+acceptance or production behavior.
 
 Using the built preview in a supported Chromium browser, install and reopen the PWA,
 check the public offline fallback, then build a visible local change. Verify the update
