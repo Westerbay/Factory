@@ -19,7 +19,7 @@
     "format:check": "prettier --check .",
     "boundaries:check": "depcruise --config packages/config/dependency-cruiser.mjs apps packages",
     "boundaries:test": "node --test scripts/test/boundaries.test.mjs",
-    "test": "pnpm execution:test && pnpm adapters:test && pnpm database:test && pnpm desktop:test && pnpm boundaries:test && pnpm qa:test",
+    "test": "pnpm execution:test && pnpm adapters:test && pnpm database:test && pnpm desktop:test && pnpm boundaries:test",
     "docs:check": "node scripts/docs-check.mjs",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm boundaries:check && pnpm docs:check && pnpm build",
     "execution:test": "pnpm --filter @workspace/application... build && pnpm --filter @workspace/contracts build && tsc --project packages/contracts/test/tsconfig.json && node --test packages/application/test/*.test.mjs packages/contracts/test/*.test.mjs",
@@ -34,9 +34,7 @@
     "codex:protocol": "node packages/adapters/scripts/generate-protocol.mjs",
     "codex:probe": "pnpm --filter @workspace/adapters... build && node packages/adapters/scripts/probe.mjs",
     "desktop:test": "pnpm --filter @workspace/desktop^... build && tsc -p apps/desktop/tsconfig.test.json && tsc -p apps/desktop/tsconfig.renderer-test.json && node --test --test-isolation=none apps/desktop/test/runtime.test.mjs apps/desktop/test/renderer.test.mjs",
-    "desktop:smoke": "pnpm --filter @workspace/desktop... build && pnpm --filter @workspace/desktop exec electron-vite build --config electron.smoke.config.ts && node apps/desktop/test/smoke.mjs",
-    "qa:workspace": "node scripts/qa/workspace.mjs",
-    "qa:test": "node --test scripts/test/qa-workspace.test.mjs"
+    "desktop:smoke": "pnpm --filter @workspace/desktop... build && pnpm --filter @workspace/desktop exec electron-vite build --config electron.smoke.config.ts && node apps/desktop/test/smoke.mjs"
   },
   "devDependencies": {
     "dependency-cruiser": "18.6.0",
