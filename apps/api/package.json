@@ -1,0 +1,12 @@
+{
+  "name": "@workspace/api",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "dev": "node ../../scripts/rust/run.mjs run --locked --package factory-api",
+    "start": "node ../../scripts/rust/run.mjs run --release --locked --package factory-api",
+    "build": "node ../../scripts/rust/run.mjs build --release --locked --package factory-api",
+    "typecheck": "node ../../scripts/rust/run.mjs check --locked --workspace --all-targets"
+  }
+}

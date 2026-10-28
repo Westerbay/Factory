@@ -5,16 +5,23 @@ import { verifyDatabaseTarget } from "../../packages/database/dist/index.js"
 export const root = resolve(fileURLToPath(new URL("../..", import.meta.url)))
 export function docker(args, environment = {}) {
   // Never let Compose load a real .env or caller-controlled Docker/Compose settings.
+  const windows = process.platform === "win32"
+  const host = windows
+    ? "npipe:////./pipe/docker_engine"
+    : "unix:///var/run/docker.sock"
+  const env = { PATH: process.env.PATH, ...environment }
+  if (windows) {
+    // Windows process startup and Docker's installed CLI plugin discovery need these.
+    for (const name of ["SystemRoot", "USERPROFILE", "ProgramFiles"]) {
+      if (process.env[name]) env[name] = process.env[name]
+    }
+  }
   try {
-    return execFileSync(
-      "docker",
-      ["--host", "unix:///var/run/docker.sock", ...args],
-      {
-        encoding: "utf8",
-        env: { PATH: process.env.PATH, ...environment },
-        stdio: ["ignore", "pipe", "pipe"],
-      }
-    ).trim()
+    return execFileSync("docker", ["--host", host, ...args], {
+      encoding: "utf8",
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim()
   } catch (error) {
     const detail = String(error.stderr ?? error.message)
       .replace(/postgres(?:ql)?:\/\/[^\s]+/gi, "[redacted database URL]")
@@ -39,7 +46,7 @@ export function compose(target, args) {
     [
       "compose",
       "--env-file",
-      "/dev/null",
+      resolve(root, "scripts/database/empty-env"),
       "-f",
       resolve(root, "compose.yml"),
       "-p",

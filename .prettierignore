@@ -5,3 +5,6 @@ out/
 .turbo/
 docs/plans/
 packages/adapters/src/codex/generated/
+.factory/
+target/
+Cargo.lock

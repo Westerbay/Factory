@@ -11,3 +11,6 @@ docs/plans/
 
 # Local non-secret database ownership marker.
 .factory/
+
+# Rust build output is local; Cargo.lock is versioned.
+target/

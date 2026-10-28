@@ -2,9 +2,11 @@
 
 ## Prerequisites
 
-- Node.js 24; `.node-version` retains the template's 24.21.0 pin.
+- Node.js 24.22.1, pinned in `.node-version`.
 - pnpm 12.11.2 (also pinned in `package.json`).
-- A graphical Linux session and Electron's Linux system libraries to open the window.
+- Rust 1.90.0 with rustfmt and clippy; a native linker and platform SDK for Rust builds.
+- A Windows desktop or a graphical Linux session (with Electron's Linux system libraries).
+- Local Docker Engine and Compose; on Windows, Docker Desktop running Linux containers.
 - Network access for a first dependency install and the Electron binary download.
 
 ```bash
@@ -25,6 +27,41 @@ before editing main/utility source: development hot restarts and externally forc
 cannot establish native descendant cleanup. `pnpm start` previews an existing production
 build; run `pnpm build` first. Installers and packaging are not part of this increment.
 
+## Web foundation
+
+The frontend and API are independent services. Use the default frontend URL
+`http://localhost:3000` (not `127.0.0.1`) so it matches the API origin allowlist.
+
+```bash
+pnpm dev:api
+# In another terminal:
+pnpm dev:web
+```
+
+The static build can be checked locally with `pnpm --filter @workspace/web build`
+and `pnpm preview:web`, while the API runs with `pnpm start:api`. Vite preview is
+for local validation only; deploy the `apps/web/dist` assets to a static host when
+hosting is separately authorized. Neither development nor preview uses a frontend
+SSR process or a Rust static-file handler.
+
+Frontend configuration is the explicitly supplied `VITE_API_BASE_URL` environment
+variable (default `http://localhost:3001`). It is public build-time data, never a place
+for secrets. Vite does not load `.env` files. This increment accepts only loopback
+HTTP origins without credentials, paths, queries or fragments. API configuration and
+validation are owned by `apps/api/src/config`; no OAuth settings exist yet.
+
+Rust tooling uses the installed Cargo by default. If `.factory/toolchains/cargo/bin`
+contains a project-local Rust installation, the wrapper selects it with the matching
+local Cargo/Rustup homes. This directory is ignored and is not a dependency of a
+fresh checkout. Windows users need the MSVC C++ tools and Windows SDK, preferably
+from a Developer PowerShell session. Missing tools must remain visible failures.
+Project scripts do not change global toolchain defaults. Rustup may download the
+pinned toolchain and components into its selected home when they are missing.
+
+`/health/live` reports that the process responds. `/health/ready` returns 503 with
+`foundation-incomplete`; it must not claim users, sessions or persistence work.
+The current screen has no login action, admin controls or runnable agent controls.
+
 ## Checks
 
 ```bash
@@ -38,6 +75,11 @@ pnpm build
 ```
 
 `pnpm check` runs the routine checks. `pnpm format` applies formatting when needed.
+The web and Cargo checks are also part of the workspace. `pnpm web:check` validates the
+web shell without Rust; `pnpm rust:check` runs Cargo formatting, Clippy and unit tests.
+`pnpm rust:build` builds the Rust release workspace. The API never needs a database or
+provider credentials for these checks. Node and Cargo lockfiles remain versioned.
+
 The Node test runner exercises temporary dependency graphs, rejecting forbidden imports
 including type-only, resolved aliases, dynamic imports and Node builtins. Temporary
 fixture directories are removed after each test; no persistent seed data is created.
@@ -106,11 +148,22 @@ Keep the marker after `db:stop`; no database reset/delete command is provided.
 
 Every connection/migration target is checked against Docker project, owner and checkout
 labels, container name, database identity, credentials, volume and exact loopback port.
-Docker is pinned to `unix:///var/run/docker.sock`, independently of stored contexts or
-`DOCKER_HOST`. Compose receives `--env-file /dev/null` and a restricted environment. Remote, shared,
+Docker is pinned to `npipe:////./pipe/docker_engine` on Windows and
+`unix:///var/run/docker.sock` on Linux, independently of stored contexts or `DOCKER_HOST`.
+Compose receives the variable-free [environment file](../scripts/database/empty-env)
+through `--env-file` and a restricted environment. On Windows, only `SystemRoot`,
+`USERPROFILE` and `ProgramFiles` are additionally inherited for process startup and
+installed Docker CLI plugin discovery. Checkout identity accepts absolute POSIX paths
+and Windows drive paths, with exact label matching. Remote, shared,
 unknown and mismatched targets are rejected before SQL. Database readiness returns
 `pending-migrations`, `unavailable` or `closed`; normal readiness has no migration,
 recovery or provisioning side effects. PostgreSQL clients and URLs remain privileged.
+
+On Windows, run `pnpm db:setup`, then `pnpm db:status` from PowerShell before restarting
+Factory. If the named pipe is unavailable, check that Docker Desktop is running with
+Linux containers. Setup remains explicit and retains existing owned data. Deterministic
+checks cover Windows/Linux invocation and ownership guards; a successful setup/status
+on the actual machine is still required to establish database readiness.
 
 Integration creates a unique `factory-test-<UUID>` Compose project and owner token with
 an OS-allocated loopback port and a separate durable test volume. It applies migrations

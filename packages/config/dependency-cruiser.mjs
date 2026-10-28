@@ -3,6 +3,20 @@ import { resolve } from "node:path"
 
 export default {
   forbidden: [
+    {
+      name: "web-browser-only",
+      severity: "error",
+      from: { path: "^apps/web/src/" },
+      to: {
+        path: "^(?:apps/(?!web/)|crates/|packages/(?!ui/)|@workspace/(?!ui(?:/|$)))|^(?:node:|electron$)|(^|/)node_modules/electron/",
+      },
+    },
+    {
+      name: "web-no-node-builtins",
+      severity: "error",
+      from: { path: "^apps/web/src/" },
+      to: { dependencyTypes: ["core"] },
+    },
     { name: "no-cycles", severity: "error", from: {}, to: { circular: true } },
     {
       name: "unresolved-source-import",

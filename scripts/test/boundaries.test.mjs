@@ -164,6 +164,24 @@ test("unresolved aliases fail closed", async (t) => {
   )
 })
 
+test("web rejects backend, desktop and Node imports including type-only aliases", async (t) => {
+  const found = await violations(t, {
+    "apps/web/src/provider.ts":
+      'export type { Entry } from "@workspace/adapters"',
+    "apps/web/src/domain.ts": 'export type { Entry } from "@workspace/core"',
+    "apps/web/src/database.ts":
+      'void import("../../../packages/database/src/index.js")',
+    "apps/web/src/desktop.ts": 'export type { System } from "@system/system"',
+    "apps/web/src/node.ts": 'export { readFile } from "fs"',
+    "apps/web/src/electron.ts": 'export type { App } from "electron"',
+    "apps/web/src/ui.ts": 'export type { Entry } from "@workspace/ui"',
+  })
+  for (const file of ["provider", "domain", "database", "desktop", "electron"])
+    hasRule(found, "web-browser-only", `apps/web/src/${file}.ts`)
+  hasRule(found, "web-no-node-builtins", "apps/web/src/node.ts")
+  assert.ok(!found.some((item) => item.from === "apps/web/src/ui.ts"))
+})
+
 test("contracts, adapters, database, UI and preload preserve their boundaries", async (t) => {
   const found = await violations(t, {
     "packages/contracts/src/bad.ts":
