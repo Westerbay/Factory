@@ -46,8 +46,11 @@ async function violations(t, files) {
     }),
     "node_modules/electron/index.js": "exports.app = {}",
     "node_modules/electron/index.d.ts": "export interface App { quit(): void }",
-    "apps/desktop/src/main/system.ts":
+    "packages/execution-reference/src/runtime/system.ts":
       "export interface System { id: string }\n",
+    "packages/execution-reference/out/runtime/system.js":
+      "export const system = { id: 'reference-only' }\n",
+    "apps/web/src/shell.ts": "export {}\n",
     ...files,
   }
   for (const [path, content] of Object.entries(sources)) {
@@ -100,7 +103,7 @@ test("core and application reject infrastructure, framework and type-only alias 
     "packages/application/src/database.ts":
       'export type { Entry } from "../../database/src/index.js"',
     "packages/application/src/framework.ts":
-      'export type { System } from "@system/system"',
+      'export type { System } from "@workspace/execution-reference/runtime/system"',
   })
   hasRule(found, "core-independent", "packages/core/src/database.ts")
   hasRule(found, "core-independent", "packages/core/src/files.ts")
@@ -118,22 +121,23 @@ test("core and application reject infrastructure, framework and type-only alias 
     )
 })
 
-test("renderer rejects type-only, dynamic, relative, aliased and builtin system imports", async (t) => {
+test("reference renderer rejects type-only, dynamic, relative, aliased and builtin system imports", async (t) => {
   const found = await violations(t, {
-    "apps/desktop/src/renderer/type.ts":
+    "packages/execution-reference/src/renderer/type.ts":
       'export type { Entry } from "@workspace/database"',
-    "apps/desktop/src/renderer/dynamic.ts":
+    "packages/execution-reference/src/renderer/dynamic.ts":
       'void import("@workspace/adapters")',
-    "apps/desktop/src/renderer/relative.ts":
-      'export type { System } from "../main/system.js"',
-    "apps/desktop/src/renderer/alias.ts":
-      'export type { System } from "@system/system"',
-    "apps/desktop/src/renderer/electron.ts":
+    "packages/execution-reference/src/renderer/relative.ts":
+      'export type { System } from "../runtime/system.js"',
+    "packages/execution-reference/src/renderer/alias.ts":
+      'export type { System } from "@workspace/execution-reference/runtime/system"',
+    "packages/execution-reference/src/renderer/electron.ts":
       'export type { App } from "electron"',
-    "apps/desktop/src/renderer/node.ts": 'export { readFile } from "fs"',
-    "apps/desktop/src/renderer/node-prefix.ts":
+    "packages/execution-reference/src/renderer/node.ts":
+      'export { readFile } from "fs"',
+    "packages/execution-reference/src/renderer/node-prefix.ts":
       'export { readFile } from "node:fs"',
-    "apps/desktop/src/renderer/core.ts":
+    "packages/execution-reference/src/renderer/core.ts":
       'export type { Entry } from "@workspace/core"',
   })
   for (const file of [
@@ -144,45 +148,52 @@ test("renderer rejects type-only, dynamic, relative, aliased and builtin system 
     "core",
     "electron",
   ])
-    hasRule(found, "renderer-no-system", `apps/desktop/src/renderer/${file}.ts`)
+    hasRule(
+      found,
+      "reference-renderer-no-system",
+      `packages/execution-reference/src/renderer/${file}.ts`
+    )
   for (const file of ["node", "node-prefix"])
     hasRule(
       found,
-      "renderer-no-node-builtins",
-      `apps/desktop/src/renderer/${file}.ts`
+      "reference-renderer-no-node-builtins",
+      `packages/execution-reference/src/renderer/${file}.ts`
     )
 })
 
 test("unresolved aliases fail closed", async (t) => {
   const found = await violations(t, {
-    "apps/desktop/src/renderer/missing.ts": 'void import("@unknown/database")',
+    "apps/web/src/missing.ts": 'void import("@unknown/database")',
   })
-  hasRule(
-    found,
-    "unresolved-source-import",
-    "apps/desktop/src/renderer/missing.ts"
-  )
+  hasRule(found, "unresolved-source-import", "apps/web/src/missing.ts")
 })
 
-test("web rejects backend, desktop and Node imports including type-only aliases", async (t) => {
+test("web rejects backend, execution-reference and Node imports including type-only aliases", async (t) => {
   const found = await violations(t, {
     "apps/web/src/provider.ts":
       'export type { Entry } from "@workspace/adapters"',
     "apps/web/src/domain.ts": 'export type { Entry } from "@workspace/core"',
     "apps/web/src/database.ts":
       'void import("../../../packages/database/src/index.js")',
-    "apps/web/src/desktop.ts": 'export type { System } from "@system/system"',
+    "apps/web/src/reference.ts":
+      'export type { System } from "@workspace/execution-reference/runtime/system"',
     "apps/web/src/node.ts": 'export { readFile } from "fs"',
     "apps/web/src/electron.ts": 'export type { App } from "electron"',
     "apps/web/src/ui.ts": 'export type { Entry } from "@workspace/ui"',
   })
-  for (const file of ["provider", "domain", "database", "desktop", "electron"])
+  for (const file of [
+    "provider",
+    "domain",
+    "database",
+    "reference",
+    "electron",
+  ])
     hasRule(found, "web-browser-only", `apps/web/src/${file}.ts`)
   hasRule(found, "web-no-node-builtins", "apps/web/src/node.ts")
   assert.ok(!found.some((item) => item.from === "apps/web/src/ui.ts"))
 })
 
-test("contracts, adapters, database, UI and preload preserve their boundaries", async (t) => {
+test("contracts, adapters, database and UI preserve their boundaries", async (t) => {
   const found = await violations(t, {
     "packages/contracts/src/bad.ts":
       'export type { Entry } from "@workspace/database"',
@@ -193,8 +204,6 @@ test("contracts, adapters, database, UI and preload preserve their boundaries", 
       'export type { Entry } from "@workspace/database"',
     "packages/database/src/bad.ts":
       'export type { Entry } from "@workspace/application"',
-    "apps/desktop/src/preload/bad.ts":
-      'export type { Entry } from "@workspace/adapters"',
   })
   hasRule(found, "ui-browser-only", "packages/ui/src/node.ts")
   hasRule(found, "ui-no-electron", "packages/ui/src/electron.ts")
@@ -203,16 +212,12 @@ test("contracts, adapters, database, UI and preload preserve their boundaries", 
     ["ui-no-business-dependencies", "packages/ui"],
     ["adapters-independent", "packages/adapters"],
     ["database-independent", "packages/database"],
-    ["preload-no-implementations", "apps/desktop/src/preload"],
   ]) {
-    const file = path.startsWith("packages")
-      ? `${path}/src/bad.ts`
-      : `${path}/bad.ts`
-    hasRule(found, rule, file)
+    hasRule(found, rule, `${path}/src/bad.ts`)
   }
 })
 
-test("allows core use, adapter ports, presentation contracts and runtime composition", async (t) => {
+test("allows core use, adapter ports and the test-only execution reference closure", async (t) => {
   assert.deepEqual(
     await violations(t, {
       "packages/application/src/good.ts":
@@ -221,13 +226,61 @@ test("allows core use, adapter ports, presentation contracts and runtime composi
         'export type { Entry } from "@workspace/core"',
       "packages/adapters/src/good.ts":
         'export type { Entry } from "@workspace/core"',
-      "apps/desktop/src/renderer/good.ts":
+      "packages/execution-reference/src/renderer/good.ts":
         'export type { Entry } from "@workspace/contracts"; export type { Entry as Widget } from "@workspace/ui"',
-      "apps/desktop/src/preload/good.ts":
-        'export type { Entry } from "@workspace/contracts"',
-      "apps/desktop/src/runtime/good.ts":
-        'export type { Entry } from "@workspace/database"; export type { Entry as Provider } from "@workspace/adapters"; export type { Entry as App } from "@workspace/application"',
+      "packages/execution-reference/src/runtime/good.ts":
+        'export type { Entry } from "@workspace/core"; export type { Entry as Contract } from "@workspace/contracts"; export type { Entry as App } from "@workspace/application"',
     }),
     []
+  )
+})
+
+test("products cannot import reference source or compiled output by alias, type or relative path", async (t) => {
+  const found = await violations(t, {
+    "apps/service/src/type.ts":
+      'export type { System } from "@workspace/execution-reference/runtime/system"',
+    "apps/service/src/dynamic.ts":
+      'void import("@workspace/execution-reference/runtime/system")',
+    "apps/service/src/relative.ts":
+      'export type { System } from "../../../packages/execution-reference/src/runtime/system.js"',
+    "apps/service/src/compiled.ts":
+      'export { system } from "../../../packages/execution-reference/out/runtime/system.js"',
+    "packages/adapters/src/reference.ts":
+      'export type { System } from "../../execution-reference/src/runtime/system.js"',
+  })
+  for (const file of ["type", "dynamic", "relative", "compiled"]) {
+    hasRule(
+      found,
+      "no-product-execution-reference",
+      `apps/service/src/${file}.ts`
+    )
+  }
+  hasRule(
+    found,
+    "no-product-execution-reference",
+    "packages/adapters/src/reference.ts"
+  )
+})
+
+test("execution reference cannot gain live providers, persistence or Electron dependencies", async (t) => {
+  const found = await violations(t, {
+    "packages/execution-reference/src/runtime/provider.ts":
+      'export type { Entry } from "@workspace/adapters"',
+    "packages/execution-reference/src/runtime/database.ts":
+      'export type { Entry } from "@workspace/database"',
+    "packages/execution-reference/src/runtime/electron.ts":
+      'export type { App } from "electron"',
+  })
+  for (const file of ["provider", "database"]) {
+    hasRule(
+      found,
+      "execution-reference-only-legacy",
+      `packages/execution-reference/src/runtime/${file}.ts`
+    )
+  }
+  hasRule(
+    found,
+    "execution-reference-no-electron",
+    "packages/execution-reference/src/runtime/electron.ts"
   )
 })

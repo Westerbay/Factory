@@ -28,6 +28,9 @@ pnpm dev:api
 pnpm dev:web
 ```
 
+`pnpm dev` starts these two processes together. `pnpm build` followed by `pnpm start`
+runs the release API and static preview locally. Neither command starts Electron.
+
 Open `http://localhost:3000`, using `localhost` consistently for the frontend and API.
 The API binds to `127.0.0.1:3001` but is addressed by the browser as
 `http://localhost:3001`. Do not mix `localhost` and `127.0.0.1`: origin checks and
@@ -102,6 +105,12 @@ documentation links, OpenAPI parity and builds, including Cargo formatting, Clip
 tests. It does not require provider credentials, Docker or a database. `web:check`
 targets frontend types/tests/build; `rust:build` produces a locked release build.
 Node and Cargo lockfiles remain versioned. `pnpm format` applies formatting.
+
+`pnpm execution-reference:test` compiles and exercises the temporary Electron-free
+host/model/view reference in `packages/execution-reference`. It has no application
+entry point or product exports. These regressions remain until the Rust execution
+port supplies equivalent behavior. The former Electron window/sender smoke checks
+are obsolete because their runtime has been removed.
 
 The Rust HTTP contracts own generated OpenAPI and browser types:
 

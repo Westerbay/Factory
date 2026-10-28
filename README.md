@@ -21,6 +21,9 @@ pnpm dev:api
 pnpm dev:web
 ```
 
+`pnpm dev` starts both processes together. After `pnpm build`, `pnpm start` runs
+the release API and local static preview together; it is not a deployment command.
+
 Open `http://localhost:3000`. The browser calls the separate API at
 `http://localhost:3001`. The application can start without provider credentials;
 sign-in remains unavailable until OAuth configuration, the verified owned PostgreSQL

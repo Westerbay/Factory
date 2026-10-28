@@ -1,0 +1,10 @@
+{
+  "extends": "@workspace/config/typescript/base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "lib": ["ES2022"],
+    "rootDir": "./src/runtime",
+    "outDir": "./out/runtime"
+  },
+  "include": ["src/runtime/**/*.ts"]
+}

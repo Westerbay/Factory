@@ -116,6 +116,12 @@ identity runtime. Core owns provider-neutral models, projections and ports; appl
 owns execution orchestration; concrete adapters implement Codex and PostgreSQL behavior.
 These packages are references for a later port, not a second live web backend.
 
+`packages/execution-reference` retains only the Electron-free host, message relay,
+client and UI model/view closure needed by the existing behavior tests. It has no
+product exports, executable entry point or consumer in the web runtime. Boundary
+checks prohibit importing it from product code. Electron window, preload, native
+process composition and launch tooling have been removed.
+
 Execution reserves one global active root before provider effects and commits material
 events atomically with versioned projections. Repeated identical events are idempotent;
 conflicting writes cannot create partial history. Completed messages are durable,
