@@ -1,1 +1,3 @@
-//! Concrete provider adapters. The initial foundation makes no provider calls.
+//! Concrete provider adapters; credentials are injected by the runtime composition.
+
+pub mod identity;
