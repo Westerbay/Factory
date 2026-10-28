@@ -6,7 +6,7 @@ use utoipa::openapi::{
 };
 
 pub fn document() -> OpenApi {
-    let (_, mut document) = app::documented_router(None).split_for_parts();
+    let (_, mut document) = app::documented_router(None, None).split_for_parts();
     document.info = Info::builder()
         .title("Factory API")
         .version(env!("CARGO_PKG_VERSION"))
