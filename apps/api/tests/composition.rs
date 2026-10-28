@@ -246,6 +246,24 @@ async fn unavailable_identity_keeps_api_contracts_and_exact_write_cors() {
         assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
         response_json(response).await;
     }
+    // Every registered identity operation must fail closed before extracting input
+    // when no runtime exists, including mutations with missing or malformed bodies.
+    let contract = serde_json::to_value(factory_api::openapi::document()).unwrap();
+    let paths = contract["paths"].as_object().unwrap();
+    assert!(!paths.is_empty());
+    for (path, item) in paths.iter().filter(|(path, _)| path.starts_with("/api/")) {
+        for (method, operation) in item.as_object().unwrap() {
+            if operation.get("responses").is_none() {
+                continue;
+            }
+            let method = Method::from_bytes(method.to_uppercase().as_bytes()).unwrap();
+            let path = path.replace("{id}", "invalid-id");
+            let response = request(&app, method, &path, "", None, None).await;
+            assert_eq!(response.status(), 503, "{path}");
+            assert!(operation["responses"].get("503").is_some(), "{path}");
+            assert_eq!(response_json(response).await["code"], "unavailable");
+        }
+    }
     for method in ["POST", "PATCH"] {
         for origin in [
             WEB_ORIGIN,

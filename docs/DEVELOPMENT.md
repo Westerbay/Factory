@@ -112,7 +112,15 @@ entry point or product exports. These regressions remain until the Rust executio
 port supplies equivalent behavior. The former Electron window/sender smoke checks
 are obsolete because their runtime has been removed.
 
-The Rust HTTP contracts own generated OpenAPI and browser types:
+Rust handlers and HTTP contracts own generated OpenAPI and browser types. Annotate a
+handler with `#[utoipa::path(...)]`, then register it with
+`OpenApiRouter::routes(utoipa_axum::routes!(handler))` in its module router. The same
+declaration supplies the runtime path/method and the exported operation. Use `ToSchema`
+for body types and `IntoParams` for query types; describe response statuses, security
+and special headers beside the handler. These semantics cannot be inferred from the
+handler's implementation. Do not maintain a separate path/schema list in the exporter.
+
+Regenerate both artifacts after changing handlers or contracts:
 
 ```bash
 pnpm api:generate

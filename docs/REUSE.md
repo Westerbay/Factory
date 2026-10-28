@@ -31,6 +31,9 @@ is required. Shadcn primitives remain deferred until an actual interaction needs
 - [IdentityService](../crates/application/src/identity/mod.rs) owns use-case orchestration.
   HTTP handlers compose it through the API; adapters never depend on the HTTP layer.
 - [Rust HTTP contracts](../apps/api/src/contracts/mod.rs) own browser transport shapes.
+  Handler annotations and `utoipa-axum` registration in the
+  [shared router composition](../apps/api/src/app.rs) own HTTP operations; `ToSchema`
+  and `IntoParams` derive their shapes from Rust types, without a parallel path list.
   [The generation command](../scripts/api-contract.mjs) exports OpenAPI and TypeScript
   without runtime configuration. Regenerate instead of manually editing generated output.
 - [The browser API client](../apps/web/src/lib/api/client.ts) owns the explicit public API

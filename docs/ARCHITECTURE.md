@@ -35,12 +35,17 @@ names are presentation data. Provider tokens are used only for identity lookup, 
 discarded; no repository permissions or provider-token persistence are implemented.
 OAuth state, browser binding and PKCE protect the single-use login attempt.
 
-Rust [HTTP contracts](../apps/api/src/contracts/mod.rs) and
-[OpenAPI definitions](../apps/api/src/openapi/mod.rs) produce
+Rust [HTTP contracts](../apps/api/src/contracts/mod.rs) and handler annotations produce
 [the API description](../apps/api/openapi.json) and
 [generated browser types](../apps/web/src/lib/api/schema.d.ts).
 Generate both with `pnpm api:generate`; check parity with `pnpm api:contract`.
 Export is inert and does not start the server, open a database or contact GitHub.
+The [shared router composition](../apps/api/src/app.rs) uses `utoipa-axum` to register
+Axum handlers and collect their OpenAPI operations in one step. Each handler owns its
+path, method, responses and security annotations; request parameters derive from the
+actual query structs. [OpenAPI export](../apps/api/src/openapi/mod.rs) only adds document
+metadata and the shared session cookie scheme. Unconfigured identity uses the same
+routes and rejects requests with `503` without constructing services.
 The frontend validates security-relevant response shapes at its boundary while consuming
 these generated transport types.
 

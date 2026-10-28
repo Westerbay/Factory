@@ -1,5 +1,5 @@
-use super::{AuthError, AuthState, credentials::*};
-use crate::contracts::SessionResponse;
+use super::{AuthError, AuthState, RequiredIdentity, credentials::*};
+use crate::contracts::{ApiError, SessionResponse};
 use axum::{
     Json, Router,
     body::Bytes,
@@ -10,30 +10,38 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
 };
 use factory_core::identity::{
     AdmissionOutcome, IdentityError, LOGIN_ATTEMPT_TTL_SECONDS, NewLoginAttempt, NewSession,
     SESSION_TTL_SECONDS,
 };
 use serde::Deserialize;
+use utoipa::IntoParams;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router(state: AuthState) -> Router {
-    Router::new()
-        .route("/api/auth/github/start", get(start))
-        .route("/api/auth/github/callback", get(callback))
-        .route("/api/session", get(session))
-        .route("/api/auth/logout", post(logout))
+    documented_router(Some(state)).into()
+}
+
+pub(crate) fn documented_router(state: Option<AuthState>) -> OpenApiRouter {
+    OpenApiRouter::new()
+        .routes(routes!(start))
+        .routes(routes!(callback))
+        .routes(routes!(session))
+        .routes(routes!(logout))
         .layer(DefaultBodyLimit::max(8192))
         .layer(middleware::from_fn_with_state(state.clone(), protect))
         .with_state(state)
 }
 
 async fn protect(
-    State(state): State<AuthState>,
+    State(state): State<Option<AuthState>>,
     request: axum::extract::Request,
     next: Next,
 ) -> Response {
+    let Some(state) = state else {
+        return AuthError::from(IdentityError::Unavailable).into_response();
+    };
     let login = request.uri().path().starts_with("/api/auth/github/");
     let callback = request.uri().path() == "/api/auth/github/callback";
     let mut response = match state.check_quota(login) {
@@ -57,7 +65,17 @@ async fn protect(
     response
 }
 
-async fn start(State(state): State<AuthState>) -> Result<Response, AuthError> {
+#[utoipa::path(
+    get, path = "/api/auth/github/start", operation_id = "startGithubLogin",
+    description = "An explicit Accept: text/html with nonzero quality returns start failures to the fixed frontend sign-in page. Other clients retain JSON errors and HTTP status. Retry-After is preserved for rate limits.",
+    responses(
+        (status = 302, description = "Redirect to GitHub with state and PKCE, or browser recovery at the fixed frontend sign-in page"),
+        (status = 400, description = "Invalid input", body = ApiError),
+        (status = 429, description = "Rate limit", body = ApiError),
+        (status = 503, description = "Dependency unavailable", body = ApiError)
+    )
+)]
+async fn start(RequiredIdentity(state): RequiredIdentity) -> Result<Response, AuthError> {
     let csrf_state = random_token()?;
     let binding = random_token()?;
     let verifier = oauth2::PkceCodeVerifier::new(random_token()?);
@@ -87,15 +105,26 @@ async fn start(State(state): State<AuthState>) -> Result<Response, AuthError> {
     Ok(response)
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 struct Callback {
     state: Option<String>,
     code: Option<String>,
     error: Option<String>,
 }
 
+#[utoipa::path(
+    get, path = "/api/auth/github/callback", operation_id = "completeGithubLogin",
+    params(Callback),
+    responses(
+        (status = 302, description = "Fixed frontend redirect; issues session only for admitted user"),
+        (status = 400, description = "Invalid input", body = ApiError),
+        (status = 429, description = "Rate limit", body = ApiError),
+        (status = 503, description = "Dependency unavailable", body = ApiError)
+    )
+)]
 async fn callback(
-    State(state): State<AuthState>,
+    RequiredIdentity(state): RequiredIdentity,
     headers: HeaderMap,
     query: Result<Query<Callback>, QueryRejection>,
 ) -> Response {
@@ -190,15 +219,42 @@ fn redirect(location: &str) -> Response {
     (StatusCode::FOUND, [(header::LOCATION, location)]).into_response()
 }
 
+#[utoipa::path(
+    get, path = "/api/session", operation_id = "getSession",
+    security(("sessionCookie" = [])),
+    responses(
+        (status = 200, description = "Current active session", body = SessionResponse),
+        (status = 400, description = "Invalid input", body = ApiError),
+        (status = 401, description = "Session required", body = ApiError),
+        (status = 403, description = "Access denied", body = ApiError),
+        (status = 404, description = "User not found", body = ApiError),
+        (status = 409, description = "Conflict or protected administrator", body = ApiError),
+        (status = 429, description = "Rate limit", body = ApiError),
+        (status = 503, description = "Dependency unavailable", body = ApiError)
+    )
+)]
 async fn session(
-    State(state): State<AuthState>,
+    RequiredIdentity(state): RequiredIdentity,
     headers: HeaderMap,
 ) -> Result<Json<SessionResponse>, AuthError> {
     Ok(Json(state.authenticate(&headers).await?.session.into()))
 }
 
+#[utoipa::path(
+    post, path = "/api/auth/logout", operation_id = "logout",
+    security(("sessionCookie" = [])),
+    params(("X-CSRF-Token" = String, Header, description = "Session-bound CSRF value; exact frontend Origin also required.")),
+    responses(
+        (status = 204, description = "Session revoked and cookie cleared"),
+        (status = 400, description = "Invalid input", body = ApiError),
+        (status = 401, description = "Session required", body = ApiError),
+        (status = 403, description = "Origin or CSRF denied", body = ApiError),
+        (status = 429, description = "Rate limit", body = ApiError),
+        (status = 503, description = "Dependency unavailable", body = ApiError)
+    )
+)]
 async fn logout(
-    State(state): State<AuthState>,
+    RequiredIdentity(state): RequiredIdentity,
     headers: HeaderMap,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Response, AuthError> {

@@ -1,22 +1,53 @@
-use axum::{Json, http::StatusCode};
+use axum::{Json, extract::State, http::StatusCode};
 use factory_database::{identity::IdentityDatabase, migrations::Readiness};
 use serde::Serialize;
 use std::sync::Arc;
+use utoipa::ToSchema;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
-#[derive(Serialize)]
+pub(crate) fn documented_router(database: Option<Arc<IdentityDatabase>>) -> OpenApiRouter {
+    OpenApiRouter::new()
+        .routes(routes!(live))
+        .routes(routes!(ready))
+        .with_state(database)
+}
+
+#[derive(Serialize, ToSchema)]
 pub struct Live {
-    status: &'static str,
-}
-pub async fn live() -> Json<Live> {
-    Json(Live { status: "ok" })
+    #[schema(inline)]
+    status: LiveStatus,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+enum LiveStatus {
+    Ok,
+}
+#[utoipa::path(
+    get, path = "/health/live", operation_id = "healthLive",
+    responses((status = 200, description = "Process is alive", body = Live))
+)]
+pub async fn live() -> Json<Live> {
+    Json(Live {
+        status: LiveStatus::Ok,
+    })
+}
+
+#[derive(Serialize, ToSchema)]
 pub struct Ready {
     status: &'static str,
     code: &'static str,
 }
-pub async fn ready(database: Option<Arc<IdentityDatabase>>) -> (StatusCode, Json<Ready>) {
+#[utoipa::path(
+    get, path = "/health/ready", operation_id = "healthReady",
+    responses(
+        (status = 200, description = "Required services ready", body = Ready),
+        (status = 503, description = "Required services unavailable", body = Ready)
+    )
+)]
+pub async fn ready(
+    State(database): State<Option<Arc<IdentityDatabase>>>,
+) -> (StatusCode, Json<Ready>) {
     let code = match database {
         None => "identity-unavailable",
         Some(database) => match database.ready().await {

@@ -1,6 +1,6 @@
 use crate::{
     admin,
-    auth::{self, AuthError, AuthState},
+    auth::{self, AuthState},
     config::RuntimeConfig,
     health, http,
 };
@@ -8,12 +8,11 @@ use axum::{
     Router,
     http::{HeaderValue, Method, header},
     middleware,
-    routing::{get, patch, post},
 };
-use factory_core::identity::IdentityError;
 use factory_database::identity::IdentityDatabase;
 use std::{sync::Arc, time::Duration};
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use utoipa_axum::router::OpenApiRouter;
 
 /// Composition has no provider, database, filesystem or environment side effects.
 #[derive(Clone)]
@@ -36,23 +35,8 @@ pub fn router(
             axum::http::HeaderName::from_static("x-csrf-token"),
         ])
         .max_age(Duration::from_secs(60));
-    let database = identity.as_ref().map(|runtime| runtime.database.clone());
-    let routes = match identity {
-        Some(runtime) => auth::router(runtime.auth.clone()).merge(admin::router(runtime.auth)),
-        None => Router::new()
-            .route("/api/auth/github/start", get(unavailable))
-            .route("/api/auth/github/callback", get(unavailable))
-            .route("/api/session", get(unavailable))
-            .route("/api/auth/logout", post(unavailable))
-            .route("/api/admin/users", get(unavailable))
-            .route("/api/admin/users/{id}/access", patch(unavailable)),
-    };
+    let (routes, _) = documented_router(identity).split_for_parts();
     Ok(routes
-        .route("/health/live", get(health::live))
-        .route(
-            "/health/ready",
-            get(move || health::ready(database.clone())),
-        )
         .fallback(http::not_found)
         .layer(middleware::from_fn_with_state(
             config.web_origin().to_owned(),
@@ -62,8 +46,13 @@ pub fn router(
         .layer(middleware::from_fn(http::response_headers)))
 }
 
-async fn unavailable() -> AuthError {
-    IdentityError::Unavailable.into()
+/// Runtime and inert contract export share the same route registration.
+pub(crate) fn documented_router(identity: Option<IdentityRuntime>) -> OpenApiRouter {
+    let database = identity.as_ref().map(|runtime| runtime.database.clone());
+    let auth = identity.map(|runtime| runtime.auth);
+    auth::documented_router(auth.clone())
+        .merge(admin::documented_router(auth))
+        .merge(health::documented_router(database))
 }
 
 #[cfg(test)]

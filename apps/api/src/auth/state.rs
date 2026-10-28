@@ -3,7 +3,10 @@ use super::{
     credentials::{SESSION_COOKIE, credential},
 };
 use crate::config::RuntimeConfig;
-use axum::http::{HeaderMap, header};
+use axum::{
+    extract::FromRequestParts,
+    http::{HeaderMap, header, request::Parts},
+};
 use factory_application::identity::IdentityService;
 use factory_core::identity::{ActiveSession, CredentialHash, IdentityError};
 use std::{
@@ -23,6 +26,23 @@ pub struct AuthState {
 pub struct Authenticated {
     pub token_hash: CredentialHash,
     pub session: ActiveSession,
+}
+
+/// Reject requests when identity is not configured, without constructing dummy services.
+pub struct RequiredIdentity(pub AuthState);
+
+impl FromRequestParts<Option<AuthState>> for RequiredIdentity {
+    type Rejection = AuthError;
+
+    async fn from_request_parts(
+        _parts: &mut Parts,
+        state: &Option<AuthState>,
+    ) -> Result<Self, Self::Rejection> {
+        state
+            .clone()
+            .map(Self)
+            .ok_or_else(|| IdentityError::Unavailable.into())
+    }
 }
 
 struct Window {
