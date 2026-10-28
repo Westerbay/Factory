@@ -14,7 +14,19 @@ outside the current local increment.
 
 Use Node.js 24.22.1, pnpm 12.11.2 and Rust 1.90.0 with rustfmt, clippy and a native
 linker. Windows Rust builds need the MSVC C++ tools and Windows SDK. After
-`pnpm install --frozen-lockfile`, run these in separate terminals:
+`pnpm install --frozen-lockfile`, copy [.env.example](.env.example) to `.env` at the
+repository root and fill in the three GitHub values. See the
+[GitHub OAuth setup](docs/DEVELOPMENT.md#github-oauth-setup) for registration and the
+initial administrator ID. Existing terminal variables override `.env` values.
+
+With Docker running, initialize the owned local database explicitly:
+
+```bash
+pnpm db:setup
+pnpm db:migrate:identity
+```
+
+Then run these in separate terminals:
 
 ```bash
 pnpm dev:api
@@ -27,8 +39,8 @@ the release API and local static preview together; it is not a deployment comman
 Open `http://localhost:3000`. The browser calls the separate API at
 `http://localhost:3001`. The application can start without provider credentials;
 sign-in remains unavailable until OAuth configuration, the verified owned PostgreSQL
-target and identity migrations are ready. Runtime startup never provisions or migrates
-the database, and does not load `.env` files.
+target and identity migrations are ready. Runtime startup reads `.env` but never
+provisions or migrates the database. Restart the API after changing its configuration.
 
 See [development](docs/DEVELOPMENT.md) for explicit local database setup, API
 configuration, built PWA inspection and human acceptance. No real OAuth application

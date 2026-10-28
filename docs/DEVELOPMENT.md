@@ -42,10 +42,21 @@ application remains accessible but sign-in is unavailable. `/health/live` means 
 process responds; `/health/ready` reflects configured identity/storage readiness.
 A successful liveness response does not establish usable authentication or a live
 GitHub exchange. Runtime startup does not create infrastructure, apply migrations or
-load `.env` files. After correcting startup configuration, database ownership or missing
-migrations, restart the API so it can compose the identity runtime again.
+create configuration files. API startup reads `.env` from the working directory
+(the repository root for the pnpm commands). After correcting startup configuration,
+database ownership or missing migrations, restart the API so it can compose the
+identity runtime again.
 
 ### Explicit configuration
+
+Copy [the example](../.env.example) to `.env` in the repository root, then fill in
+the three GitHub values. On PowerShell, use `Copy-Item .env.example .env` only if
+`.env` does not already exist. On macOS/Linux, use `cp -n .env.example .env`.
+The file is ignored by Git. The API reads this exact file at startup, with existing
+process variables taking precedence, including explicitly empty values. It does not
+search parent directories or load `.env.local` / mode-specific variants. A missing file
+is allowed; malformed or unreadable files fail startup with a sanitized error code.
+Parsing does not mutate the process environment. Restart the API after editing the file.
 
 | Variable                       | Default or purpose                                                       |
 | ------------------------------ | ------------------------------------------------------------------------ |
@@ -62,15 +73,41 @@ Both origins must use the same local host. Current configuration accepts canonic
 loopback HTTP origins without credentials, trailing slash, paths, query or fragment.
 It intentionally does not support public deployment origins. Do not put secrets in
 `VITE_*` variables: their values can be included in the public bundle. Vite also does
-not read `.env` files.
+not read `.env` files: this file configures the server only. The default frontend origin
+already matches the example. A custom `VITE_API_BASE_URL` is still an explicit public
+frontend build-time process variable.
 
-For a separately authorized live GitHub setup, the OAuth callback is
-`http://localhost:3001/api/auth/github/callback` with the default API origin.
-Supply the server variables through an explicitly chosen process environment. The
-client ID, client secret and bootstrap numeric ID must all be valid for identity to
-be enabled. The administrator is not selected by email, handle or first sign-in order.
-Do not paste secret values into source, screenshots, logs or troubleshooting reports.
-Routine installation and checks neither register an OAuth app nor configure credentials.
+The client ID, client secret and bootstrap numeric ID must all be valid for identity
+to be enabled. The administrator is not selected by email, handle or first sign-in
+order. Keep secret values out of source, screenshots, logs and troubleshooting reports.
+Routine installation and checks neither read the real `.env` nor register an OAuth app.
+
+### GitHub OAuth setup
+
+The current adapter uses a GitHub **OAuth App** for identity with the `read:user`
+scope. Repository access and GitHub App installations are not implemented yet.
+
+1. In GitHub, open **Settings > Developer settings > OAuth Apps > New OAuth App**
+   ([registration page](https://github.com/settings/applications/new)).
+2. Set **Application name** to `Factory Local`, **Homepage URL** to
+   `http://localhost:3000`, and **Authorization callback URL** to
+   `http://localhost:3001/api/auth/github/callback`. Leave device flow and callback
+   wildcard matching disabled. Token expiration can remain enabled: the current
+   adapter uses the token immediately for identity lookup, then discards it.
+3. Register the application. Copy its **Client ID** into `FACTORY_GITHUB_CLIENT_ID`.
+   Generate a **client secret** and put it only in `FACTORY_GITHUB_CLIENT_SECRET`
+   in the local `.env`.
+4. Open `https://api.github.com/users/YOUR_GITHUB_USERNAME` and copy the numeric
+   `id` field (not `node_id`) into `FACTORY_BOOTSTRAP_GITHUB_ID`. This account is
+   the initial administrator.
+5. With Docker running, execute `pnpm db:setup` and `pnpm db:migrate:identity`
+   from the repository root, then start or restart the API and frontend with
+   `pnpm dev`. Open `http://localhost:3000/sign-in` and sign in with that account.
+
+See GitHub's [OAuth application registration guide](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app).
+If `/health/ready` returns `identity-unavailable`, inspect the API startup warning
+code: it distinguishes missing OAuth configuration, an unavailable owned database
+and required identity migrations. Do not share the credential values when diagnosing it.
 
 ### Built frontend and PWA
 

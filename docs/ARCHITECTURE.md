@@ -28,6 +28,10 @@ another. Shared API and session mechanisms support both member and administrator
 rules. [IdentityService](../crates/application/src/identity/mod.rs) orchestrates the
 provider and store ports without depending on Axum, SQLx or GitHub transport.
 The API composes their concrete implementations at startup.
+Its [configuration loader](../apps/api/src/config/local.rs) reads the working
+directory's `.env` without mutating process variables; explicit process values win.
+Only API startup loads this file. Tests and contract export use inert configuration,
+and the static frontend never receives server credentials.
 
 The [GitHub adapter](../crates/adapters/src/identity/github.rs) performs the provider
 exchange and returns the stable provider/issuer/subject identity. Handles and display

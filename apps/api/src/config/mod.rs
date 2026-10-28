@@ -1,4 +1,5 @@
-//! Validate public local configuration before opening sockets. Never load .env.
+//! Validate local runtime configuration before opening sockets.
+mod local;
 use factory_core::identity::BootstrapAdmin;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
