@@ -1,10 +1,10 @@
 import { createRoute } from "@tanstack/react-router"
 
-import { MemberHome } from "../features/auth/member-home"
+import { EnvironmentCard } from "../features/environments/environment-card"
 import { authenticatedRoute } from "./_authenticated"
 
 export const appRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/app",
-  component: MemberHome,
+  component: EnvironmentCard,
 })
