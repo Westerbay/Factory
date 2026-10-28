@@ -5,6 +5,7 @@ import { RouterProvider } from "@tanstack/react-router"
 
 import { createQueryClient } from "./lib/query/query-client"
 import { router } from "./router"
+import { AppUpdates } from "./pwa/AppUpdates"
 import "./styles/app.css"
 
 const root = document.getElementById("root")
@@ -14,6 +15,7 @@ createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={createQueryClient()}>
       <RouterProvider router={router} />
+      <AppUpdates />
     </QueryClientProvider>
   </StrictMode>
 )
