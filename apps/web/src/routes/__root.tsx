@@ -1,4 +1,7 @@
 import { createRootRoute, Link, Outlet } from "@tanstack/react-router"
+import { AppHeader } from "../components/app-header"
+import { SessionProvider } from "../lib/auth/session-context"
+import "../features/auth/auth.css"
 
 export const rootRoute = createRootRoute({
   component: RootLayout,
@@ -13,20 +16,17 @@ export const rootRoute = createRootRoute({
 
 function RootLayout() {
   return (
-    <div className="shell">
-      <a className="skip-link" href="#main">
-        Skip to content
-      </a>
-      <header className="header">
-        <Link className="brand" to="/">
-          Factory
-        </Link>
-        <span className="preview-label">Local preview</span>
-      </header>
-      <main id="main" tabIndex={-1}>
-        <Outlet />
-      </main>
-      <footer>Factory · Your private workspace</footer>
-    </div>
+    <SessionProvider>
+      <div className="shell">
+        <a className="skip-link" href="#main">
+          Skip to content
+        </a>
+        <AppHeader />
+        <main id="main" tabIndex={-1}>
+          <Outlet />
+        </main>
+        <footer>Factory · Your private workspace</footer>
+      </div>
+    </SessionProvider>
   )
 }

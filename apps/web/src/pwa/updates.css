@@ -1,0 +1,28 @@
+.update-prompt,
+.update-error,
+.update-reminder {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 10;
+  width: min(25rem, calc(100vw - 2rem));
+  padding: 1rem;
+  border: 1px solid #d6d1e4;
+  border-radius: 0.75rem;
+  background: #fff;
+  box-shadow: 0 0.5rem 2rem #25202f16;
+}
+.update-prompt p,
+.update-error {
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+.update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+.update-reminder {
+  width: auto;
+}
