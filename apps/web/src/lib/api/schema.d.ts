@@ -156,6 +156,14 @@ export interface components {
       /** Format: uuid */
       requestId: string
     }
+    Live: {
+      /** @enum {string} */
+      status: "ok"
+    }
+    Ready: {
+      code: string
+      status: string
+    }
     SessionResponse: {
       csrfToken: string
       /** Format: date-time */
@@ -386,6 +394,33 @@ export interface operations {
         }
         content?: never
       }
+      /** @description Invalid input */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Rate limit */
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Dependency unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
     }
   }
   startGithubLogin: {
@@ -403,6 +438,15 @@ export interface operations {
           [name: string]: unknown
         }
         content?: never
+      }
+      /** @description Invalid input */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
       }
       /** @description Rate limit */
       429: {
@@ -443,6 +487,15 @@ export interface operations {
         }
         content?: never
       }
+      /** @description Invalid input */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
       /** @description Session required */
       401: {
         headers: {
@@ -454,6 +507,15 @@ export interface operations {
       }
       /** @description Origin or CSRF denied */
       403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Rate limit */
+      429: {
         headers: {
           [name: string]: unknown
         }
@@ -570,10 +632,7 @@ export interface operations {
           [name: string]: unknown
         }
         content: {
-          "application/json": {
-            /** @constant */
-            status: "ok"
-          }
+          "application/json": components["schemas"]["Live"]
         }
       }
     }
@@ -592,14 +651,18 @@ export interface operations {
         headers: {
           [name: string]: unknown
         }
-        content?: never
+        content: {
+          "application/json": components["schemas"]["Ready"]
+        }
       }
       /** @description Required services unavailable */
       503: {
         headers: {
           [name: string]: unknown
         }
-        content?: never
+        content: {
+          "application/json": components["schemas"]["Ready"]
+        }
       }
     }
   }

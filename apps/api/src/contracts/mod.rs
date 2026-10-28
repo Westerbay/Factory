@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use factory_core::identity as domain;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, ToSchema)]
@@ -156,12 +156,14 @@ impl AccessBody {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 #[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
 pub struct UsersQuery {
     pub status: UserStatus,
     pub cursor: Option<Uuid>,
     #[serde(default = "default_limit")]
+    #[param(minimum = 1, maximum = 50, default = default_limit)]
     pub limit: u8,
 }
 

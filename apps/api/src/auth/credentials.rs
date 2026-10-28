@@ -6,7 +6,7 @@ use factory_core::identity::{CredentialHash, IdentityError};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 
-pub(super) const SESSION_COOKIE: &str = "factory_session";
+pub(crate) const SESSION_COOKIE: &str = "factory_session";
 pub(super) const LOGIN_COOKIE: &str = "factory_login";
 
 pub(super) fn random_token() -> Result<String, IdentityError> {

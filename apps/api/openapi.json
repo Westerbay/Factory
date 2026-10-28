@@ -73,6 +73,28 @@
         "required": ["code", "message", "requestId"],
         "type": "object"
       },
+      "Live": {
+        "properties": {
+          "status": {
+            "enum": ["ok"],
+            "type": "string"
+          }
+        },
+        "required": ["status"],
+        "type": "object"
+      },
+      "Ready": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": ["status", "code"],
+        "type": "object"
+      },
       "SessionResponse": {
         "properties": {
           "csrfToken": {
@@ -163,6 +185,7 @@
           {
             "in": "query",
             "name": "cursor",
+            "required": false,
             "schema": {
               "format": "uuid",
               "type": "string"
@@ -171,8 +194,10 @@
           {
             "in": "query",
             "name": "limit",
+            "required": false,
             "schema": {
               "default": 20,
+              "format": "int32",
               "maximum": 50,
               "minimum": 1,
               "type": "integer"
@@ -397,6 +422,7 @@
           {
             "in": "query",
             "name": "state",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -404,6 +430,7 @@
           {
             "in": "query",
             "name": "code",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -411,6 +438,7 @@
           {
             "in": "query",
             "name": "error",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -419,6 +447,36 @@
         "responses": {
           "302": {
             "description": "Fixed frontend redirect; issues session only for admitted user"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid input"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Rate limit"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Dependency unavailable"
           }
         }
       }
@@ -430,6 +488,16 @@
         "responses": {
           "302": {
             "description": "Redirect to GitHub with state and PKCE, or browser recovery at the fixed frontend sign-in page"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid input"
           },
           "429": {
             "content": {
@@ -472,6 +540,16 @@
           "204": {
             "description": "Session revoked and cookie cleared"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid input"
+          },
           "401": {
             "content": {
               "application/json": {
@@ -491,6 +569,16 @@
               }
             },
             "description": "Origin or CSRF denied"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Rate limit"
           },
           "503": {
             "content": {
@@ -610,14 +698,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "properties": {
-                    "status": {
-                      "const": "ok",
-                      "type": "string"
-                    }
-                  },
-                  "required": ["status"],
-                  "type": "object"
+                  "$ref": "#/components/schemas/Live"
                 }
               }
             },
@@ -631,9 +712,23 @@
         "operationId": "healthReady",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ready"
+                }
+              }
+            },
             "description": "Required services ready"
           },
           "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ready"
+                }
+              }
+            },
             "description": "Required services unavailable"
           }
         }
