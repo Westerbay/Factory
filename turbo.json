@@ -11,6 +11,20 @@
     "dev": {
       "cache": false,
       "persistent": true
+    },
+    "@workspace/api#build": {
+      "cache": false,
+      "outputs": [],
+      "passThroughEnv": ["LIB", "INCLUDE", "LIBPATH"]
+    },
+    "@workspace/api#typecheck": {
+      "cache": false,
+      "passThroughEnv": ["LIB", "INCLUDE", "LIBPATH"]
+    },
+    "@workspace/web#build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**"],
+      "env": ["VITE_API_BASE_URL"]
     }
   }
 }

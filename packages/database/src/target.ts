@@ -24,7 +24,8 @@ export function verifyDatabaseTarget(target: DatabaseTarget): DatabaseTarget {
     /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(
       target.owner
     ) &&
-    target.directory.startsWith("/") &&
+    (target.directory.startsWith("/") ||
+      /^[a-z]:[\\/]/i.test(target.directory)) &&
     target.container === `${target.project}-postgres-1`
   const validLabels =
     target.labels["com.docker.compose.project"] === target.project &&

@@ -48,9 +48,23 @@ so electron-vite can find the binary on a fresh checkout.
 
 ## Deliberately excluded
 
-API/NestJS, SSR/router/authentication/sample users, mail/Mailpit, Valkey and monitoring
-are absent from runtime dependencies and scripts. No template stylesheet, font or page
-layout is retained. Shadcn is deferred until a real control is needed.
+NestJS, TanStack Start/SSR, Better Auth, password/mail flows, sample users, Mailpit,
+Valkey and monitoring are absent from the new web/API runtime. The frontend uses
+TanStack Router/Query with Vite; Rust uses Axum/Tokio. No template branding or page
+layout is required. Shadcn remains deferred until a real control needs it.
+
+## Rust and static web foundation
+
+The supplied `webapp-template-en-rust.zip` (SHA-256
+`75135695bddc6d2f888b86e693040ac5d725d20c4e87e808adf71cae64337427`)
+provides the Axum/Tokio lifecycle and modular API organization reference. The API shell
+adapts those patterns while excluding its Better Auth/SeaORM and email implementation.
+The template shares this repository's MIT attribution; preserve [LICENSE](../LICENSE).
+
+The browser API client owns the public API origin and credentialed fetch behavior.
+Feature modules should use it rather than infer server addresses from the current page.
+Rust configuration owns the explicit frontend origin; future route modules must retain
+the exact-origin boundary and implement their own session/permission checks.
 
 ## Persistence lifecycle
 
@@ -61,7 +75,9 @@ layout is retained. Shadcn is deferred until a real control is needed.
 - [Target verification](../packages/database/src/target.ts) strengthens the template's
   local-target guard with project, checkout, ownership and published-port identity.
   [Docker inspection](../scripts/database/owned.mjs) supplies the actual resource proof
-  before setup/migration/integration work. A loopback address alone is insufficient.
+  before setup/migration/integration work and desktop startup. It pins the local Docker
+  socket on Linux or named pipe on Windows; checkout labels must exactly match the
+  absolute POSIX or Windows drive path. A loopback address alone is insufficient.
 
 Drizzle ORM 0.45.4, Drizzle Kit 0.31.11 and postgres-js 3.4.9 are pinned from official
 registry metadata. PostgreSQL 17.11 Bookworm is pinned by image digest. The Factory schema,

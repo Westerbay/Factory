@@ -41,3 +41,45 @@ test("reject remote, shared, unknown and mismatched ownership before connecting"
       /Refusing/
     )
 })
+
+test("accept absolute checkout paths without weakening ownership matching", () => {
+  for (const directory of [
+    "/tmp/factory-fixture",
+    "C:\\Users\\Factory User\\Factory",
+    "d:/work/Factory",
+  ]) {
+    const candidate = {
+      ...proof,
+      directory,
+      labels: { ...proof.labels, "io.factory.directory": directory },
+    }
+    assert.equal(verifyDatabaseTarget(candidate).directory, directory)
+    assert.throws(
+      () =>
+        verifyDatabaseTarget({
+          ...candidate,
+          labels: {
+            ...candidate.labels,
+            "io.factory.directory": `${directory}-other`,
+          },
+        }),
+      /Refusing/
+    )
+  }
+  for (const directory of [
+    "relative",
+    "C:relative",
+    "\\rooted",
+    "\\\\server\\share\\Factory",
+  ]) {
+    assert.throws(
+      () =>
+        verifyDatabaseTarget({
+          ...proof,
+          directory,
+          labels: { ...proof.labels, "io.factory.directory": directory },
+        }),
+      /Refusing/
+    )
+  }
+})
