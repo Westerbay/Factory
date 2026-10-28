@@ -1,0 +1,43 @@
+.auth-page {
+  max-width: 42rem;
+}
+.auth-notice {
+  padding: 1rem;
+  margin: 1.5rem 0;
+  border: 1px solid #d6d1e4;
+  border-radius: 0.5rem;
+  background: #fff;
+  line-height: 1.6;
+}
+.primary-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.75rem;
+  border-radius: 0.5rem;
+  background: #5340ac;
+  color: #fff;
+  padding: 0.75rem 1.25rem;
+  text-decoration: none;
+  font-weight: 600;
+}
+.primary-action:hover {
+  background: #43328b;
+}
+.auth-note {
+  color: #5d6069;
+  font-size: 0.875rem;
+  margin-top: 1.25rem;
+}
+.account-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  font-size: 0.875rem;
+}
+.account-name {
+  max-width: 16rem;
+  overflow-wrap: anywhere;
+}
