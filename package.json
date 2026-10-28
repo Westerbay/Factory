@@ -29,7 +29,7 @@
     "db:status": "pnpm db:build && node scripts/database/local.mjs status",
     "db:stop": "pnpm db:build && node scripts/database/local.mjs stop",
     "database:test": "pnpm db:build && node --test packages/database/test/target.test.mjs scripts/test/database-docker.test.mjs scripts/test/target-parity.test.mjs",
-    "test:integration": "pnpm --filter @workspace/database... --filter @workspace/application... build && node scripts/database/integration.mjs",
+    "test:integration": "pnpm --filter @workspace/database... --filter @workspace/application... build && node scripts/database/integration.mjs && node scripts/database/identity-integration.mjs",
     "adapters:test": "pnpm --filter @workspace/adapters... --filter @workspace/application... build && node --test packages/adapters/test/*.test.mjs",
     "codex:protocol": "node packages/adapters/scripts/generate-protocol.mjs",
     "codex:probe": "pnpm --filter @workspace/adapters... build && node packages/adapters/scripts/probe.mjs",
