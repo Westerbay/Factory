@@ -2,8 +2,7 @@
 
 ## Working agreement
 
-- Inspect the approved task and current diff before changing code. Deliver one code
-  task at a time and stop for user feedback after its draft PR.
+- Inspect the approved task and current diff before changing code.
 - Keep instructions, source, documentation and commit messages in English.
 - Preserve unrelated work, existing skills and credentials. Never read or change real
   `.env` files, provider credentials or global agent configuration for routine checks.
@@ -50,3 +49,6 @@ Keep routine checks independent of providers, secrets and external services unle
 the task explicitly requires a guarded integration check.
 Keep the [documented validation commands](docs/DEVELOPMENT.md) accurate as the project evolves.
 Report actual checks and blockers; do not present planned runtime behavior as verified.
+Human QA and acceptance journeys are not versioned executable test suites. Keep any
+agent-authored acceptance/browser check scripts and their artifacts in ignored local
+scratch. Retain meaningful unit and integration regression tests in the repository.
