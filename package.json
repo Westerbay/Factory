@@ -6,7 +6,7 @@
   "license": "MIT",
   "packageManager": "pnpm@12.11.2",
   "engines": {
-    "node": ">=24 <25",
+    "node": ">=24.22.1 <25",
     "pnpm": ">=12 <13"
   },
   "scripts": {
@@ -17,24 +17,31 @@
     "typecheck": "turbo typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "boundaries:check": "depcruise --config packages/config/dependency-cruiser.mjs apps packages",
-    "boundaries:test": "node --test scripts/test/boundaries.test.mjs",
-    "test": "pnpm execution:test && pnpm adapters:test && pnpm database:test && pnpm desktop:test && pnpm boundaries:test",
+    "boundaries:check": "depcruise --config packages/config/dependency-cruiser.mjs apps packages && node scripts/rust/boundaries.mjs",
+    "boundaries:test": "node --test scripts/test/boundaries.test.mjs scripts/test/rust-boundaries.test.mjs",
+    "test": "pnpm execution:test && pnpm adapters:test && pnpm database:test && pnpm desktop:test && pnpm boundaries:test && pnpm --filter @workspace/web test",
     "docs:check": "node scripts/docs-check.mjs",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm boundaries:check && pnpm docs:check && pnpm build",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm boundaries:check && pnpm docs:check && pnpm build && pnpm rust:check",
     "execution:test": "pnpm --filter @workspace/application... build && pnpm --filter @workspace/contracts build && tsc --project packages/contracts/test/tsconfig.json && node --test packages/application/test/*.test.mjs packages/contracts/test/*.test.mjs",
     "db:build": "pnpm --filter @workspace/database... build",
     "db:setup": "pnpm db:build && node scripts/database/local.mjs setup",
     "db:migrate": "pnpm db:build && node scripts/database/local.mjs migrate",
     "db:status": "pnpm db:build && node scripts/database/local.mjs status",
     "db:stop": "pnpm db:build && node scripts/database/local.mjs stop",
-    "database:test": "pnpm db:build && node --test packages/database/test/target.test.mjs",
+    "database:test": "pnpm db:build && node --test packages/database/test/target.test.mjs scripts/test/database-docker.test.mjs",
     "test:integration": "pnpm --filter @workspace/database... --filter @workspace/application... build && node scripts/database/integration.mjs",
     "adapters:test": "pnpm --filter @workspace/adapters... --filter @workspace/application... build && node --test packages/adapters/test/*.test.mjs",
     "codex:protocol": "node packages/adapters/scripts/generate-protocol.mjs",
     "codex:probe": "pnpm --filter @workspace/adapters... build && node packages/adapters/scripts/probe.mjs",
     "desktop:test": "pnpm --filter @workspace/desktop^... build && tsc -p apps/desktop/tsconfig.test.json && tsc -p apps/desktop/tsconfig.renderer-test.json && node --test --test-isolation=none apps/desktop/test/runtime.test.mjs apps/desktop/test/renderer.test.mjs",
-    "desktop:smoke": "pnpm --filter @workspace/desktop... build && pnpm --filter @workspace/desktop exec electron-vite build --config electron.smoke.config.ts && node apps/desktop/test/smoke.mjs"
+    "desktop:smoke": "pnpm --filter @workspace/desktop... build && pnpm --filter @workspace/desktop exec electron-vite build --config electron.smoke.config.ts && node apps/desktop/test/smoke.mjs",
+    "dev:web": "pnpm --filter @workspace/web dev",
+    "preview:web": "pnpm --filter @workspace/web preview",
+    "dev:api": "node scripts/rust/run.mjs run --locked --package factory-api",
+    "start:api": "node scripts/rust/run.mjs run --release --locked --package factory-api",
+    "web:check": "pnpm --filter @workspace/web typecheck && pnpm --filter @workspace/web test && pnpm --filter @workspace/web build",
+    "rust:check": "node scripts/rust/run.mjs fmt --all -- --check && node scripts/rust/run.mjs clippy --locked --workspace --all-targets -- -D warnings && node scripts/rust/run.mjs test --locked --workspace",
+    "rust:build": "node scripts/rust/run.mjs build --release --locked --workspace"
   },
   "devDependencies": {
     "dependency-cruiser": "18.6.0",
@@ -45,6 +52,7 @@
     "@eslint/js": "9.36.0",
     "typescript-eslint": "8.72.0",
     "globals": "16.4.0",
-    "@types/node": "24.5.2"
+    "@types/node": "24.5.2",
+    "openapi-typescript": "7.13.0"
   }
 }

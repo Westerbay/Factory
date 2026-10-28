@@ -2,8 +2,21 @@
 
 ## Dependency direction
 
-Factory retains the template's pnpm workspace, Turborepo, strict TypeScript and dependency
-checks. Electron owns the host shell; React runs in an isolated renderer.
+Factory retains pnpm, Turborepo and TypeScript boundaries and adds a Cargo workspace.
+The new `apps/web` is a browser-only React application; `apps/api` is an Axum HTTP API.
+They run independently. Vite serves static assets locally and the Rust process never
+serves frontend files. Browser requests use the configured API origin, credentials and
+an exact frontend CORS allowlist. CORS is not user authentication or authorization.
+
+The Rust workspace separates `crates/core`, `crates/application`, `crates/adapters`
+and `crates/database`. These crates currently reserve module ownership without identity
+implementations or speculative ports. Cargo dependency checks enforce core independence,
+application-to-core direction and adapter/database-to-core direction. `apps/api` owns
+HTTP configuration and health only; no database connection or migration runs at startup.
+Future identity DTOs will generate frontend transport types through OpenAPI.
+
+The existing execution implementation remains TypeScript during the port. Electron
+still owns its host shell and isolated React renderer until the web replacement is ready.
 
 | Boundary               | Responsibility                    | Allowed internal dependencies            |
 | ---------------------- | --------------------------------- | ---------------------------------------- |

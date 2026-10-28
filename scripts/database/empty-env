@@ -1,0 +1,1 @@
+# Intentionally no variables. Compose must not load a checkout or user .env file.
