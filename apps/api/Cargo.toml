@@ -21,6 +21,7 @@ cookie.workspace = true
 serde_json.workspace = true
 utoipa.workspace = true
 utoipa-axum.workspace = true
+dotenvy.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["serde"] }
 axum.workspace = true
