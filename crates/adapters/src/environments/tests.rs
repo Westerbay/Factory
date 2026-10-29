@@ -674,7 +674,7 @@ fn fixture_exec(
     // The explicit fixture metadata directory contains no Docker credential config.
     let output = process
         .args([
-            "--config", directory, "--host", host, "exec", name, "sh", "-ec", command,
+            "--config", directory, "--host", host, "exec", name, "sh", "-exc", command,
         ])
         .output()?;
     if !output.status.success() {
