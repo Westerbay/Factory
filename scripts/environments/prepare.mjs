@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url"
 import { docker } from "./docker.mjs"
 
 const root = fileURLToPath(new URL("../../", import.meta.url))
-export const policyVersion = "1"
+export const policyVersion = "2"
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const imageId = /^sha256:[0-9a-f]{64}$/
 

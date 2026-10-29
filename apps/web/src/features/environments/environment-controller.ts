@@ -9,25 +9,13 @@ import {
 } from "./api"
 
 type RequestKind = EnvironmentAction | "read"
-const HEARTBEAT_INTERVAL_MS = 60_000
-const LEASE_MARGIN_MS = 10_000
-
-function renewableLeaseExpiresAt(
-  environment: Environment | null
-): number | null {
-  if (environment?.status !== "starting" && environment?.status !== "running")
-    return null
-  const expiresAt = Date.parse(environment.idleExpiresAt ?? "")
-  return Number.isFinite(expiresAt) && expiresAt > Date.now() ? expiresAt : null
-}
-
 export function canStopEnvironment(environment: Environment | null): boolean {
   const status = environment?.status
   return (
     status === "starting" ||
     status === "running" ||
     status === "error" ||
-    (status === "unavailable" && environment?.idleExpiresAt != null)
+    status === "unavailable"
   )
 }
 
@@ -57,9 +45,6 @@ export class EnvironmentController {
   private generation = 0
   private request?: AbortController
   private poll?: ReturnType<typeof setInterval>
-  private heartbeat?: ReturnType<typeof setTimeout>
-  private heartbeatDue?: number
-  private renewOnRead = true
   private unsubscribe?: () => void
 
   constructor(private dependencies: Dependencies) {}
@@ -95,8 +80,6 @@ export class EnvironmentController {
     if (session === this.session) return
     this.cancel()
     clearInterval(this.poll)
-    this.clearHeartbeat()
-    this.renewOnRead = true
     this.session = session
     this.setState({
       environment: null,
@@ -109,46 +92,6 @@ export class EnvironmentController {
     this.poll = setInterval(() => {
       if (!this.state.pending) void this.run("read")
     }, 5_000)
-  }
-
-  private clearHeartbeat() {
-    clearTimeout(this.heartbeat)
-    this.heartbeat = undefined
-    this.heartbeatDue = undefined
-  }
-
-  private scheduleHeartbeat(kind: RequestKind) {
-    const expiresAt = renewableLeaseExpiresAt(this.state.environment)
-    if (expiresAt === null || kind === "stop") {
-      this.clearHeartbeat()
-      return
-    }
-    if (kind === "read" && this.renewOnRead) {
-      this.renewOnRead = false
-      void this.run("heartbeat")
-      return
-    }
-    this.renewOnRead = false
-    const now = Date.now()
-    const remaining = expiresAt - now
-    // Leave room for transport latency even with a one-minute lease. The floor
-    // prevents a malformed or nearly expired response from creating a busy loop.
-    const delay = Math.max(
-      1_000,
-      Math.min(
-        HEARTBEAT_INTERVAL_MS,
-        remaining - Math.min(LEASE_MARGIN_MS, remaining / 2)
-      )
-    )
-    const due = now + delay
-    // Reads confirm state every five seconds; they must never postpone renewal.
-    if (this.heartbeatDue !== undefined && this.heartbeatDue <= due) return
-    this.clearHeartbeat()
-    this.heartbeatDue = due
-    this.heartbeat = setTimeout(() => {
-      this.clearHeartbeat()
-      void this.run("heartbeat")
-    }, delay)
   }
 
   private cancel() {
@@ -174,12 +117,7 @@ export class EnvironmentController {
   }
 
   private async act(action: "start" | "stop") {
-    if (
-      this.state.pending &&
-      this.state.pending !== "read" &&
-      this.state.pending !== "heartbeat"
-    )
-      return
+    if (this.state.pending && this.state.pending !== "read") return
     await this.run(action, true)
   }
 
@@ -196,14 +134,6 @@ export class EnvironmentController {
     }
     const session = this.session
     if (!session) return
-    if (
-      kind === "heartbeat" &&
-      renewableLeaseExpiresAt(this.state.environment) === null
-    ) {
-      this.clearHeartbeat()
-      return
-    }
-    if (kind !== "read") this.clearHeartbeat()
     this.cancel()
     const generation = this.generation
     const request = new AbortController()
@@ -229,13 +159,10 @@ export class EnvironmentController {
         pending: null,
         message: null,
       })
-      if (generation === this.generation) this.scheduleHeartbeat(kind)
     } catch (error) {
       if (generation !== this.generation) return
-      this.clearHeartbeat()
-      this.renewOnRead = true
       // Even a failed write may have reached the server. Never retain a Running
-      // badge or renew its lease until a fresh response confirms the state.
+      // badge until a fresh response confirms the state.
       this.setState({
         environment: null,
         pending: null,
@@ -250,7 +177,6 @@ export class EnvironmentController {
     this.unsubscribe = undefined
     this.cancel()
     clearInterval(this.poll)
-    this.clearHeartbeat()
     this.session = undefined
     this.setState({
       environment: null,

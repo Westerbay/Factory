@@ -12,13 +12,7 @@ pub trait EnvironmentStore: Send + Sync {
         request: EnvironmentStart,
     ) -> Result<Environment, EnvironmentError>;
     async fn stop(&self, actor: EnvironmentActor) -> Result<Option<Environment>, EnvironmentError>;
-    /// Renew only an unexpired running intent; never revive stopped/expired intent.
-    async fn heartbeat(
-        &self,
-        actor: EnvironmentActor,
-        lease_seconds: u32,
-    ) -> Result<Environment, EnvironmentError>;
-    /// Repair suspended/expired intent under the user lock, then return bounded due records.
+    /// Repair suspended intent under the user lock, then return bounded due records.
     async fn reconcile_batch(
         &self,
         installation_id: Uuid,
@@ -27,7 +21,7 @@ pub trait EnvironmentStore: Send + Sync {
     /// Commit VolumeCreating before an external creation. False means stale generation/phase.
     async fn begin_provisioning(&self, id: Uuid, generation: i64)
     -> Result<bool, EnvironmentError>;
-    /// Generation-conditional write. Only confirmed stopped/absent observations release capacity.
+    /// Generation-conditional write; stale runtime results cannot overwrite a newer intent.
     async fn record_observation(
         &self,
         id: Uuid,

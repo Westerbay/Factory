@@ -56,8 +56,6 @@ fn request(installation_id: Uuid) -> EnvironmentStart {
         installation_id,
         image_id: "sha256:fixture".into(),
         policy_version: "1".into(),
-        max_running: 2,
-        lease_seconds: 900,
     }
 }
 
@@ -71,7 +69,7 @@ fn stopped() -> EnvironmentObservation {
 
 #[tokio::test]
 #[ignore = "requires the explicitly owned PostgreSQL integration fixture"]
-async fn requests_preserve_ownership_capacity_generation_and_durable_provisioning() {
+async fn persistent_requests_preserve_ownership_and_generation_without_capacity_or_presence() {
     let (db, sql) = fixture().await;
     let store = db.environment_store();
     let one = actor(&sql, 1, false).await;
@@ -80,10 +78,6 @@ async fn requests_preserve_ownership_capacity_generation_and_durable_provisionin
     let installation = Uuid::new_v4();
     assert_eq!(store.get(one).await.unwrap(), None);
     assert_eq!(store.stop(one).await.unwrap(), None);
-    assert!(matches!(
-        store.heartbeat(one, 900).await,
-        Err(EnvironmentError::Conflict)
-    ));
     let forged = EnvironmentActor {
         user_id: two.user_id,
         session_hash: one.session_hash,
@@ -98,19 +92,13 @@ async fn requests_preserve_ownership_capacity_generation_and_durable_provisionin
     );
     let first = a.unwrap();
     assert_eq!(first.id, b.unwrap().id);
-    assert!(first.capacity_reserved);
-    assert_eq!(first.provisioning_state, ProvisioningState::Unprovisioned);
-    let second = store.start(two, request(installation)).await.unwrap();
-    assert_ne!(first.volume_name, second.volume_name);
-    assert_ne!(first.container_name, second.container_name);
-    assert!(matches!(
-        store.start(three, request(installation)).await,
-        Err(EnvironmentError::CapacityReached)
-    ));
-    assert!(
-        store.get(three).await.unwrap().is_none(),
-        "capacity refusal must not queue a later start"
+    let (b, c) = tokio::join!(
+        store.start(two, request(installation)),
+        store.start(three, request(installation))
     );
+    let second = b.unwrap();
+    assert_ne!(first.volume_name, second.volume_name);
+    assert_ne!(first.container_name, c.unwrap().container_name);
     assert!(matches!(
         store.start(one, request(Uuid::new_v4())).await,
         Err(EnvironmentError::OwnershipConflict)
@@ -139,84 +127,44 @@ async fn requests_preserve_ownership_capacity_generation_and_durable_provisionin
     );
     let stopping = store.stop(one).await.unwrap().unwrap();
     assert_eq!(stopping.generation, first.generation + 1);
-    assert!(stopping.capacity_reserved);
-    assert!(stopping.lease_expires_at.is_none());
     assert_eq!(
         store.stop(one).await.unwrap().unwrap().generation,
         stopping.generation
     );
-    assert!(matches!(
-        store.heartbeat(one, 900).await,
-        Err(EnvironmentError::Conflict)
-    ));
     assert!(
         !store
             .record_observation(first.id, first.generation, stopped(), 0)
             .await
-            .unwrap(),
-        "a stale Docker result must not overwrite stop"
+            .unwrap()
     );
-    store
-        .record_observation(
-            first.id,
-            stopping.generation,
-            EnvironmentObservation {
-                state: ObservedState::Unavailable,
-                error: Some(EnvironmentError::Timeout),
-                volume_confirmed: false,
-            },
-            0,
-        )
-        .await
-        .unwrap();
-    assert!(matches!(
-        store.start(three, request(installation)).await,
-        Err(EnvironmentError::CapacityReached)
-    ));
     assert!(
         store
             .record_observation(first.id, stopping.generation, stopped(), 0)
             .await
             .unwrap()
     );
-    let confirmed = store.get(one).await.unwrap().unwrap();
-    assert!(!confirmed.capacity_reserved);
-    assert_eq!(confirmed.provisioning_state, ProvisioningState::VolumeReady);
-    store.start(three, request(installation)).await.unwrap();
+    assert_eq!(
+        store.get(one).await.unwrap().unwrap().provisioning_state,
+        ProvisioningState::VolumeReady
+    );
+    store.start(one, request(installation)).await.unwrap();
+    // Simulate returning the next day: old browser metadata and expired login sessions
+    // cannot stop a persistent environment or change its generation.
+    sqlx::query("UPDATE factory_identity.environments SET lease_expires_at=clock_timestamp()-interval '1 day', next_reconcile_at=clock_timestamp()-interval '1 day' WHERE user_id=$1").bind(two.user_id).execute(&sql).await.unwrap();
+    sqlx::query("UPDATE factory_identity.sessions SET expires_at=clock_timestamp()-interval '1 day' WHERE user_id=$1").bind(two.user_id).execute(&sql).await.unwrap();
     assert!(matches!(
-        store.start(one, request(installation)).await,
-        Err(EnvironmentError::CapacityReached)
+        store.get(two).await,
+        Err(EnvironmentError::Unauthorized)
     ));
-    // Expiry cannot be undone by a delayed heartbeat, even before the reconciler runs.
-    sqlx::query("UPDATE factory_identity.environments SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE user_id=$1").bind(two.user_id).execute(&sql).await.unwrap();
-    assert!(matches!(
-        store.heartbeat(two, 900).await,
-        Err(EnvironmentError::Conflict)
-    ));
-    let expired = store
+    let persistent = store
         .reconcile_batch(installation, 10)
         .await
         .unwrap()
         .into_iter()
         .find(|e| e.user_id == two.user_id)
         .unwrap();
-    assert_eq!(expired.desired_state, DesiredState::Stopped);
-    assert_eq!(expired.generation, second.generation + 1);
-    assert!(expired.capacity_reserved);
-    store
-        .record_observation(expired.id, expired.generation, stopped(), 0)
-        .await
-        .unwrap();
-    // Independent actors racing for the final place cannot both reserve it.
-    let (a, b) = tokio::join!(
-        store.start(one, request(installation)),
-        store.start(two, request(installation))
-    );
-    assert_ne!(a.is_ok(), b.is_ok());
-    assert!(matches!(
-        a.err().or(b.err()),
-        Some(EnvironmentError::CapacityReached)
-    ));
+    assert_eq!(persistent.desired_state, DesiredState::Running);
+    assert_eq!(persistent.generation, second.generation);
     db.close().await;
     sql.close().await;
 }
@@ -253,10 +201,6 @@ async fn suspension_is_atomic_and_waiting_requests_recheck_live_session() {
         .await
         .unwrap();
     assert!(matches!(
-        store.heartbeat(member, 900).await,
-        Err(EnvironmentError::Unauthorized)
-    ));
-    assert!(matches!(
         store.start(member, request(installation)).await,
         Err(EnvironmentError::Unauthorized)
     ));
@@ -272,8 +216,6 @@ async fn suspension_is_atomic_and_waiting_requests_recheck_live_session() {
         .unwrap();
     assert_eq!(record.desired_state, DesiredState::Stopped);
     assert_eq!(record.generation, started.generation + 1);
-    assert!(record.lease_expires_at.is_none());
-    assert!(record.capacity_reserved);
 
     let waiting = actor(&sql, 6, false).await;
     let mut held = sql.begin().await.unwrap();

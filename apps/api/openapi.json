@@ -79,10 +79,6 @@
             "description": "Bounded public error code; never includes provider responses or resource names.",
             "type": ["string", "null"]
           },
-          "idleExpiresAt": {
-            "format": "date-time",
-            "type": ["string", "null"]
-          },
           "observedAt": {
             "format": "date-time",
             "type": ["string", "null"]
@@ -684,103 +680,9 @@
         ]
       }
     },
-    "/api/environment/heartbeat": {
-      "post": {
-        "description": "Renew an existing unexpired running lease. Never starts or revives a stopped environment.",
-        "operationId": "heartbeatEnvironment",
-        "parameters": [
-          {
-            "description": "Session CSRF token. Exact frontend Origin and an empty body are required.",
-            "in": "header",
-            "name": "X-CSRF-Token",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EnvironmentResponse"
-                }
-              }
-            },
-            "description": "Lease renewed"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            },
-            "description": "Body must be empty"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            },
-            "description": "Active session required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            },
-            "description": "Origin or CSRF rejected"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            },
-            "description": "No renewable running lease"
-          },
-          "429": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            },
-            "description": "Rate limit"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            },
-            "description": "Environment service unavailable"
-          }
-        },
-        "security": [
-          {
-            "sessionCookie": []
-          }
-        ]
-      }
-    },
     "/api/environment/start": {
       "post": {
-        "description": "Persist a running intent and idle lease for the current user. Opposite intents are queued by generation.",
+        "description": "Persist a persistent running intent for the current user. Opposite intents are queued by generation.",
         "operationId": "startEnvironment",
         "parameters": [
           {
@@ -842,7 +744,7 @@
                 }
               }
             },
-            "description": "Capacity reached or conflicting intent"
+            "description": "Conflicting intent"
           },
           "429": {
             "content": {
@@ -874,7 +776,7 @@
     },
     "/api/environment/stop": {
       "post": {
-        "description": "Persist a stopped intent and invalidate the lease; no volume is removed.",
+        "description": "Persist a stopped intent; no volume is removed.",
         "operationId": "stopEnvironment",
         "parameters": [
           {

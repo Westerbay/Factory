@@ -17,10 +17,7 @@ afterEach(() => {
 
 function setup(status: Environment["status"] = "running") {
   vi.useFakeTimers()
-  let environment: Environment = {
-    status,
-    idleExpiresAt: new Date(Date.now() + 900_000).toISOString(),
-  }
+  const environment: Environment = { status }
   const session: Session = {
     user: {
       id: "member",
@@ -56,13 +53,7 @@ function setup(status: Environment["status"] = "running") {
           signal: AbortSignal
         ) => Promise<Environment>
       >()
-      .mockImplementation(async () => {
-        environment = {
-          ...environment,
-          idleExpiresAt: new Date(Date.now() + 900_000).toISOString(),
-        }
-        return environment
-      }),
+      .mockResolvedValue(environment),
   }
   const controller = new EnvironmentController(dependencies)
   controllers.push(controller)
@@ -78,149 +69,50 @@ function setup(status: Environment["status"] = "running") {
 }
 
 describe("environment activity", () => {
-  it.each([null, "2026-10-28T21:00:00Z"])(
-    "queues a stop during an outage only when an idle lease exists (%s)",
-    async (idleExpiresAt) => {
-      const { controller, dependencies } = setup("unavailable")
-      dependencies.read.mockResolvedValue({
-        status: "unavailable",
-        idleExpiresAt,
-      })
-      controller.connect()
-      await vi.advanceTimersByTimeAsync(0)
-      await controller.stop()
-      expect(dependencies.change).toHaveBeenCalledTimes(idleExpiresAt ? 1 : 0)
-      if (idleExpiresAt)
-        expect(dependencies.change).toHaveBeenCalledWith(
-          "stop",
-          "synthetic-csrf",
-          expect.any(AbortSignal)
-        )
-    }
-  )
-
-  it("renews on arrival, then every sixty seconds without five-second polls postponing it", async () => {
+  it("polls while visible but sends no keepalive or stop, even a day later", async () => {
     const { controller, dependencies } = setup()
     controller.connect()
-    await vi.advanceTimersByTimeAsync(59_999)
-    expect(dependencies.read).toHaveBeenCalledTimes(12)
-    expect(dependencies.change).toHaveBeenCalledTimes(1)
-    await vi.advanceTimersByTimeAsync(1)
-    expect(dependencies.change).toHaveBeenCalledTimes(2)
-    expect(dependencies.change).toHaveBeenLastCalledWith(
-      "heartbeat",
-      "synthetic-csrf",
-      expect.any(AbortSignal)
-    )
-  })
-
-  it("renews immediately when returning with thirty seconds left on a fifteen-minute lease", async () => {
-    const { controller, dependencies } = setup()
-    controller.connect()
-    await vi.advanceTimersByTimeAsync(0)
-    dependencies.change.mockClear()
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(dependencies.read).toHaveBeenCalledTimes(4)
+    expect(dependencies.change).not.toHaveBeenCalled()
     dependencies.visible.mockReturnValue(false)
     controller.synchronize()
-    await vi.advanceTimersByTimeAsync(870_000)
+    await vi.advanceTimersByTimeAsync(86_400_000)
+    expect(dependencies.read).toHaveBeenCalledTimes(4)
     expect(dependencies.change).not.toHaveBeenCalled()
     dependencies.visible.mockReturnValue(true)
     controller.synchronize()
     await vi.advanceTimersByTimeAsync(0)
+    expect(controller.getSnapshot().environment?.status).toBe("running")
+    expect(dependencies.change).not.toHaveBeenCalled()
+  })
+
+  it("allows an explicit stop while Docker is unavailable", async () => {
+    const { controller, dependencies } = setup("unavailable")
+    controller.connect()
+    await vi.advanceTimersByTimeAsync(0)
+    await controller.stop()
     expect(dependencies.change).toHaveBeenCalledExactlyOnceWith(
-      "heartbeat",
+      "stop",
       "synthetic-csrf",
       expect.any(AbortSignal)
     )
-    expect(
-      Date.parse(controller.getSnapshot().environment!.idleExpiresAt!)
-    ).toBe(Date.now() + 900_000)
   })
 
-  it("maintains a one-minute lease with margin despite continuous polling", async () => {
-    const { controller, dependencies } = setup("starting")
-    let expiresAt = Date.now() + 60_000
-    const activeEnvironment = (): Environment => ({
-      status: "starting",
-      idleExpiresAt: new Date(expiresAt).toISOString(),
-    })
-    dependencies.read.mockImplementation(async () => activeEnvironment())
-    dependencies.change.mockImplementation(async () => {
-      expect(Date.now()).toBeLessThan(expiresAt)
-      expiresAt = Date.now() + 60_000
-      return activeEnvironment()
-    })
-    controller.connect()
-    await vi.advanceTimersByTimeAsync(149_999)
-    expect(dependencies.change).toHaveBeenCalledTimes(3)
-    await vi.advanceTimersByTimeAsync(1)
-    expect(dependencies.change).toHaveBeenCalledTimes(4)
-    expect(expiresAt - Date.now()).toBe(60_000)
-  })
-
-  it.each([null, "expired", "invalid"])(
-    "does not renew a running environment with a %s lease",
-    async (lease) => {
-      const { controller, dependencies } = setup()
-      const idleExpiresAt =
-        lease === "expired" ? new Date(Date.now()).toISOString() : lease
-      dependencies.read.mockResolvedValue({ status: "running", idleExpiresAt })
-      controller.connect()
-      await vi.advanceTimersByTimeAsync(120_000)
-      expect(dependencies.change).not.toHaveBeenCalled()
-    }
-  )
-
-  it("schedules renewal before expiry after Start establishes a new lease", async () => {
+  it("only sends one start; closing the controller does not send a stop", async () => {
     const { controller, dependencies } = setup("not_created")
-    let expiresAt = Date.now() + 60_000
-    dependencies.change.mockImplementation(async () => {
-      expiresAt = Date.now() + 60_000
-      return {
-        status: "starting",
-        idleExpiresAt: new Date(expiresAt).toISOString(),
-      }
-    })
+    dependencies.change.mockResolvedValue({ status: "starting" })
     controller.connect()
     await vi.advanceTimersByTimeAsync(0)
     await controller.start()
-    dependencies.read.mockImplementation(async () => ({
-      status: "starting",
-      idleExpiresAt: new Date(expiresAt).toISOString(),
-    }))
-    await vi.advanceTimersByTimeAsync(49_999)
-    expect(dependencies.change).toHaveBeenCalledTimes(1)
-    await vi.advanceTimersByTimeAsync(1)
-    expect(dependencies.change).toHaveBeenLastCalledWith(
-      "heartbeat",
+    await vi.advanceTimersByTimeAsync(15_000)
+    controller.dispose()
+    await vi.advanceTimersByTimeAsync(86_400_000)
+    expect(dependencies.change).toHaveBeenCalledExactlyOnceWith(
+      "start",
       "synthetic-csrf",
       expect.any(AbortSignal)
     )
-  })
-
-  it("does not busy-loop when renewal returns an unchanged, nearly expired lease", async () => {
-    const { controller, dependencies } = setup()
-    const environment: Environment = {
-      status: "running",
-      idleExpiresAt: new Date(Date.now() + 500).toISOString(),
-    }
-    dependencies.read.mockResolvedValue(environment)
-    dependencies.change.mockResolvedValue(environment)
-    controller.connect()
-    await vi.advanceTimersByTimeAsync(5_000)
-    expect(dependencies.change).toHaveBeenCalledTimes(1)
-  })
-
-  it.each([
-    "not_created",
-    "stopped",
-    "stopping",
-    "error",
-    "unavailable",
-  ] as const)("does not renew an environment in %s", async (status) => {
-    const { controller, dependencies } = setup(status)
-    controller.connect()
-    await vi.advanceTimersByTimeAsync(120_000)
-    expect(dependencies.change).not.toHaveBeenCalled()
   })
 
   it.each(["visible", "online"] as const)(
@@ -259,26 +151,25 @@ describe("environment activity", () => {
     "logout-failed",
     "unavailable",
   ] as const)(
-    "aborts immediately on session %s, including a pending heartbeat",
+    "aborts immediately on session %s, without stopping the server environment",
     async (status) => {
       const { controller, dependencies, setSession } = setup()
       let finish!: (environment: Environment) => void
-      dependencies.change.mockImplementation(
+      dependencies.read.mockImplementationOnce(
         () =>
           new Promise((resolve) => {
             finish = resolve
           })
       )
       controller.connect()
-      await vi.advanceTimersByTimeAsync(60_000)
-      const signal = dependencies.change.mock.calls[0]![2]
+      const signal = dependencies.read.mock.calls[0]![0]
       setSession({ status })
       expect(signal.aborted).toBe(true)
       finish({ status: "running" })
       const reads = dependencies.read.mock.calls.length
-      await vi.advanceTimersByTimeAsync(120_000)
+      await vi.advanceTimersByTimeAsync(86_400_000)
       expect(controller.getSnapshot().environment).toBeNull()
-      expect(dependencies.change).toHaveBeenCalledTimes(1)
+      expect(dependencies.change).not.toHaveBeenCalled()
       expect(dependencies.read).toHaveBeenCalledTimes(reads)
     }
   )
@@ -303,39 +194,40 @@ describe("environment activity", () => {
     expect(controller.getSnapshot().environment?.status).toBe("stopped")
   })
 
-  it("suppresses overlapping commands and ignores a heartbeat arriving after stop", async () => {
+  it("suppresses overlapping commands and ignores a read arriving after stop", async () => {
     const { controller, dependencies } = setup()
-    let finishHeartbeat!: (environment: Environment) => void
-    let finishStop!: (environment: Environment) => void
-    dependencies.change
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            finishHeartbeat = resolve
-          })
-      )
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            finishStop = resolve
-          })
-      )
     controller.connect()
-    await vi.advanceTimersByTimeAsync(60_000)
+    await vi.advanceTimersByTimeAsync(0)
+    let finishRead!: (environment: Environment) => void
+    let finishStop!: (environment: Environment) => void
+    dependencies.read.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRead = resolve
+        })
+    )
+    const refresh = controller.refresh()
+    const signal = dependencies.read.mock.calls.at(-1)![0]
+    dependencies.change.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishStop = resolve
+        })
+    )
     const stopping = controller.stop()
-    expect(dependencies.change.mock.calls[0]![2].aborted).toBe(true)
+    expect(signal.aborted).toBe(true)
     await controller.stop()
     await controller.start()
     await controller.refresh()
-    expect(dependencies.change).toHaveBeenCalledTimes(2)
+    expect(dependencies.change).toHaveBeenCalledTimes(1)
     finishStop({ status: "stopping" })
     await stopping
-    finishHeartbeat({ status: "running" })
-    await vi.advanceTimersByTimeAsync(0)
+    finishRead({ status: "running" })
+    await refresh
     expect(controller.getSnapshot().environment?.status).toBe("stopping")
   })
 
-  it("clears stale Running on read failure, suppresses heartbeat, and recovers through refresh", async () => {
+  it("clears stale Running on read failure, and recovers through refresh", async () => {
     const { controller, dependencies } = setup()
     controller.connect()
     await vi.advanceTimersByTimeAsync(0)
@@ -355,17 +247,17 @@ describe("environment activity", () => {
     })
   })
 
-  it("reports capacity refusal without retrying start or claiming it started", async () => {
+  it("reports a conflicting start without retrying start or claiming it started", async () => {
     const { controller, dependencies } = setup("not_created")
     dependencies.change.mockRejectedValue(
-      new EnvironmentFailure(409, "capacity_reached")
+      new EnvironmentFailure(409, "conflict")
     )
     controller.connect()
     await vi.advanceTimersByTimeAsync(0)
     await controller.start()
     expect(controller.getSnapshot()).toMatchObject({
       environment: null,
-      message: expect.stringContaining("slots"),
+      message: expect.stringContaining("changed"),
     })
     await vi.advanceTimersByTimeAsync(120_000)
     expect(dependencies.change).toHaveBeenCalledTimes(1)
@@ -381,6 +273,6 @@ describe("environment activity", () => {
     expect(dependencies.read).toHaveBeenCalledTimes(1)
     controller.connect()
     await vi.advanceTimersByTimeAsync(60_000)
-    expect(dependencies.change).toHaveBeenCalledTimes(2)
+    expect(dependencies.change).not.toHaveBeenCalled()
   })
 })

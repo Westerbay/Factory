@@ -13,6 +13,7 @@ mod concurrency;
 struct Store {
     row: Mutex<Environment>,
     valid_session: AtomicBool,
+    active_user: AtomicBool,
     writes: AtomicUsize,
     fail_record: AtomicBool,
 }
@@ -47,7 +48,6 @@ impl EnvironmentStore for Store {
             row.generation += 1;
         }
         row.desired_state = DesiredState::Running;
-        row.capacity_reserved = true;
         Ok(row.clone())
     }
     async fn stop(&self, actor: EnvironmentActor) -> Result<Option<Environment>, EnvironmentError> {
@@ -55,34 +55,13 @@ impl EnvironmentStore for Store {
         let mut row = self.row.lock().unwrap();
         row.generation += 1;
         row.desired_state = DesiredState::Stopped;
-        row.lease_expires_at = None;
         Ok(Some(row.clone()))
-    }
-    async fn heartbeat(
-        &self,
-        actor: EnvironmentActor,
-        _: u32,
-    ) -> Result<Environment, EnvironmentError> {
-        self.authorize(actor)?;
-        let row = self.row();
-        if row.desired_state != DesiredState::Running
-            || row.lease_expires_at.is_none_or(|lease| lease <= Utc::now())
-        {
-            Err(EnvironmentError::Conflict)
-        } else {
-            Ok(row)
-        }
     }
     async fn reconcile_batch(&self, _: Uuid, _: u32) -> Result<Vec<Environment>, EnvironmentError> {
         let mut row = self.row.lock().unwrap();
-        if !self.valid_session.load(Ordering::SeqCst)
-            || row
-                .lease_expires_at
-                .is_some_and(|lease| lease <= Utc::now())
-        {
+        if !self.active_user.load(Ordering::SeqCst) {
             row.desired_state = DesiredState::Stopped;
             row.generation += 1;
-            row.lease_expires_at = None;
         }
         Ok(vec![row.clone()])
     }
@@ -118,9 +97,6 @@ impl EnvironmentStore for Store {
             && row.provisioning_state == ProvisioningState::VolumeCreating
         {
             row.provisioning_state = ProvisioningState::VolumeReady;
-        }
-        if row.desired_state == DesiredState::Stopped && observation.confirms_stopped() {
-            row.capacity_reserved = false;
         }
         self.writes.fetch_add(1, Ordering::SeqCst);
         Ok(true)
@@ -220,8 +196,6 @@ impl EnvironmentRuntime for Runtime {
     }
     async fn stop(&self, _: &Environment) -> Result<(), EnvironmentError> {
         self.calls.lock().unwrap().push("stop");
-        // Capacity remains reserved throughout the external operation.
-        assert!(self.store.row().capacity_reserved);
         self.inspection.lock().unwrap().state = ObservedState::Stopped;
         self.effect()
     }
@@ -241,8 +215,6 @@ impl Fixture {
             installation_id: Uuid::new_v4(),
             image_id: "sha256:fixture".into(),
             policy_version: "1".into(),
-            max_running: 2,
-            lease_seconds: 900,
         };
         let store = Arc::new(Store {
             row: Mutex::new(Environment {
@@ -257,13 +229,12 @@ impl Fixture {
                 container_name: "fixture-container".into(),
                 image_id: config.image_id.clone(),
                 policy_version: "1".into(),
-                capacity_reserved: true,
-                lease_expires_at: Some(Utc::now() + Duration::minutes(15)),
                 observed_at: None,
                 error_code: None,
                 next_reconcile_at: Utc::now(),
             }),
             valid_session: AtomicBool::new(true),
+            active_user: AtomicBool::new(true),
             writes: AtomicUsize::new(0),
             fail_record: AtomicBool::new(false),
         });
@@ -340,7 +311,7 @@ async fn read_never_provisions_and_requests_revalidate_the_actor() {
         EnvironmentError::Unauthorized
     );
     assert_eq!(
-        f.service().heartbeat(f.actor()).await.unwrap_err(),
+        f.service().stop(f.actor()).await.unwrap_err(),
         EnvironmentError::Unauthorized
     );
 }
@@ -395,7 +366,6 @@ async fn interrupted_or_missing_volumes_are_never_replaced() {
         f.reconciler().reconcile_once().await.unwrap();
         assert_eq!(f.store.row().error_code, Some(error));
         assert_eq!(*f.runtime.calls.lock().unwrap(), vec!["inspect"]);
-        assert!(f.store.row().capacity_reserved);
     }
 }
 
@@ -425,7 +395,7 @@ async fn volume_created_before_crash_is_recovered_by_inspection() {
 }
 
 #[tokio::test]
-async fn guard_loss_during_start_or_stop_retains_capacity_and_is_terminal() {
+async fn guard_loss_during_start_or_stop_is_terminal() {
     for desired in [DesiredState::Running, DesiredState::Stopped] {
         let f = Fixture::new();
         f.provisioned(desired);
@@ -438,7 +408,6 @@ async fn guard_loss_during_start_or_stop_retains_capacity_and_is_terminal() {
             worker.reconcile_once().await.unwrap_err(),
             EnvironmentError::Unavailable
         );
-        assert!(f.store.row().capacity_reserved);
         assert!(!f.availability.is_available());
         let count = f.runtime.calls.lock().unwrap().len();
         f.guard.store(true, Ordering::SeqCst);
@@ -448,16 +417,14 @@ async fn guard_loss_during_start_or_stop_retains_capacity_and_is_terminal() {
 }
 
 #[tokio::test]
-async fn timeout_does_not_confirm_stop_and_recovery_inspects_before_releasing_capacity() {
+async fn timeout_does_not_confirm_stop_and_recovery_inspects_before_reporting_stopped() {
     let f = Fixture::new();
     f.provisioned(DesiredState::Stopped);
     *f.runtime.effect.lock().unwrap() = DuringEffect::Timeout;
     f.reconciler().reconcile_once().await.unwrap();
-    assert!(f.store.row().capacity_reserved);
     assert_eq!(f.store.row().observed_state, ObservedState::Unavailable);
     *f.runtime.effect.lock().unwrap() = DuringEffect::Nothing;
     f.reconciler().reconcile_once().await.unwrap();
-    assert!(!f.store.row().capacity_reserved);
     assert_eq!(f.store.row().observed_state, ObservedState::Stopped);
 }
 
@@ -472,7 +439,6 @@ async fn opposing_intents_during_effects_are_not_overwritten_by_stale_completion
         *f.runtime.effect.lock().unwrap() = DuringEffect::OppositeIntent;
         let mut worker = f.reconciler();
         worker.reconcile_once().await.unwrap();
-        assert!(f.store.row().capacity_reserved);
         assert_ne!(f.store.row().desired_state, desired);
         assert_eq!(f.store.row().generation, 2);
         assert_eq!(
@@ -497,20 +463,16 @@ async fn opposing_intents_during_effects_are_not_overwritten_by_stale_completion
 }
 
 #[tokio::test]
-async fn expiry_or_suspension_stops_and_late_heartbeat_cannot_revive() {
-    for suspended in [false, true] {
-        let f = Fixture::new();
-        f.provisioned(DesiredState::Running);
-        if suspended {
-            f.store.valid_session.store(false, Ordering::SeqCst);
-        } else {
-            f.store.row.lock().unwrap().lease_expires_at = Some(Utc::now() - Duration::seconds(1));
-        }
-        f.reconciler().reconcile_once().await.unwrap();
-        assert_eq!(f.store.row().observed_state, ObservedState::Stopped);
-        assert!(!f.store.row().capacity_reserved);
-        assert!(f.service().heartbeat(f.actor()).await.is_err());
-    }
+async fn session_loss_keeps_running_but_suspension_stops() {
+    let f = Fixture::new();
+    f.provisioned(DesiredState::Running);
+    f.store.valid_session.store(false, Ordering::SeqCst);
+    f.reconciler().reconcile_once().await.unwrap();
+    assert_eq!(f.store.row().observed_state, ObservedState::Running);
+    assert!(!f.runtime.calls.lock().unwrap().contains(&"stop"));
+    f.store.active_user.store(false, Ordering::SeqCst);
+    f.reconciler().reconcile_once().await.unwrap();
+    assert_eq!(f.store.row().observed_state, ObservedState::Stopped);
 }
 
 #[tokio::test]

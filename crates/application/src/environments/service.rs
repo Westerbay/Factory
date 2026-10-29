@@ -101,14 +101,6 @@ impl EnvironmentService {
         self.store.stop(actor).await
     }
 
-    pub async fn heartbeat(
-        &self,
-        actor: EnvironmentActor,
-    ) -> Result<Environment, EnvironmentError> {
-        self.require_available()?;
-        self.store.heartbeat(actor, self.config.lease_seconds).await
-    }
-
     fn require_available(&self) -> Result<(), EnvironmentError> {
         if self.is_available() {
             Ok(())

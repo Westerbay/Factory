@@ -97,23 +97,6 @@ export interface paths {
     patch?: never
     trace?: never
   }
-  "/api/environment/heartbeat": {
-    parameters: {
-      query?: never
-      header?: never
-      path?: never
-      cookie?: never
-    }
-    get?: never
-    put?: never
-    /** @description Renew an existing unexpired running lease. Never starts or revives a stopped environment. */
-    post: operations["heartbeatEnvironment"]
-    delete?: never
-    options?: never
-    head?: never
-    patch?: never
-    trace?: never
-  }
   "/api/environment/start": {
     parameters: {
       query?: never
@@ -123,7 +106,7 @@ export interface paths {
     }
     get?: never
     put?: never
-    /** @description Persist a running intent and idle lease for the current user. Opposite intents are queued by generation. */
+    /** @description Persist a persistent running intent for the current user. Opposite intents are queued by generation. */
     post: operations["startEnvironment"]
     delete?: never
     options?: never
@@ -140,7 +123,7 @@ export interface paths {
     }
     get?: never
     put?: never
-    /** @description Persist a stopped intent and invalidate the lease; no volume is removed. */
+    /** @description Persist a stopped intent; no volume is removed. */
     post: operations["stopEnvironment"]
     delete?: never
     options?: never
@@ -227,8 +210,6 @@ export interface components {
     EnvironmentResponse: {
       /** @description Bounded public error code; never includes provider responses or resource names. */
       errorCode?: string | null
-      /** Format: date-time */
-      idleExpiresAt?: string | null
       /** Format: date-time */
       observedAt?: string | null
       status: components["schemas"]["EnvironmentStatus"]
@@ -667,83 +648,6 @@ export interface operations {
       }
     }
   }
-  heartbeatEnvironment: {
-    parameters: {
-      query?: never
-      header: {
-        /** @description Session CSRF token. Exact frontend Origin and an empty body are required. */
-        "X-CSRF-Token": string
-      }
-      path?: never
-      cookie?: never
-    }
-    requestBody?: never
-    responses: {
-      /** @description Lease renewed */
-      200: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          "application/json": components["schemas"]["EnvironmentResponse"]
-        }
-      }
-      /** @description Body must be empty */
-      400: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          "application/json": components["schemas"]["ApiError"]
-        }
-      }
-      /** @description Active session required */
-      401: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          "application/json": components["schemas"]["ApiError"]
-        }
-      }
-      /** @description Origin or CSRF rejected */
-      403: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          "application/json": components["schemas"]["ApiError"]
-        }
-      }
-      /** @description No renewable running lease */
-      409: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          "application/json": components["schemas"]["ApiError"]
-        }
-      }
-      /** @description Rate limit */
-      429: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          "application/json": components["schemas"]["ApiError"]
-        }
-      }
-      /** @description Environment service unavailable */
-      503: {
-        headers: {
-          [name: string]: unknown
-        }
-        content: {
-          "application/json": components["schemas"]["ApiError"]
-        }
-      }
-    }
-  }
   startEnvironment: {
     parameters: {
       query?: never
@@ -792,7 +696,7 @@ export interface operations {
           "application/json": components["schemas"]["ApiError"]
         }
       }
-      /** @description Capacity reached or conflicting intent */
+      /** @description Conflicting intent */
       409: {
         headers: {
           [name: string]: unknown

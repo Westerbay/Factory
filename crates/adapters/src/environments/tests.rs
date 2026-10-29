@@ -14,7 +14,7 @@ use std::{
 use uuid::Uuid;
 
 fn metadata() -> PreparationMetadata {
-    serde_json::from_value(json!({"schemaVersion":1,"installationId":Uuid::new_v4().to_string(),"imageId":format!("sha256:{}", "a".repeat(64)),"policyVersion":"1"})).unwrap()
+    serde_json::from_value(json!({"schemaVersion":1,"installationId":Uuid::new_v4().to_string(),"imageId":format!("sha256:{}", "a".repeat(64)),"policyVersion":"2"})).unwrap()
 }
 fn environment(metadata: &PreparationMetadata) -> Environment {
     let id = Uuid::new_v4();
@@ -34,16 +34,14 @@ fn environment(metadata: &PreparationMetadata) -> Environment {
         volume_name: format!("{name}-home"),
         container_name: name,
         image_id: metadata.image_id().into(),
-        policy_version: "1".into(),
-        capacity_reserved: true,
-        lease_expires_at: None,
+        policy_version: "2".into(),
         observed_at: None,
         error_code: None,
         next_reconcile_at: Utc::now(),
     }
 }
-fn policy() -> ResourcePolicy {
-    ResourcePolicy::new(1024, 1.0, 128).unwrap()
+fn policy() -> IsolationPolicy {
+    IsolationPolicy
 }
 fn volume(env: &Environment) -> Value {
     json!({"Name":env.volume_name,"Driver":"local","Mountpoint":"/fixture/home","Labels":policy::labels(env),"Scope":"local","Options":{}})
@@ -263,16 +261,19 @@ async fn old_policy_owned_container_can_still_be_stopped_by_immutable_id() {
 }
 
 #[test]
-fn full_policy_rejects_unsafe_mutations_and_overflow() {
+fn full_policy_rejects_unsafe_mutations_and_finite_resource_ceilings() {
     let env = environment(&metadata());
     let base = container(&env);
     assert!(policy().verify_container(&env, &base).is_ok());
+    let mut normalized = base.clone();
+    normalized["HostConfig"]["PidsLimit"] = Value::Null;
+    assert!(policy().verify_container(&env, &normalized).is_ok());
     for (path, value) in [
         ("/HostConfig/Privileged", json!(true)),
-        ("/HostConfig/Memory", json!(0)),
-        ("/HostConfig/MemorySwap", json!(-1)),
-        ("/HostConfig/NanoCpus", json!(0)),
-        ("/HostConfig/PidsLimit", json!(-1)),
+        ("/HostConfig/Memory", json!(1073741824)),
+        ("/HostConfig/MemorySwap", json!(1073741824)),
+        ("/HostConfig/NanoCpus", json!(1000000000)),
+        ("/HostConfig/PidsLimit", json!(128)),
         ("/HostConfig/ReadonlyRootfs", json!(false)),
         ("/HostConfig/NetworkMode", json!("host")),
         ("/HostConfig/CapDrop", json!([])),
@@ -290,16 +291,6 @@ fn full_policy_rejects_unsafe_mutations_and_overflow() {
             Err(EnvironmentError::PolicyMismatch),
             "{path}"
         );
-    }
-    for (memory, cpus, pids) in [
-        (0, 1.0, 128),
-        (u64::MAX, 1.0, 128),
-        (1, f64::NAN, 1),
-        (1, f64::INFINITY, 1),
-        (1, 0.0, 1),
-        (1, 1.0, u64::MAX),
-    ] {
-        assert!(ResourcePolicy::new(memory, cpus, pids).is_err());
     }
 }
 
@@ -376,7 +367,7 @@ async fn create_conflict_requires_reinspection_and_never_starts_foreign_containe
     let env = environment(&metadata);
     let mut foreign = container(&env);
     foreign["Config"]["Labels"]["io.factory.user"] = json!(Uuid::new_v4().to_string());
-    let image = json!({"Id":env.image_id,"Os":"linux","Config":{"User":"10000:10000","Labels":{"io.factory.environment.image":"1"}}});
+    let image = json!({"Id":env.image_id,"Os":"linux","Config":{"User":"10000:10000","Labels":{"io.factory.environment.image":POLICY_VERSION}}});
     let fixture = fixture(
         metadata,
         vec![
@@ -421,7 +412,7 @@ async fn create_conflict_requires_reinspection_and_never_starts_foreign_containe
 fn preparation_rejects_tag_and_oversized_metadata() {
     let directory = std::env::temp_dir().join(format!("factory-env-metadata-{}", Uuid::new_v4()));
     std::fs::create_dir(&directory).unwrap();
-    for bytes in [json!({"schemaVersion":1,"installationId":Uuid::new_v4().to_string(),"imageId":"alpine:latest","policyVersion":"1"}).to_string(), " ".repeat(4097)] {
+    for bytes in [json!({"schemaVersion":1,"installationId":Uuid::new_v4().to_string(),"imageId":"alpine:latest","policyVersion":"2"}).to_string(), " ".repeat(4097)] {
         std::fs::write(directory.join("prepared.json"),bytes).unwrap();
         assert!(matches!(PreparationMetadata::load(&directory),Err(EnvironmentError::InvalidConfiguration)));
     }
@@ -443,7 +434,7 @@ async fn supervisor_loss_after_creation_prevents_the_later_start_request() {
         json!({"Id":"b".repeat(64), "Warnings":[]}),
     );
     create_reply.5 = Some(permission.clone());
-    let image = json!({"Id":env.image_id,"Os":"linux","Config":{"User":"10000:10000","Labels":{"io.factory.environment.image":"1"}}});
+    let image = json!({"Id":env.image_id,"Os":"linux","Config":{"User":"10000:10000","Labels":{"io.factory.environment.image":POLICY_VERSION}}});
     let mut fixture = fixture(
         metadata,
         vec![
@@ -523,7 +514,7 @@ async fn lost_supervisor_prevents_volume_creation_and_stop_mutations() {
 async fn lost_supervisor_prevents_container_creation_after_read_only_checks() {
     let metadata = metadata();
     let env = environment(&metadata);
-    let image = json!({"Id":env.image_id,"Os":"linux","Config":{"User":"10000:10000","Labels":{"io.factory.environment.image":"1"}}});
+    let image = json!({"Id":env.image_id,"Os":"linux","Config":{"User":"10000:10000","Labels":{"io.factory.environment.image":POLICY_VERSION}}});
     let mut fixture = fixture(
         metadata,
         vec![
@@ -568,14 +559,13 @@ fn installation_lock_remains_exclusive_until_guard_drops() {
 
 #[tokio::test]
 #[ignore = "explicit local Docker fixture: FACTORY_ENV_TEST_DIRECTORY must contain a prepared image"]
-async fn real_docker_persistence_isolation_and_limits() {
+async fn real_docker_persistence_isolation_and_unlimited_resources() {
     let directory =
         std::env::var("FACTORY_ENV_TEST_DIRECTORY").expect("explicit fixture directory required");
     let prepared = PreparationMetadata::load(&directory).unwrap();
     // Every test gets a fresh installation identity, even when reusing a prepared image.
-    let metadata: PreparationMetadata=serde_json::from_value(json!({"schemaVersion":1,"installationId":Uuid::new_v4().to_string(),"imageId":prepared.image_id(),"policyVersion":"1"})).unwrap();
-    let runtime =
-        DockerEnvironmentRuntime::connect(metadata.clone(), policy(), Arc::new(|| true)).unwrap();
+    let metadata: PreparationMetadata=serde_json::from_value(json!({"schemaVersion":1,"installationId":Uuid::new_v4().to_string(),"imageId":prepared.image_id(),"policyVersion":"2"})).unwrap();
+    let runtime = DockerEnvironmentRuntime::connect(metadata.clone(), Arc::new(|| true)).unwrap();
     let environments = [environment(&metadata), environment(&metadata)];
     let result = exercise_real(&runtime, &environments, &directory).await;
     // Exact generated resources only, with independent ownership verification before cleanup.
@@ -618,7 +608,14 @@ async fn exercise_real(
 ) -> Result<(), Box<dyn std::error::Error>> {
     for env in environments {
         runtime.create_volume(env).await?;
-        runtime.start(env).await?;
+        if let Err(error) = runtime.start(env).await {
+            if let Some(container) = runtime.container(env).await? {
+                for key in ["Memory", "MemorySwap", "NanoCpus", "PidsLimit"] {
+                    eprintln!("owned fixture {key}: {}", container["HostConfig"][key]);
+                }
+            }
+            return Err(error.into());
+        }
         if runtime.inspect(env).await?.state != ObservedState::Running {
             return Err("not running".into());
         }
@@ -640,7 +637,7 @@ async fn exercise_real(
     fixture_exec(
         directory,
         &first.container_name,
-        "test \"$(cat /home/factory/Documents/witness)\" = persistent; test \"$(id -u)\" = 10000; test \"$(cat /sys/fs/cgroup/memory.max)\" = 1073741824; test \"$(cat /sys/fs/cgroup/pids.max)\" = 128; test \"$(cat /sys/fs/cgroup/memory.swap.max)\" = 0; test \"$(cat /sys/fs/cgroup/cpu.max)\" = '100000 100000'; test ! -w /etc/passwd; test ! -S /var/run/docker.sock",
+        "test \"$(cat /home/factory/Documents/witness)\" = persistent; test \"$(id -u)\" = 10000; test \"$(cat /sys/fs/cgroup/memory.max)\" = max; test \"$(cat /sys/fs/cgroup/pids.max)\" = max; test \"$(cat /sys/fs/cgroup/memory.swap.max)\" = max; test \"$(cat /sys/fs/cgroup/cpu.max)\" = 'max 100000'; test ! -w /etc/passwd; test ! -S /var/run/docker.sock",
     )?;
     let mut foreign = first.clone();
     foreign.user_id = Uuid::new_v4();

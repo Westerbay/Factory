@@ -36,8 +36,6 @@ pub enum ProvisioningState {
 pub enum EnvironmentError {
     #[error("An active session is required")]
     Unauthorized,
-    #[error("Environment capacity is reached")]
-    CapacityReached,
     #[error("The environment changed; refresh and retry")]
     Conflict,
     #[error("Environment service is unavailable")]
@@ -60,7 +58,6 @@ impl EnvironmentError {
     pub fn code(self) -> &'static str {
         match self {
             Self::Unauthorized => "unauthorized",
-            Self::CapacityReached => "capacity_reached",
             Self::Conflict => "conflict",
             Self::Unavailable => "unavailable",
             Self::InvalidConfiguration => "invalid_configuration",
@@ -73,7 +70,7 @@ impl EnvironmentError {
     }
 }
 
-/// Internal record. HTTP must project only status, observation time, lease and error code.
+/// Internal record. HTTP must project only status, observation time and error code.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Environment {
     pub id: Uuid,
@@ -87,8 +84,6 @@ pub struct Environment {
     pub container_name: String,
     pub image_id: String,
     pub policy_version: String,
-    pub capacity_reserved: bool,
-    pub lease_expires_at: Option<DateTime<Utc>>,
     pub observed_at: Option<DateTime<Utc>>,
     pub error_code: Option<EnvironmentError>,
     pub next_reconcile_at: DateTime<Utc>,
@@ -99,15 +94,11 @@ pub struct EnvironmentStart {
     pub installation_id: Uuid,
     pub image_id: String,
     pub policy_version: String,
-    pub max_running: u32,
-    pub lease_seconds: u32,
 }
 
 impl EnvironmentStart {
     pub fn validate(&self) -> Result<(), EnvironmentError> {
         if self.installation_id.is_nil()
-            || self.max_running == 0
-            || self.lease_seconds == 0
             || self.image_id.is_empty()
             || self.image_id.len() > 256
             || self.policy_version.is_empty()
@@ -140,55 +131,4 @@ pub struct EnvironmentObservation {
     pub error: Option<EnvironmentError>,
     /// True only after successful ownership-verified volume inspection/creation.
     pub volume_confirmed: bool,
-}
-
-impl EnvironmentObservation {
-    pub fn confirms_stopped(self) -> bool {
-        self.error.is_none()
-            && matches!(
-                self.state,
-                ObservedState::NotCreated | ObservedState::Stopped
-            )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn uncertain_or_in_progress_observations_never_release_capacity() {
-        for state in [
-            ObservedState::Starting,
-            ObservedState::Running,
-            ObservedState::Stopping,
-            ObservedState::Error,
-            ObservedState::Unavailable,
-        ] {
-            assert!(
-                !EnvironmentObservation {
-                    state,
-                    error: None,
-                    volume_confirmed: false
-                }
-                .confirms_stopped()
-            );
-        }
-        assert!(
-            !EnvironmentObservation {
-                state: ObservedState::Stopped,
-                error: Some(EnvironmentError::Timeout),
-                volume_confirmed: true
-            }
-            .confirms_stopped()
-        );
-        assert!(
-            EnvironmentObservation {
-                state: ObservedState::NotCreated,
-                error: None,
-                volume_confirmed: false
-            }
-            .confirms_stopped()
-        );
-    }
 }

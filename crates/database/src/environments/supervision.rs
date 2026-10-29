@@ -68,7 +68,7 @@ pub(super) async fn batch(
     if !(1..=100).contains(&limit) {
         return Err(EnvironmentError::InvalidConfiguration);
     }
-    let users: Vec<Uuid> = sqlx::query_scalar("SELECT user_id FROM factory_identity.environments WHERE installation_id=$1 AND (next_reconcile_at<=clock_timestamp() OR (desired_state='running' AND lease_expires_at<=clock_timestamp())) ORDER BY next_reconcile_at,id LIMIT $2")
+    let users: Vec<Uuid> = sqlx::query_scalar("SELECT user_id FROM factory_identity.environments WHERE installation_id=$1 AND next_reconcile_at<=clock_timestamp() ORDER BY next_reconcile_at,id LIMIT $2")
         .bind(installation).bind(i64::from(limit)).fetch_all(pool).await.map_err(unavailable)?;
     let mut records = Vec::with_capacity(users.len());
     for user_id in users {
@@ -79,7 +79,7 @@ pub(super) async fn batch(
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(unavailable)?;
-        sqlx::query("UPDATE factory_identity.environments SET desired_state='stopped',lease_expires_at=NULL,generation=generation+1,next_reconcile_at=clock_timestamp(),updated_at=clock_timestamp() WHERE user_id=$1 AND desired_state='running' AND ($2<>'active' OR lease_expires_at<=clock_timestamp())")
+        sqlx::query("UPDATE factory_identity.environments SET desired_state='stopped',generation=generation+1,next_reconcile_at=clock_timestamp(),updated_at=clock_timestamp() WHERE user_id=$1 AND desired_state='running' AND $2<>'active'")
             .bind(user_id).bind(status).execute(&mut *tx).await.map_err(unavailable)?;
         let row =
             sqlx::query("SELECT * FROM factory_identity.environments WHERE user_id=$1 FOR UPDATE")

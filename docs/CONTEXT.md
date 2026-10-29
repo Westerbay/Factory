@@ -18,9 +18,10 @@ background, with an explicit reload action for each open tab.
 Active users can start, inspect and stop their own local Docker environment from the
 member page. The first start creates a private persistent home volume; creating or
 activating a user does not create a container. The operator explicitly prepares a common
-image first. A visible member page renews the idle lease; expiration and suspension
-request a stop while the API and Docker are available. There is no independent watchdog
-when the API is stopped, and named volumes have no portable disk quota.
+image first. Environments keep running after the browser closes or login sessions expire.
+Only an explicit stop or account suspension requests a stop, while the API and Docker
+are available. Factory imposes no count, CPU, memory or process quota; host and Docker
+Desktop limits still apply. Named volumes have no portable disk quota.
 
 The intended next stages connect GitHub projects and a personal ChatGPT/Codex
 subscription, and provide a terminal with global skills. These capabilities are not

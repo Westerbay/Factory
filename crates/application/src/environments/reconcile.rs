@@ -3,7 +3,7 @@ use factory_core::environments::*;
 use std::sync::Arc;
 
 const BATCH_SIZE: u32 = 32;
-// Each attempt is bounded by the runtime port; retry no faster than the lease sweep.
+// Each attempt is bounded by the runtime port; retry no faster than the reconciliation interval.
 const RECHECK_SECONDS: u32 = 15;
 
 /// The host selects work independently of runtime effects and allows at most one
@@ -35,7 +35,7 @@ impl EnvironmentReconciler {
         })
     }
 
-    /// Repair expired/suspended intent and select bounded due work without Docker.
+    /// Repair suspended intent and select bounded due work without Docker.
     /// Run this sweep even while other environments have runtime work in flight.
     pub async fn next_batch(&mut self) -> Result<Vec<Environment>, EnvironmentError> {
         self.check_guard().await?;
@@ -59,7 +59,7 @@ impl EnvironmentReconciler {
             return Err(EnvironmentError::OwnershipConflict);
         }
         if let Err(error) = self.reconcile(&environment).await {
-            // Never record success or release capacity after ownership is lost.
+            // Never record success after ownership is lost.
             if self.availability.is_failed() {
                 return Err(EnvironmentError::Unavailable);
             }

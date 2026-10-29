@@ -15,7 +15,7 @@ can activate that account, after which the member must begin a new sign-in. Hand
 display names identify people visually but never determine authorization.
 
 The member home offers Start environment, Stop environment and Refresh for the user's
-own private local environment, with observed status and idle-lease expiry. Repository
+own private local environment, with observed status and observation time. Repository
 selection, cloning, terminal, agent execution, history and skills are not available there.
 GitHub sign-in does not request repository permissions or save a provider access token.
 
@@ -32,19 +32,19 @@ inspection, with the last observation shown; reading or refreshing status never 
 an environment. Users cannot target another user's environment. The administrator's
 access controls do not provide environment browsing or lifecycle controls for others.
 
-While the page is visible, online and authenticated, Starting/Running environments
-renew their lease on return and at least every minute before expiry. By default,
-15 minutes without renewal requests a stop.
-An explicit stop cancels the lease, and a late heartbeat cannot reverse it. Sign-out
-stops renewal. Suspension immediately revokes access and records a stop request; actual
-container shutdown follows asynchronously. These stops require the API and Docker to
-be available; API shutdown does not guarantee container shutdown.
+Environments run independently of browser presence. Closing the page, going offline,
+signing out or reaching session expiry does not stop them. Opening Factory the next day
+reads their current state without renewing or recreating them. Only an explicit stop or
+account suspension records a stop request. Suspension immediately revokes access; actual
+container shutdown follows asynchronously while the API and Docker are available.
+API shutdown does not stop containers, and restarting the API resumes supervision.
+This does not guarantee task completion across host outages or process failures.
 
-The default local capacity is two reserved environments. Starting, Running, Stopping and
-uncertain states retain a slot until inspection confirms the container stopped or absent.
-A capacity refusal does not queue a later start. Containers have bounded CPU, memory and
-process counts, no network access and a read-only root filesystem. Persistent named
-volumes have no portable disk quota. This increment supplies no terminal or file editor.
+Factory imposes no limit on the number of started environments, CPU, memory or process
+counts. They share available host resources; Docker Desktop and operating-system limits
+still apply. Containers retain no network access, a non-root user and a read-only root
+filesystem. Temporary storage and logs remain bounded; persistent named volumes have no
+portable disk quota. This increment supplies no terminal or file editor.
 
 ## Access and sessions
 

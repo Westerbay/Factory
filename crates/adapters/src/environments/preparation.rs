@@ -7,7 +7,7 @@ use std::{
 };
 use uuid::Uuid;
 
-pub const POLICY_VERSION: &str = "1";
+pub const POLICY_VERSION: &str = "2";
 
 /// Trusted operator preparation, read once. Never discovers Docker contexts or credentials.
 #[derive(Clone, Debug, Deserialize)]
