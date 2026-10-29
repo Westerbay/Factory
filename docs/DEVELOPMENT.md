@@ -281,6 +281,9 @@ the immutable image ID/policy in `prepared.json`. Preserve this ignored director
 its resources exist; do not regenerate its identity or delete `supervisor.lock` to bypass
 a conflict. Repeated preparation retains the installation identity. Existing environments
 keep their recorded image and policy; preparation does not migrate or replace them.
+Each Docker CLI invocation uses its own temporary configuration directory. Cleanup
+removes that directory and generated Buildx metadata without following symbolic links;
+it does not use or remove the operator's Docker configuration.
 
 Restart the API after preparation or configuration changes. Neither API startup, sign-in,
 account activation nor status reads create user containers. The member's first explicit
@@ -321,9 +324,9 @@ watchdog. Stop environments and wait for confirmed Stopped before intentionally 
 the API when containers should not remain running.
 
 The runtime uses Bollard against the local Linux socket or Windows Docker named pipe,
-independently of `DOCKER_HOST` or stored contexts. Real environment integration has been
-tested on Windows Docker Desktop with Linux containers. Linux Docker Engine and WSL
-environment behavior remain unverified; their installations and checkout identities must
+independently of `DOCKER_HOST` or stored contexts. CI runs real environment integration on
+Ubuntu with Docker Engine; local validation also covers Windows Docker Desktop with Linux
+containers. WSL behavior remains unverified, and installation/checkout identities must
 not be assumed interchangeable. Integration commands create their own labeled fixtures
 and verify ownership before cleanup; they never prune or remove user volumes.
 
