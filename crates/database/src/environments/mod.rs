@@ -32,13 +32,6 @@ impl EnvironmentStore for PgEnvironmentStore {
     async fn stop(&self, actor: EnvironmentActor) -> Result<Option<Environment>, EnvironmentError> {
         requests::stop(&self.pool, actor).await
     }
-    async fn heartbeat(
-        &self,
-        actor: EnvironmentActor,
-        lease_seconds: u32,
-    ) -> Result<Environment, EnvironmentError> {
-        requests::heartbeat(&self.pool, actor, lease_seconds).await
-    }
     async fn reconcile_batch(
         &self,
         installation_id: Uuid,
@@ -62,10 +55,10 @@ impl EnvironmentStore for PgEnvironmentStore {
         observation: EnvironmentObservation,
         retry_seconds: u32,
     ) -> Result<bool, EnvironmentError> {
-        let result = sqlx::query("UPDATE factory_identity.environments SET observed_state=$3,error_code=$4,observed_at=clock_timestamp(),next_reconcile_at=clock_timestamp()+make_interval(secs => $5),updated_at=clock_timestamp(),provisioning_state=CASE WHEN $6 AND provisioning_state='volume_creating' THEN 'volume_ready' ELSE provisioning_state END,capacity_reserved=CASE WHEN $7 AND desired_state='stopped' THEN false ELSE capacity_reserved END WHERE id=$1 AND generation=$2")
+        let result = sqlx::query("UPDATE factory_identity.environments SET observed_state=$3,error_code=$4,observed_at=clock_timestamp(),next_reconcile_at=clock_timestamp()+make_interval(secs => $5),updated_at=clock_timestamp(),provisioning_state=CASE WHEN $6 AND provisioning_state='volume_creating' THEN 'volume_ready' ELSE provisioning_state END WHERE id=$1 AND generation=$2")
             .bind(id).bind(generation).bind(mapping::observed(observation.state))
             .bind(observation.error.map(EnvironmentError::code)).bind(f64::from(retry_seconds))
-            .bind(observation.volume_confirmed).bind(observation.confirms_stopped())
+            .bind(observation.volume_confirmed)
             .execute(&self.pool).await.map_err(unavailable)?;
         Ok(result.rows_affected() == 1)
     }

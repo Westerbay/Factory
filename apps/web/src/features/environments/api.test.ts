@@ -18,14 +18,11 @@ async function apiWith(response: Response) {
   return { ...(await import("./api")), fetch }
 }
 
-it.each(["start", "stop", "heartbeat"] as const)(
+it.each(["start", "stop"] as const)(
   "sends %s with credentials, CSRF and no body",
   async (action) => {
     const api = await apiWith(
-      Response.json(
-        { status: "starting" },
-        { status: action === "heartbeat" ? 200 : 202 }
-      )
+      Response.json({ status: "starting" }, { status: 202 })
     )
     await api.changeEnvironment(
       action,
@@ -57,7 +54,6 @@ it("accepts unavailable and nullable dates without sending a mutation", async ()
   const body = {
     status: "unavailable",
     observedAt: null,
-    idleExpiresAt: null,
     errorCode: "unavailable",
   }
   const api = await apiWith(Response.json(body))

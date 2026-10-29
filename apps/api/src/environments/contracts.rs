@@ -20,7 +20,6 @@ pub enum EnvironmentStatus {
 pub struct EnvironmentResponse {
     pub status: EnvironmentStatus,
     pub observed_at: Option<DateTime<Utc>>,
-    pub idle_expires_at: Option<DateTime<Utc>>,
     /// Bounded public error code; never includes provider responses or resource names.
     pub error_code: Option<String>,
 }
@@ -30,7 +29,6 @@ impl EnvironmentResponse {
         let mut response = Self {
             status: EnvironmentStatus::NotCreated,
             observed_at: environment.and_then(|e| e.observed_at),
-            idle_expires_at: environment.and_then(|e| e.lease_expires_at),
             error_code: environment.and_then(|e| e.error_code.map(|error| error.code().to_owned())),
         };
         if !available {

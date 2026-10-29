@@ -7,6 +7,9 @@ use uuid::Uuid;
 
 const HOME: &str = "/home/factory";
 const USER: &str = "10000:10000";
+// Docker can normalize PidsLimit=-1 to null, leaving systemd's DefaultTasksMax active.
+// The OCI annotation sets infinity for this container's scope without changing the host.
+const SYSTEMD_UNLIMITED_TASKS: &str = "uint64 18446744073709551615";
 const TMPFS: &str = "rw,noexec,nosuid,nodev,size=67108864,mode=1777";
 const MASKED_PATHS: &[&str] = &[
     "/proc/acpi",
@@ -31,34 +34,9 @@ const READONLY_PATHS: &[&str] = &[
 ];
 
 #[derive(Clone, Debug)]
-pub struct ResourcePolicy {
-    memory: i64,
-    nano_cpus: i64,
-    pids: i64,
-}
+pub struct IsolationPolicy;
 
-impl ResourcePolicy {
-    pub fn new(memory_mib: u64, cpus: f64, pids: u64) -> Result<Self, EnvironmentError> {
-        let memory = memory_mib
-            .checked_mul(1024 * 1024)
-            .and_then(|v| i64::try_from(v).ok());
-        let nano_cpus = cpus * 1_000_000_000.0;
-        let pids = i64::try_from(pids).ok();
-        if memory.is_none_or(|v| v <= 0)
-            || pids.is_none_or(|v| v <= 0)
-            || !nano_cpus.is_finite()
-            || nano_cpus < 1.0
-            || nano_cpus >= i64::MAX as f64
-        {
-            return Err(EnvironmentError::InvalidConfiguration);
-        }
-        Ok(Self {
-            memory: memory.unwrap(),
-            nano_cpus: nano_cpus.round() as i64,
-            pids: pids.unwrap(),
-        })
-    }
-
+impl IsolationPolicy {
     pub(super) fn create_body(&self, env: &Environment) -> ContainerCreateBody {
         serde_json::from_value(json!({
             "Image": env.image_id, "User": USER, "WorkingDir": "/home/factory/Documents",
@@ -66,8 +44,9 @@ impl ResourcePolicy {
             "Entrypoint": ["/bin/sleep"], "Cmd": ["infinity"], "NetworkDisabled": true,
             "Labels": labels(env),
             "HostConfig": {
-                "Memory": self.memory, "MemorySwap": self.memory, "NanoCpus": self.nano_cpus,
-                "PidsLimit": self.pids, "ReadonlyRootfs": true, "Init": true,
+                "Memory": 0, "MemorySwap": 0, "NanoCpus": 0,
+                "PidsLimit": -1, "ReadonlyRootfs": true, "Init": true,
+                "Annotations": {"org.systemd.property.TasksMax": SYSTEMD_UNLIMITED_TASKS},
                 "CapDrop": ["ALL"], "SecurityOpt": ["no-new-privileges"],
                 "NetworkMode": "none", "Privileged": false, "PublishAllPorts": false,
                 "IpcMode": "private", "CgroupnsMode": "private", "AutoRemove": false,
@@ -108,7 +87,7 @@ impl ResourcePolicy {
             "Memory",
             "MemorySwap",
             "NanoCpus",
-            "PidsLimit",
+            "Annotations",
             "ReadonlyRootfs",
             "Init",
             "CapDrop",
@@ -127,6 +106,10 @@ impl ResourcePolicy {
             if host[key] != expected["HostConfig"][key] {
                 return Err(EnvironmentError::PolicyMismatch);
             }
+        }
+        // Docker normalizes an explicitly unlimited PID limit to null on inspect.
+        if !host["PidsLimit"].is_null() && host["PidsLimit"] != -1 {
+            return Err(EnvironmentError::PolicyMismatch);
         }
         let security = &host["SecurityOpt"];
         if security != &json!(["no-new-privileges"])

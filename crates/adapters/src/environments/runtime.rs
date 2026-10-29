@@ -1,4 +1,4 @@
-use super::{PreparationMetadata, ResourcePolicy, policy::*};
+use super::{IsolationPolicy, PreparationMetadata, policy::*};
 use async_trait::async_trait;
 use bollard::{
     API_DEFAULT_VERSION, Docker, errors::Error, models::VolumeCreateRequest, query_parameters::*,
@@ -13,7 +13,7 @@ const OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct DockerEnvironmentRuntime {
     pub(super) docker: Docker,
     pub(super) metadata: PreparationMetadata,
-    pub(super) policy: ResourcePolicy,
+    pub(super) policy: IsolationPolicy,
     pub(super) timeout: Duration,
     pub(super) mutation_permitted: Arc<dyn Fn() -> bool + Send + Sync>,
 }
@@ -21,7 +21,6 @@ pub struct DockerEnvironmentRuntime {
 impl DockerEnvironmentRuntime {
     pub fn connect(
         metadata: PreparationMetadata,
-        policy: ResourcePolicy,
         mutation_permitted: Arc<dyn Fn() -> bool + Send + Sync>,
     ) -> Result<Self, EnvironmentError> {
         metadata.validate()?;
@@ -34,7 +33,7 @@ impl DockerEnvironmentRuntime {
         Ok(Self {
             docker: docker.map_err(map_error)?,
             metadata,
-            policy,
+            policy: IsolationPolicy,
             timeout: OPERATION_TIMEOUT,
             mutation_permitted,
         })

@@ -202,3 +202,61 @@ async fn environment_upgrade_preserves_identity_and_rolls_back_partial_ddl() {
     db.close().await;
     sql.close().await;
 }
+
+#[tokio::test]
+#[ignore = "requires the explicitly owned PostgreSQL integration fixture"]
+async fn persistent_upgrade_preserves_existing_environment_records() {
+    let (db, sql) = fixture().await;
+    sqlx::raw_sql(
+        "DROP SCHEMA IF EXISTS factory_identity CASCADE; CREATE SCHEMA factory_identity;",
+    )
+    .execute(&sql)
+    .await
+    .unwrap();
+    let all = sqlx::migrate!("./migrations");
+    let legacy = sqlx::migrate::Migrator {
+        migrations: std::borrow::Cow::Owned(
+            all.iter().filter(|m| m.version <= 2).cloned().collect(),
+        ),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    let mut connection = sql.acquire().await.unwrap();
+    sqlx::query("SET search_path TO factory_identity")
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+    legacy.run(&mut *connection).await.unwrap();
+    drop(connection);
+    let user = uuid::Uuid::new_v4();
+    let environment = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO factory_identity.users(id,display_name,role,status,access_enabled_at) VALUES($1,'Preserved user','member','active',clock_timestamp())")
+        .bind(user).execute(&sql).await.unwrap();
+    sqlx::query("INSERT INTO factory_identity.environments(id,user_id,installation_id,desired_state,observed_state,volume_name,container_name,image_id,policy_version,capacity_reserved,lease_expires_at) VALUES($1,$2,$3,'running','running','preserved-home','preserved-container','sha256:preserved','1',true,clock_timestamp()-interval '1 day')")
+        .bind(environment).bind(user).bind(uuid::Uuid::new_v4()).execute(&sql).await.unwrap();
+    let before: String = sqlx::query_scalar(
+        "SELECT row_to_json(e)::text FROM factory_identity.environments e WHERE id=$1",
+    )
+    .bind(environment)
+    .fetch_one(&sql)
+    .await
+    .unwrap();
+    assert_eq!(db.ready().await.unwrap(), Readiness::Pending);
+    db.migrate().await.unwrap();
+    assert_eq!(db.ready().await.unwrap(), Readiness::Ready);
+    let after: String = sqlx::query_scalar(
+        "SELECT row_to_json(e)::text FROM factory_identity.environments e WHERE id=$1",
+    )
+    .bind(environment)
+    .fetch_one(&sql)
+    .await
+    .unwrap();
+    assert_eq!(
+        before, after,
+        "migration must preserve existing user storage identities and intent"
+    );
+    // Persistent running intent no longer requires either legacy field.
+    sqlx::query("UPDATE factory_identity.environments SET capacity_reserved=false,lease_expires_at=NULL WHERE id=$1")
+        .bind(environment).execute(&sql).await.unwrap();
+    db.close().await;
+    sql.close().await;
+}

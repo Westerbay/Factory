@@ -58,13 +58,10 @@ impl EnvironmentHost {
         let directory = config.workspace().join(".factory/environments");
         let metadata = PreparationMetadata::load(&directory)?;
         let installation = Arc::new(InstallationGuard::acquire(&directory)?);
-        let settings = config.environments();
         let request = EnvironmentStart {
             installation_id: metadata.installation_id(),
             image_id: metadata.image_id().to_owned(),
             policy_version: metadata.policy_version().to_owned(),
-            max_running: settings.max_running,
-            lease_seconds: settings.lease_seconds,
         };
         let guard = Arc::new(Mutex::new(
             database
@@ -75,7 +72,6 @@ impl EnvironmentHost {
         let mutation_availability = availability.clone();
         let runtime = Arc::new(DockerEnvironmentRuntime::connect(
             metadata,
-            settings.resources.clone(),
             Arc::new(move || !mutation_availability.is_failed()),
         )?);
         let store = Arc::new(database.environment_store());

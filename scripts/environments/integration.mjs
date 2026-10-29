@@ -35,7 +35,7 @@ try {
       "--locked",
       "-p",
       "factory-adapters",
-      "real_docker_persistence_isolation_and_limits",
+      "real_docker_persistence_isolation_and_unlimited_resources",
       "--",
       "--ignored",
     ],

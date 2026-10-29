@@ -4,7 +4,7 @@ import { apiClient, ApiFailure } from "../../lib/api/client"
 import type { components } from "../../lib/api/schema"
 
 export type Environment = components["schemas"]["EnvironmentResponse"]
-export type EnvironmentAction = "start" | "stop" | "heartbeat"
+export type EnvironmentAction = "start" | "stop"
 
 const problemMessages: Record<string, string> = {
   volume_missing:
@@ -38,7 +38,6 @@ const environmentSchema: z.ZodType<Environment> = z.object({
     "unavailable",
   ]),
   observedAt: z.iso.datetime({ offset: true }).nullish(),
-  idleExpiresAt: z.iso.datetime({ offset: true }).nullish(),
   errorCode: z.string().max(100).nullish(),
 })
 
@@ -82,10 +81,8 @@ export function environmentErrorMessage(error: unknown): string {
   if (error instanceof EnvironmentFailure) {
     const problem = environmentProblem(error.code)
     if (problem) return problem
-    if (error.code === "capacity_reached")
-      return "All environment slots are in use. Try starting again later."
     if (error.status === 409)
-      return "The environment changed or its idle lease expired. Refresh its status before trying again."
+      return "The environment changed. Refresh its status before trying again."
     if (error.status === 429)
       return "Too many requests. Wait a moment, then refresh."
     if (error.status === 503)

@@ -3,7 +3,7 @@ mod policy;
 mod preparation;
 mod runtime;
 
-pub use policy::ResourcePolicy;
+pub use policy::IsolationPolicy;
 pub use preparation::{InstallationGuard, POLICY_VERSION, PreparationMetadata};
 pub use runtime::DockerEnvironmentRuntime;
 

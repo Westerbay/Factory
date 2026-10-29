@@ -55,7 +55,7 @@ Existing databases need the additive environment migration through
 preparation leaves only environments unavailable when identity is otherwise ready.
 
 See [development](docs/DEVELOPMENT.md) for explicit local database setup, API
-configuration, [environment limits and lifecycle](docs/DEVELOPMENT.md#local-environments),
+configuration, [persistent environment lifecycle](docs/DEVELOPMENT.md#local-environments),
 built PWA inspection and human acceptance. No real OAuth application
 registration or credential setup is performed by installation or routine checks.
 

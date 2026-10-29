@@ -48,14 +48,12 @@ pub(super) fn environment(row: &PgRow) -> Result<Environment, EnvironmentError> 
         container_name: row.try_get("container_name").map_err(unavailable)?,
         image_id: row.try_get("image_id").map_err(unavailable)?,
         policy_version: row.try_get("policy_version").map_err(unavailable)?,
-        capacity_reserved: row.try_get("capacity_reserved").map_err(unavailable)?,
-        lease_expires_at: row.try_get("lease_expires_at").map_err(unavailable)?,
         observed_at: row.try_get("observed_at").map_err(unavailable)?,
         next_reconcile_at: row.try_get("next_reconcile_at").map_err(unavailable)?,
         error_code: error
             .map(|code| match code.as_str() {
                 "unauthorized" => Ok(EnvironmentError::Unauthorized),
-                "capacity_reached" => Ok(EnvironmentError::CapacityReached),
+                "capacity_reached" => Ok(EnvironmentError::Conflict),
                 "conflict" => Ok(EnvironmentError::Conflict),
                 "unavailable" => Ok(EnvironmentError::Unavailable),
                 "invalid_configuration" => Ok(EnvironmentError::InvalidConfiguration),

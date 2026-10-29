@@ -291,22 +291,23 @@ Start creates a container and named home volume; Stop retains `/home/factory` an
 `Documents` working directory. There is no user-volume deletion/reset command. Investigate
 a missing recorded volume or uncertain provisioning state instead of creating a substitute.
 
-Operator settings are validated by the
-[API configuration](../apps/api/src/config/mod.rs):
+Factory no longer configures a maximum number of environments or container CPU, memory
+or process ceilings. The old `FACTORY_ENV_MAX_RUNNING`, `FACTORY_ENV_IDLE_MINUTES`,
+`FACTORY_ENV_MEMORY_MIB`, `FACTORY_ENV_CPUS` and `FACTORY_ENV_PIDS` values are ignored and
+can be removed from operator configuration. Host and Docker Desktop limits still apply.
+Containers retain a fixed non-root user, read-only root, bounded tmpfs/logs, dropped
+capabilities, no-new-privileges, no network and no published ports. They receive neither
+host bind mounts, platform credentials nor the Docker socket. Named volumes have no
+portable disk quota. No repository clone, terminal or agent runs in this increment.
 
-| Variable                   | Default | Purpose                                                                         |
-| -------------------------- | ------- | ------------------------------------------------------------------------------- |
-| `FACTORY_ENV_MAX_RUNNING`  | `2`     | Maximum reserved local environments, including transitions and uncertain states |
-| `FACTORY_ENV_IDLE_MINUTES` | `15`    | Lease duration without a visible-page renewal                                   |
-| `FACTORY_ENV_MEMORY_MIB`   | `1024`  | Container memory ceiling; no additional swap                                    |
-| `FACTORY_ENV_CPUS`         | `1`     | Container CPU ceiling                                                           |
-| `FACTORY_ENV_PIDS`         | `128`   | Container process ceiling                                                       |
-
-These limits are server settings, not browser inputs or memory reservations. Containers
-run as a fixed non-root user with a read-only root, bounded tmpfs/logs, dropped capabilities,
-no-new-privileges, no network and no published ports. They receive neither host bind mounts,
-platform credentials nor the Docker socket. Named volumes have no portable disk quota;
-monitor available host disk space. No repository clone, terminal or agent runs in this lot.
+Run `pnpm db:migrate:identity` explicitly before restarting an upgraded API. Migration 3
+removes the old lease/capacity requirements while preserving all environment records and
+storage identities. Stop old API versions before migrating; they implement the obsolete
+idle policy. Do not rewrite already-applied migrations or reset the database.
+Prepare the image again for policy version 2. Previously created containers with finite
+Docker resource ceilings or without the unlimited systemd task annotation fail the new policy
+check; they are never silently deleted or replaced. Their home volumes remain intact.
+An operator must plan their container replacement separately if such resources exist.
 
 Missing preparation leaves the environment card unavailable while otherwise-ready
 authentication and administration remain usable. Docker failures produce environment
@@ -315,18 +316,21 @@ restart. The API holds both a process file lock and a dedicated database guard, 
 only one environment supervisor per installation. Do not remove lock files or change
 installation metadata to force a second instance.
 
-A visible authenticated page renews the lease on return and at least every minute,
-sooner when needed before expiry. Hidden/offline pages,
-sign-out and session loss stop renewal; expiry requests a stop. Suspension records stop
-intent atomically with access revocation. Actual shutdown requires available API/Docker
-supervision; stopping the API does not guarantee containers stop, and there is no separate
-watchdog. Stop environments and wait for confirmed Stopped before intentionally stopping
-the API when containers should not remain running.
+Browser presence is not a container lease. Closing the page, losing connectivity, signing
+out or allowing a login session to expire leaves the environment running. Polling resumes
+when an authenticated page returns; it does not mutate lifecycle state. Explicit Stop
+and account suspension persist stopped intent; suspension also revokes access atomically.
+Actual shutdown requires available API/Docker supervision. API shutdown leaves containers
+running and restart resumes supervision. Host shutdown, Docker shutdown or a process
+failure can still interrupt work; this increment provides no agent job recovery.
 
 The runtime uses Bollard against the local Linux socket or Windows Docker named pipe,
 independently of `DOCKER_HOST` or stored contexts. CI runs real environment integration on
 Ubuntu with Docker Engine; local validation also covers Windows Docker Desktop with Linux
-containers. WSL behavior remains unverified, and installation/checkout identities must
+containers. The policy uses an OCI annotation (Docker API 1.43+) to disable systemd's
+per-container `DefaultTasksMax` fallback when Docker normalizes the unlimited PID setting.
+It does not modify host systemd configuration; host and ancestor resource constraints still apply.
+WSL behavior remains unverified, and installation/checkout identities must
 not be assumed interchangeable. Integration commands create their own labeled fixtures
 and verify ownership before cleanup; they never prune or remove user volumes.
 
@@ -386,9 +390,10 @@ With separately authorized OAuth configuration and two chosen GitHub accounts, v
 
 After explicit image preparation and database migration, verify each account sees only
 its own environment. Check first start, observed Running, Stop and restart with retained
-data using owned fixtures; there is no file editor in the member UI. Check capacity
-refusals, idle expiry and suspension with the service running. Confirm polling and lease
-renewal pause on hidden/offline pages and stop at logout, and inspect keyboard/narrow-screen
+data using owned fixtures; there is no file editor in the member UI. Start more than two
+environments and verify that closing the page or expiring a login session leaves them
+running. Check explicit stop and account suspension. Confirm polling pauses on
+hidden/offline pages and stops at logout, and inspect keyboard/narrow-screen
 behavior. Record actual platforms and outcomes; synthetic checks do not establish human
 acceptance or production behavior.
 

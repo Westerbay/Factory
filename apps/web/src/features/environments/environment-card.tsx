@@ -27,7 +27,7 @@ const statusHelp: Record<Environment["status"], string> = {
   starting:
     "Your environment is starting. This page checks its status automatically.",
   running:
-    "Your environment is running. Keeping this page visible renews its idle lease.",
+    "Your environment is running. It keeps running when you close this page or sign out.",
   stopping: "Your environment is stopping. Your saved files are kept.",
   stopped:
     "Your environment is stopped. Start it again to resume with your saved files.",
@@ -118,10 +118,6 @@ export function EnvironmentCard() {
             <dt>Last observed</dt>
             <dd>{timestamp(state.environment?.observedAt)}</dd>
           </div>
-          <div>
-            <dt>Idle lease expires</dt>
-            <dd>{timestamp(state.environment?.idleExpiresAt)}</dd>
-          </div>
         </dl>
         <p
           className="environment-feedback"
@@ -160,10 +156,9 @@ export function EnvironmentCard() {
         </div>
       </div>
       <p className="connection-help">
-        Returning to this page renews an active, unexpired idle lease. While
-        visible, this page renews it at least every minute, before it expires.
-        Leaving this page or signing out stops renewal. Your environment stops
-        after its lease expires while the service is available.
+        Closing this page or signing out does not stop your environment. Stop it
+        explicitly when you are finished. An administrator can stop it by
+        suspending your account. Saved files are kept.
       </p>
     </section>
   )

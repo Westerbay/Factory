@@ -70,15 +70,15 @@ Connection patterns were checked against the official
 ## Environment contracts
 
 - [Environment types and ports](../crates/core/src/environments/mod.rs) own durable
-  intent, observations, lease, provisioning and capacity semantics. Future terminal or
+  persistent intent, observations and provisioning semantics. Future terminal or
   execution work should consume these contracts rather than create another lifecycle.
 - [EnvironmentService and EnvironmentReconciler](../crates/application/src/environments/mod.rs)
   separate authenticated requests from serialized runtime effects. Generation checks
   protect newer intent; ownership loss closes availability until host restart.
 - [Environment persistence](../crates/database/src/environments/mod.rs) uses the verified
   IdentityDatabase and transactional user/session revalidation. Suspension and environment
-  requests share user locking; capacity stays reserved until a confirmed stopped/absent
-  observation. The supervisor owns a dedicated database connection.
+  requests share user locking; browser presence and session expiry never change running
+  intent. The supervisor owns a dedicated database connection.
 - [DockerEnvironmentRuntime](../crates/adapters/src/environments/mod.rs) implements
   local-only inspection, provisioning, start and stop with resource-ownership and
   isolation checks. [Preparation](../scripts/environments/prepare.mjs) owns image builds

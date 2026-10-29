@@ -52,7 +52,7 @@ pub(super) async fn change(
         let row = sqlx::query("UPDATE factory_identity.users SET status=$2,version=version+1,updated_at=clock_timestamp(),access_enabled_at=CASE WHEN $2='active' THEN clock_timestamp() ELSE access_enabled_at END WHERE id=$1 RETURNING version,access_enabled_at")
             .bind(target.id).bind(status(next)).fetch_one(&mut *tx).await.map_err(unavailable)?;
         if next == AccessStatus::Suspended {
-            sqlx::query("UPDATE factory_identity.environments SET desired_state='stopped',lease_expires_at=NULL,generation=generation+CASE WHEN desired_state='running' THEN 1 ELSE 0 END,next_reconcile_at=clock_timestamp(),updated_at=clock_timestamp() WHERE user_id=$1")
+            sqlx::query("UPDATE factory_identity.environments SET desired_state='stopped',generation=generation+CASE WHEN desired_state='running' THEN 1 ELSE 0 END,next_reconcile_at=clock_timestamp(),updated_at=clock_timestamp() WHERE user_id=$1")
                 .bind(target.id).execute(&mut *tx).await.map_err(unavailable)?;
             sqlx::query("DELETE FROM factory_identity.sessions WHERE user_id=$1")
                 .bind(target.id)

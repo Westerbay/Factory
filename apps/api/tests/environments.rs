@@ -133,14 +133,6 @@ impl EnvironmentStore for Store {
     ) -> Result<Environment, EnvironmentError> {
         self.authorize(actor)?;
         let mut rows = self.rows.lock().unwrap();
-        if !rows
-            .get(&actor.user_id)
-            .is_some_and(|row| row.capacity_reserved)
-            && rows.values().filter(|row| row.capacity_reserved).count()
-                >= config.max_running as usize
-        {
-            return Err(EnvironmentError::CapacityReached);
-        }
         let row = rows.entry(actor.user_id).or_insert_with(|| Environment {
             id: Uuid::new_v4(),
             user_id: actor.user_id,
@@ -153,8 +145,6 @@ impl EnvironmentStore for Store {
             container_name: "private-container-name".into(),
             image_id: config.image_id,
             policy_version: config.policy_version,
-            capacity_reserved: false,
-            lease_expires_at: None,
             observed_at: None,
             error_code: None,
             next_reconcile_at: Utc::now(),
@@ -163,9 +153,6 @@ impl EnvironmentStore for Store {
             row.generation += 1;
         }
         row.desired_state = DesiredState::Running;
-        row.capacity_reserved = true;
-        row.lease_expires_at =
-            Some(Utc::now() + Duration::seconds(i64::from(config.lease_seconds)));
         Ok(row.clone())
     }
     async fn stop(&self, actor: EnvironmentActor) -> Result<Option<Environment>, EnvironmentError> {
@@ -176,24 +163,8 @@ impl EnvironmentStore for Store {
                 row.generation += 1;
             }
             row.desired_state = DesiredState::Stopped;
-            row.lease_expires_at = None;
             row.clone()
         }))
-    }
-    async fn heartbeat(
-        &self,
-        actor: EnvironmentActor,
-        _: u32,
-    ) -> Result<Environment, EnvironmentError> {
-        self.authorize(actor)?;
-        let rows = self.rows.lock().unwrap();
-        rows.get(&actor.user_id)
-            .filter(|row| {
-                row.desired_state == DesiredState::Running
-                    && row.lease_expires_at.is_some_and(|lease| lease > Utc::now())
-            })
-            .cloned()
-            .ok_or(EnvironmentError::Conflict)
     }
     async fn reconcile_batch(&self, _: Uuid, _: u32) -> Result<Vec<Environment>, EnvironmentError> {
         Ok(vec![])
@@ -284,8 +255,6 @@ impl Fixture {
             installation_id: Uuid::new_v4(),
             image_id: "private-image-id".into(),
             policy_version: "1".into(),
-            max_running: 2,
-            lease_seconds: 900,
         };
         EnvironmentReconciler::new(
             store.clone(),
@@ -341,7 +310,7 @@ async fn reads_are_actor_scoped_and_never_create_or_expose_internal_identifiers(
     assert_eq!(response.status(), 202);
     let body = json(response).await;
     assert_eq!(body["status"], "starting");
-    assert_eq!(body.as_object().unwrap().len(), 4);
+    assert_eq!(body.as_object().unwrap().len(), 3);
     assert!(!body.to_string().contains("private-"));
     assert_eq!(
         json(f.call(Method::GET, "/api/environment", 1, "").await).await["status"],
@@ -357,7 +326,6 @@ async fn every_route_requires_a_live_active_session_and_store_rechecks_mutations
         (Method::GET, "/api/environment"),
         (Method::POST, "/api/environment/start"),
         (Method::POST, "/api/environment/stop"),
-        (Method::POST, "/api/environment/heartbeat"),
     ] {
         let response = f
             .app
@@ -391,22 +359,12 @@ async fn every_route_requires_a_live_active_session_and_store_rechecks_mutations
             .status(),
         401
     );
-    assert_eq!(
-        f.call(Method::POST, "/api/environment/heartbeat", 0, "")
-            .await
-            .status(),
-        401
-    );
 }
 
 #[tokio::test]
 async fn mutations_reject_csrf_origin_and_all_nonempty_bodies_before_store_calls() {
     let f = Fixture::new().await;
-    for path in [
-        "/api/environment/start",
-        "/api/environment/stop",
-        "/api/environment/heartbeat",
-    ] {
+    for path in ["/api/environment/start", "/api/environment/stop"] {
         for (origin, csrf) in [
             ("https://evil.example", CSRF),
             (ORIGIN, "wrong"),
@@ -441,14 +399,8 @@ async fn mutations_reject_csrf_origin_and_all_nonempty_bodies_before_store_calls
 }
 
 #[tokio::test]
-async fn repeated_start_is_idempotent_stop_does_not_release_capacity_and_heartbeat_cannot_revive() {
+async fn repeated_start_is_idempotent_and_more_than_two_users_can_start() {
     let f = Fixture::new().await;
-    assert_eq!(
-        f.call(Method::POST, "/api/environment/heartbeat", 0, "")
-            .await
-            .status(),
-        409
-    );
     f.call(Method::POST, "/api/environment/start", 0, "").await;
     let generation = f.store.rows.lock().unwrap()[&f.users[0]].generation;
     f.call(Method::POST, "/api/environment/start", 0, "").await;
@@ -456,13 +408,15 @@ async fn repeated_start_is_idempotent_stop_does_not_release_capacity_and_heartbe
         f.store.rows.lock().unwrap()[&f.users[0]].generation,
         generation
     );
-    f.call(Method::POST, "/api/environment/start", 1, "").await;
-    assert_eq!(
-        f.call(Method::POST, "/api/environment/heartbeat", 0, "")
-            .await
-            .status(),
-        200
-    );
+    for user in [1, 2] {
+        assert_eq!(
+            f.call(Method::POST, "/api/environment/start", user, "")
+                .await
+                .status(),
+            202
+        );
+    }
+    assert_eq!(f.store.rows.lock().unwrap().len(), 3);
     assert_eq!(
         f.call(Method::POST, "/api/environment/stop", 0, "")
             .await
@@ -470,15 +424,15 @@ async fn repeated_start_is_idempotent_stop_does_not_release_capacity_and_heartbe
         202
     );
     assert_eq!(
+        f.store.rows.lock().unwrap()[&f.users[0]].desired_state,
+        DesiredState::Stopped
+    );
+    assert_eq!(
         f.call(Method::POST, "/api/environment/heartbeat", 0, "")
             .await
             .status(),
-        409
+        404
     );
-    let denied = f.call(Method::POST, "/api/environment/start", 2, "").await;
-    assert_eq!(denied.status(), 409);
-    assert_eq!(json(denied).await["code"], "capacity_reached");
-    assert!(!f.store.rows.lock().unwrap().contains_key(&f.users[2]));
 }
 
 #[tokio::test]
@@ -510,12 +464,6 @@ async fn unprepared_or_lost_supervisor_is_honest_and_preserves_last_observation(
     assert_eq!(state["observedAt"], serde_json::to_value(observed).unwrap());
     assert_eq!(
         f.call(Method::POST, "/api/environment/start", 0, "")
-            .await
-            .status(),
-        503
-    );
-    assert_eq!(
-        f.call(Method::POST, "/api/environment/heartbeat", 0, "")
             .await
             .status(),
         503

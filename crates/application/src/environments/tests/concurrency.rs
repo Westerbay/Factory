@@ -24,13 +24,6 @@ impl EnvironmentStore for MultipleEnvironments {
     async fn stop(&self, _: EnvironmentActor) -> Result<Option<Environment>, EnvironmentError> {
         unreachable!()
     }
-    async fn heartbeat(
-        &self,
-        _: EnvironmentActor,
-        _: u32,
-    ) -> Result<Environment, EnvironmentError> {
-        unreachable!()
-    }
     async fn reconcile_batch(
         &self,
         installation: Uuid,
@@ -99,17 +92,17 @@ impl EnvironmentRuntime for BlockingRuntime {
 }
 
 #[tokio::test]
-async fn blocked_provisioning_does_not_block_another_environments_expiry_sweep_and_stop() {
+async fn blocked_provisioning_does_not_block_another_environments_suspension_and_stop() {
     let slow = Fixture::new();
-    let expired = Fixture::new();
-    expired.provisioned(DesiredState::Running);
-    expired.store.row.lock().unwrap().installation_id = slow.config.installation_id;
+    let suspended = Fixture::new();
+    suspended.provisioned(DesiredState::Running);
+    suspended.store.row.lock().unwrap().installation_id = slow.config.installation_id;
     let store = Arc::new(MultipleEnvironments(vec![
         slow.store.clone(),
-        expired.store.clone(),
+        suspended.store.clone(),
     ]));
     let runtime = Arc::new(BlockingRuntime {
-        runtimes: vec![slow.runtime.clone(), expired.runtime.clone()],
+        runtimes: vec![slow.runtime.clone(), suspended.runtime.clone()],
         provisioning_entered: Notify::new(),
         release_provisioning: Notify::new(),
     });
@@ -131,7 +124,7 @@ async fn blocked_provisioning_does_not_block_another_environments_expiry_sweep_a
         .find(|row| row.id == slow.store.row().id)
         .unwrap();
     let mut slow_worker = worker();
-    let mut expired_worker = worker();
+    let mut suspended_worker = worker();
 
     // No sleeps: B must finish before the test permits A's volume call to return.
     // A global serial queue would deadlock this handshake and fail the timeout.
@@ -145,20 +138,18 @@ async fn blocked_provisioning_does_not_block_another_environments_expiry_sweep_a
             },
             async {
                 runtime.provisioning_entered.notified().await;
-                expired.store.row.lock().unwrap().lease_expires_at =
-                    Some(Utc::now() - Duration::seconds(1));
+                suspended.store.active_user.store(false, Ordering::SeqCst);
                 let batch = selector.next_batch().await.unwrap();
-                let expired_environment = batch
+                let suspended_environment = batch
                     .into_iter()
-                    .find(|row| row.id == expired.store.row().id)
+                    .find(|row| row.id == suspended.store.row().id)
                     .unwrap();
-                assert_eq!(expired_environment.desired_state, DesiredState::Stopped);
-                expired_worker
-                    .reconcile_environment(expired_environment)
+                assert_eq!(suspended_environment.desired_state, DesiredState::Stopped);
+                suspended_worker
+                    .reconcile_environment(suspended_environment)
                     .await
                     .unwrap();
-                assert_eq!(expired.store.row().observed_state, ObservedState::Stopped);
-                assert!(!expired.store.row().capacity_reserved);
+                assert_eq!(suspended.store.row().observed_state, ObservedState::Stopped);
                 assert_eq!(
                     slow.store.row().provisioning_state,
                     ProvisioningState::VolumeCreating
