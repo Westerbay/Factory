@@ -1,0 +1,11 @@
+//! Bounded, local-only Docker lifecycle. No pull, build, removal, or ambient daemon settings.
+mod policy;
+mod preparation;
+mod runtime;
+
+pub use policy::ResourcePolicy;
+pub use preparation::{InstallationGuard, POLICY_VERSION, PreparationMetadata};
+pub use runtime::DockerEnvironmentRuntime;
+
+#[cfg(test)]
+mod tests;
