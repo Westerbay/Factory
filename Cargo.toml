@@ -23,6 +23,7 @@ tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["json"] }
 
 async-trait = "0.1"
+futures-util = "=0.3.34"
 chrono = { version = "0.4", features = ["clock"] }
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2"
