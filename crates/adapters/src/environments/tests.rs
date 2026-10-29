@@ -274,6 +274,11 @@ fn full_policy_rejects_unsafe_mutations_and_finite_resource_ceilings() {
         ("/HostConfig/MemorySwap", json!(1073741824)),
         ("/HostConfig/NanoCpus", json!(1000000000)),
         ("/HostConfig/PidsLimit", json!(128)),
+        ("/HostConfig/Annotations", json!({})),
+        (
+            "/HostConfig/Annotations/org.systemd.property.TasksMax",
+            json!("uint64 128"),
+        ),
         ("/HostConfig/ReadonlyRootfs", json!(false)),
         ("/HostConfig/NetworkMode", json!("host")),
         ("/HostConfig/CapDrop", json!([])),

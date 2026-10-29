@@ -305,7 +305,7 @@ removes the old lease/capacity requirements while preserving all environment rec
 storage identities. Stop old API versions before migrating; they implement the obsolete
 idle policy. Do not rewrite already-applied migrations or reset the database.
 Prepare the image again for policy version 2. Previously created containers with finite
-Docker resource ceilings fail the new policy
+Docker resource ceilings or without the unlimited systemd task annotation fail the new policy
 check; they are never silently deleted or replaced. Their home volumes remain intact.
 An operator must plan their container replacement separately if such resources exist.
 
@@ -327,7 +327,10 @@ failure can still interrupt work; this increment provides no agent job recovery.
 The runtime uses Bollard against the local Linux socket or Windows Docker named pipe,
 independently of `DOCKER_HOST` or stored contexts. CI runs real environment integration on
 Ubuntu with Docker Engine; local validation also covers Windows Docker Desktop with Linux
-containers. WSL behavior remains unverified, and installation/checkout identities must
+containers. The policy uses an OCI annotation (Docker API 1.43+) to disable systemd's
+per-container `DefaultTasksMax` fallback when Docker normalizes the unlimited PID setting.
+It does not modify host systemd configuration; host and ancestor resource constraints still apply.
+WSL behavior remains unverified, and installation/checkout identities must
 not be assumed interchangeable. Integration commands create their own labeled fixtures
 and verify ownership before cleanup; they never prune or remove user volumes.
 

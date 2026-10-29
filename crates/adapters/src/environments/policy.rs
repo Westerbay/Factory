@@ -7,6 +7,9 @@ use uuid::Uuid;
 
 const HOME: &str = "/home/factory";
 const USER: &str = "10000:10000";
+// Docker can normalize PidsLimit=-1 to null, leaving systemd's DefaultTasksMax active.
+// The OCI annotation sets infinity for this container's scope without changing the host.
+const SYSTEMD_UNLIMITED_TASKS: &str = "uint64 18446744073709551615";
 const TMPFS: &str = "rw,noexec,nosuid,nodev,size=67108864,mode=1777";
 const MASKED_PATHS: &[&str] = &[
     "/proc/acpi",
@@ -43,6 +46,7 @@ impl IsolationPolicy {
             "HostConfig": {
                 "Memory": 0, "MemorySwap": 0, "NanoCpus": 0,
                 "PidsLimit": -1, "ReadonlyRootfs": true, "Init": true,
+                "Annotations": {"org.systemd.property.TasksMax": SYSTEMD_UNLIMITED_TASKS},
                 "CapDrop": ["ALL"], "SecurityOpt": ["no-new-privileges"],
                 "NetworkMode": "none", "Privileged": false, "PublishAllPorts": false,
                 "IpcMode": "private", "CgroupnsMode": "private", "AutoRemove": false,
@@ -83,6 +87,7 @@ impl IsolationPolicy {
             "Memory",
             "MemorySwap",
             "NanoCpus",
+            "Annotations",
             "ReadonlyRootfs",
             "Init",
             "CapDrop",
