@@ -40,8 +40,8 @@ using exact checkout paths and the local socket or named pipe. Windows database 
 does not establish live Codex execution or native cleanup. The Codex reference adapter
 targets CLI 0.160.0, but no agent is started by the web runtime or routine checks.
 The new environment adapter uses Rust/Bollard directly against that local Docker
-transport. Environment integration has been exercised on Windows Docker Desktop with
-Linux containers; Linux Docker Engine and WSL environment behavior remain unverified.
+transport. CI exercises environment integration on Ubuntu with Docker Engine, alongside
+local Windows Docker Desktop validation with Linux containers. WSL remains unverified.
 
 This increment does not deploy to a VPS, register an OAuth application or configure real
 credentials. Unit and integration regressions use synthetic principals and owned local
