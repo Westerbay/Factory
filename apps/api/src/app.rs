@@ -2,13 +2,14 @@ use crate::{
     admin,
     auth::{self, AuthState},
     config::RuntimeConfig,
-    health, http,
+    environments, health, http,
 };
 use axum::{
     Router,
     http::{HeaderValue, Method, header},
     middleware,
 };
+use factory_application::environments::EnvironmentService;
 use factory_database::identity::IdentityDatabase;
 use std::{sync::Arc, time::Duration};
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -25,6 +26,14 @@ pub fn router(
     config: &RuntimeConfig,
     identity: Option<IdentityRuntime>,
 ) -> Result<Router, &'static str> {
+    router_with_environments(config, identity, None)
+}
+
+pub fn router_with_environments(
+    config: &RuntimeConfig,
+    identity: Option<IdentityRuntime>,
+    environments: Option<Arc<EnvironmentService>>,
+) -> Result<Router, &'static str> {
     let origin = HeaderValue::from_str(config.web_origin()).map_err(|_| "WEB_ORIGIN_INVALID")?;
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list([origin]))
@@ -35,7 +44,7 @@ pub fn router(
             axum::http::HeaderName::from_static("x-csrf-token"),
         ])
         .max_age(Duration::from_secs(60));
-    let (routes, _) = documented_router(identity).split_for_parts();
+    let (routes, _) = documented_router(identity, environments).split_for_parts();
     Ok(routes
         .fallback(http::not_found)
         .layer(middleware::from_fn_with_state(
@@ -47,11 +56,15 @@ pub fn router(
 }
 
 /// Runtime and inert contract export share the same route registration.
-pub(crate) fn documented_router(identity: Option<IdentityRuntime>) -> OpenApiRouter {
+pub(crate) fn documented_router(
+    identity: Option<IdentityRuntime>,
+    environments: Option<Arc<EnvironmentService>>,
+) -> OpenApiRouter {
     let database = identity.as_ref().map(|runtime| runtime.database.clone());
     let auth = identity.map(|runtime| runtime.auth);
     auth::documented_router(auth.clone())
-        .merge(admin::documented_router(auth))
+        .merge(admin::documented_router(auth.clone()))
+        .merge(environments::documented_router(auth, environments))
         .merge(health::documented_router(database))
 }
 
