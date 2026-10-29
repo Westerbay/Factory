@@ -67,6 +67,24 @@ Connection patterns were checked against the official
 [Drizzle PostgreSQL guide](https://orm.drizzle.team/docs/get-started-postgresql) and
 [postgres-js transaction documentation](https://github.com/porsager/postgres#transactions).
 
+## Environment contracts
+
+- [Environment types and ports](../crates/core/src/environments/mod.rs) own durable
+  intent, observations, lease, provisioning and capacity semantics. Future terminal or
+  execution work should consume these contracts rather than create another lifecycle.
+- [EnvironmentService and EnvironmentReconciler](../crates/application/src/environments/mod.rs)
+  separate authenticated requests from serialized runtime effects. Generation checks
+  protect newer intent; ownership loss closes availability until host restart.
+- [Environment persistence](../crates/database/src/environments/mod.rs) uses the verified
+  IdentityDatabase and transactional user/session revalidation. Suspension and environment
+  requests share user locking; capacity stays reserved until a confirmed stopped/absent
+  observation. The supervisor owns a dedicated database connection.
+- [DockerEnvironmentRuntime](../crates/adapters/src/environments/mod.rs) implements
+  local-only inspection, provisioning, start and stop with resource-ownership and
+  isolation checks. [Preparation](../scripts/environments/prepare.mjs) owns image builds
+  and stable installation metadata. Reuse these owners without exposing daemon access,
+  Docker IDs or mutable policy parameters to browser features.
+
 ## Execution porting reference
 
 The temporary `packages/execution-reference` package preserves the former host and

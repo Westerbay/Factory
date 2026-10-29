@@ -14,9 +14,37 @@ Another verified account becomes pending without a member session. The administr
 can activate that account, after which the member must begin a new sign-in. Handles and
 display names identify people visually but never determine authorization.
 
-The member home shows the signed-in user and an honest empty workspace. Repository
+The member home offers Start environment, Stop environment and Refresh for the user's
+own private local environment, with observed status and idle-lease expiry. Repository
 selection, cloning, terminal, agent execution, history and skills are not available there.
 GitHub sign-in does not request repository permissions or save a provider access token.
+
+## Private local environments
+
+Creating or activating an account creates no Docker resources. The first explicit start
+creates one environment with a private home volume. Files under `/home/factory`, including
+the working directory `/home/factory/Documents`, survive stop/start, sign-out and
+suspension. There is no volume deletion or reset action. A missing previously recorded
+volume produces an error rather than an empty replacement.
+
+Start and stop requests are asynchronous. Running and Stopped reflect successful runtime
+inspection, with the last observation shown; reading or refreshing status never starts
+an environment. Users cannot target another user's environment. The administrator's
+access controls do not provide environment browsing or lifecycle controls for others.
+
+While the page is visible, online and authenticated, Starting/Running environments
+renew their lease on return and at least every minute before expiry. By default,
+15 minutes without renewal requests a stop.
+An explicit stop cancels the lease, and a late heartbeat cannot reverse it. Sign-out
+stops renewal. Suspension immediately revokes access and records a stop request; actual
+container shutdown follows asynchronously. These stops require the API and Docker to
+be available; API shutdown does not guarantee container shutdown.
+
+The default local capacity is two reserved environments. Starting, Running, Stopping and
+uncertain states retain a slot until inspection confirms the container stopped or absent.
+A capacity refusal does not queue a later start. Containers have bounded CPU, memory and
+process counts, no network access and a read-only root filesystem. Persistent named
+volumes have no portable disk quota. This increment supplies no terminal or file editor.
 
 ## Access and sessions
 
@@ -48,7 +76,7 @@ tab; another tab's choice does not automatically reload it.
 
 Future work will connect each user's isolated server environment to repository providers
 and an agent subscription, with a terminal and global skills. Providers should remain
-replaceable. Containers, repository authorization, Codex connection and execution are
+replaceable. Repository authorization, Codex connection and execution are
 separate increments, not hidden actions of sign-in.
 
 The retained TypeScript execution implementation defines behavior to preserve during

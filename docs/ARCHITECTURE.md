@@ -9,10 +9,10 @@ no Node application server. Vite development and preview are local tooling.
 
 | Owner                   | Responsibility                                               | Internal dependency direction                 |
 | ----------------------- | ------------------------------------------------------------ | --------------------------------------------- |
-| `crates/core`           | Identity types, policies and outbound ports                  | No application or infrastructure dependencies |
-| `crates/application`    | Identity use cases                                           | Core                                          |
-| `crates/adapters`       | GitHub identity provider                                     | Core                                          |
-| `crates/database`       | SQLx identity persistence and verified local targets         | Core                                          |
+| `crates/core`           | Identity/environment types, policies and outbound ports      | No application or infrastructure dependencies |
+| `crates/application`    | Identity use cases and environment reconciliation            | Core                                          |
+| `crates/adapters`       | GitHub identity and local Docker runtime                     | Core                                          |
+| `crates/database`       | SQLx identity/environment persistence and verified targets   | Core                                          |
 | `apps/api`              | Composition, configuration, HTTP, cookies, CORS and OpenAPI  | Application, core and concrete adapters       |
 | `apps/web/src/lib`      | Browser transport, session lifecycle and query configuration | Browser code and generated API types          |
 | `apps/web/src/features` | Member and administrator interfaces                          | Shared browser libraries and components       |
@@ -67,7 +67,7 @@ identity lock with login, and creates or promotes the selected account atomicall
 It refuses all writes once an administrator exists and never issues a session.
 The existing unique administrator index remains the final concurrency guard.
 This operator capability is absent from the HTTP store port. Every subsequent login,
-including the administrator, must start after activation. No schema migration is needed.
+including the administrator, must start after activation.
 
 Mutations require the exact frontend Origin and the session CSRF token. Body mutations
 also require JSON. Credentialed CORS uses an exact allowlist and is not an authorization
@@ -75,7 +75,9 @@ mechanism. Member requests to administrator endpoints are rejected by the server
 when a crafted client bypasses the frontend route guard.
 
 Access changes lock and revalidate actor/target state, compare the expected version, and
-commit the transition and session revocation atomically. The administrator cannot be
+commit the transition, session revocation and environment stop intent atomically.
+Suspension clears the environment lease without calling Docker inside the transaction.
+The administrator cannot be
 edited through member-access operations. Reactivation sets a new admission boundary;
 only OAuth attempts begun after that boundary can create a new session. Stale writes
 return a conflict for explicit review, never an automatic retry.
@@ -105,6 +107,65 @@ Docker project, checkout, owner marker, service, volume, credentials and publish
 loopback port before opening SQL. Linux uses the local socket; Windows uses Docker
 Desktop's local named pipe. Arbitrary contexts, remote targets and a loopback URL without
 resource ownership are insufficient. See [development](DEVELOPMENT.md#local-postgresql).
+
+## Local environment lifecycle
+
+[Core environment ports](../crates/core/src/environments/ports.rs) separate persistent
+intent, runtime observations and supervisor ownership. The
+[application service](../crates/application/src/environments/service.rs) handles self-only
+requests; the [reconciler](../crates/application/src/environments/reconcile.rs) performs
+bounded runtime operations outside database transactions. API composition owns its
+lifetime. JavaScript [preparation tooling](../scripts/environments/prepare.mjs) builds
+the common image explicitly; user operations call the Rust
+[Bollard adapter](../crates/adapters/src/environments/runtime.rs) directly. Neither API
+startup nor a start request builds or pulls images.
+
+The [environment store](../crates/database/src/environments/mod.rs) shares the verified
+IdentityDatabase without exposing its SQLx pool. The additive
+[migration](../crates/database/migrations/2_environments.sql) records one environment
+per user, installation/image/policy identity, desired and observed states, generation,
+provisioning phase, lease and capacity reservation. Requests revalidate the session and
+active user under a consistent user-then-environment lock order. Start reserves capacity
+atomically; only an inspected stopped/absent container releases it. Observation writes
+match the generation so a stale operation cannot overwrite a newer intent.
+
+Provisioning records intent before volume creation and confirms the volume before
+starting the container. A previously confirmed volume that disappears is an error;
+ambiguous interrupted creation requires operator investigation. Neither case silently
+replaces user data. Resource names and labels bind installation, environment, user and
+policy. The adapter checks ownership before mutation and complete image/mount/isolation
+policy before start. Foreign resources are never adopted. See the
+[policy owner](../crates/adapters/src/environments/policy.rs) for enforced limits.
+
+The host retains an installation file lock and a dedicated PostgreSQL advisory-lock
+connection. It monitors the database guard every second and checks it around runtime
+calls. Lock loss makes environment operations unavailable until API restart; it does
+not silently reacquire ownership. Individual Docker errors remain observable and are
+retried after 15 seconds. The supervisor also repairs expired leases and suspended-user
+intent independently of Docker work. The host serializes work per environment and runs
+up to 32 environment jobs concurrently, so a slow container does not block another
+user's stop when worker capacity is available. This is bounded supervision, not a
+real-time shutdown guarantee under saturation. API shutdown stops supervision but does not guarantee container shutdown; no
+independent watchdog is installed.
+
+[Environment routes](../apps/api/src/environments/routes.rs) accept no target user ID or
+Docker configuration. GET reads status without creating resources; POST start/stop return
+accepted intent, and POST heartbeat only renews an existing unexpired running intent.
+All require an active session and mutations require Origin/CSRF checks. Public responses
+contain status, observation/lease times and bounded error codes, never Docker identifiers.
+The [member controller](../apps/web/src/features/environments/environment-controller.ts)
+polls only while visible, online and authenticated, and renews Starting/Running leases
+immediately on return, then at most every 60 seconds with a margin before expiry.
+Session loss, logout and unmount cancel those requests.
+
+Missing preparation affects only environments when identity is otherwise ready. In
+contrast, a pending SQLx migration leaves identity readiness unavailable as before.
+Prepared metadata keeps the installation UUID and immutable image ID under
+`.factory/environments`; preparing a newer image does not migrate existing environments.
+Linux socket and Windows named-pipe transports ignore ambient Docker contexts and remote
+daemon settings. The API is trusted to access Docker; the browser and containers are not
+given the socket. User containers run non-root with a read-only root, no network, bounded
+resources and a persistent home volume. Named volumes do not supply a portable disk quota.
 
 ## PWA and static hosting
 
