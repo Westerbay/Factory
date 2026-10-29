@@ -46,6 +46,23 @@ impl IdentityDatabase {
             pool: self.pool.clone(),
         }
     }
+    pub fn environment_store(&self) -> crate::environments::PgEnvironmentStore {
+        crate::environments::PgEnvironmentStore {
+            pool: self.pool.clone(),
+        }
+    }
+    pub async fn environment_supervisor(
+        &self,
+        installation: uuid::Uuid,
+    ) -> Result<
+        crate::environments::PgEnvironmentSupervisor,
+        factory_core::environments::EnvironmentError,
+    > {
+        if self.pool.is_closed() {
+            return Err(factory_core::environments::EnvironmentError::Unavailable);
+        }
+        crate::environments::PgEnvironmentSupervisor::acquire(&self.options, installation).await
+    }
     pub async fn ready(&self) -> Result<Readiness, IdentityError> {
         migrations::ready(&self.pool).await
     }

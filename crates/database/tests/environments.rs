@@ -1,0 +1,336 @@
+use factory_core::{environments::*, identity::*};
+use factory_database::{identity::IdentityDatabase, local_target::from_fixture};
+use serde::Deserialize;
+use sqlx::{PgPool, postgres::PgConnectOptions};
+use uuid::Uuid;
+
+#[derive(Deserialize)]
+struct Fixture {
+    project: String,
+    owner: String,
+    port: u16,
+}
+
+async fn fixture() -> (IdentityDatabase, PgPool) {
+    let path = std::env::var("FACTORY_TEST_TARGET_PATH").expect("explicit owned fixture target");
+    assert!(std::fs::metadata(&path).unwrap().len() <= 4096);
+    let fixture: Fixture = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let target = from_fixture(&root, &fixture.project, &fixture.owner, fixture.port)
+        .await
+        .unwrap();
+    let db = IdentityDatabase::connect(&target).await.unwrap();
+    let options = PgConnectOptions::new_without_pgpass()
+        .host(target.host())
+        .port(target.port())
+        .database(target.database())
+        .username(target.username())
+        .password(target.password())
+        .ssl_mode(sqlx::postgres::PgSslMode::Disable);
+    let sql = PgPool::connect_with(options).await.unwrap();
+    db.migrate().await.unwrap();
+    sqlx::query("TRUNCATE factory_identity.users, factory_identity.login_attempts CASCADE")
+        .execute(&sql)
+        .await
+        .unwrap();
+    (db, sql)
+}
+
+async fn actor(sql: &PgPool, token: u8, admin: bool) -> EnvironmentActor {
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO factory_identity.users(id,display_name,role,status,access_enabled_at) VALUES($1,'Synthetic fixture',$2,'active',clock_timestamp())")
+        .bind(id).bind(if admin { "admin" } else { "member" }).execute(sql).await.unwrap();
+    sqlx::query("INSERT INTO factory_identity.external_identities(user_id,provider,issuer,subject,handle) VALUES($1,'test','https://fixture.invalid',$2,'fixture')")
+        .bind(id).bind(id.to_string()).execute(sql).await.unwrap();
+    let hash = CredentialHash([token; 32]);
+    sqlx::query("INSERT INTO factory_identity.sessions(token_hash,user_id,csrf_token,expires_at) VALUES($1,$2,$3,clock_timestamp()+interval '1 day')")
+        .bind(hash.0.as_slice()).bind(id).bind("c".repeat(32)).execute(sql).await.unwrap();
+    EnvironmentActor {
+        user_id: id,
+        session_hash: hash,
+    }
+}
+
+fn request(installation_id: Uuid) -> EnvironmentStart {
+    EnvironmentStart {
+        installation_id,
+        image_id: "sha256:fixture".into(),
+        policy_version: "1".into(),
+        max_running: 2,
+        lease_seconds: 900,
+    }
+}
+
+fn stopped() -> EnvironmentObservation {
+    EnvironmentObservation {
+        state: ObservedState::Stopped,
+        error: None,
+        volume_confirmed: true,
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires the explicitly owned PostgreSQL integration fixture"]
+async fn requests_preserve_ownership_capacity_generation_and_durable_provisioning() {
+    let (db, sql) = fixture().await;
+    let store = db.environment_store();
+    let one = actor(&sql, 1, false).await;
+    let two = actor(&sql, 2, false).await;
+    let three = actor(&sql, 3, false).await;
+    let installation = Uuid::new_v4();
+    assert_eq!(store.get(one).await.unwrap(), None);
+    assert_eq!(store.stop(one).await.unwrap(), None);
+    assert!(matches!(
+        store.heartbeat(one, 900).await,
+        Err(EnvironmentError::Conflict)
+    ));
+    let forged = EnvironmentActor {
+        user_id: two.user_id,
+        session_hash: one.session_hash,
+    };
+    assert!(matches!(
+        store.start(forged, request(installation)).await,
+        Err(EnvironmentError::Unauthorized)
+    ));
+    let (a, b) = tokio::join!(
+        store.start(one, request(installation)),
+        store.start(one, request(installation))
+    );
+    let first = a.unwrap();
+    assert_eq!(first.id, b.unwrap().id);
+    assert!(first.capacity_reserved);
+    assert_eq!(first.provisioning_state, ProvisioningState::Unprovisioned);
+    let second = store.start(two, request(installation)).await.unwrap();
+    assert_ne!(first.volume_name, second.volume_name);
+    assert_ne!(first.container_name, second.container_name);
+    assert!(matches!(
+        store.start(three, request(installation)).await,
+        Err(EnvironmentError::CapacityReached)
+    ));
+    assert!(
+        store.get(three).await.unwrap().is_none(),
+        "capacity refusal must not queue a later start"
+    );
+    assert!(matches!(
+        store.start(one, request(Uuid::new_v4())).await,
+        Err(EnvironmentError::OwnershipConflict)
+    ));
+    assert!(
+        store
+            .begin_provisioning(first.id, first.generation)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .begin_provisioning(first.id, first.generation)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        store.get(one).await.unwrap().unwrap().provisioning_state,
+        ProvisioningState::VolumeCreating
+    );
+    let mut changed_image = request(installation);
+    changed_image.image_id = "sha256:new".into();
+    assert_eq!(
+        store.start(one, changed_image).await.unwrap().image_id,
+        first.image_id
+    );
+    let stopping = store.stop(one).await.unwrap().unwrap();
+    assert_eq!(stopping.generation, first.generation + 1);
+    assert!(stopping.capacity_reserved);
+    assert!(stopping.lease_expires_at.is_none());
+    assert_eq!(
+        store.stop(one).await.unwrap().unwrap().generation,
+        stopping.generation
+    );
+    assert!(matches!(
+        store.heartbeat(one, 900).await,
+        Err(EnvironmentError::Conflict)
+    ));
+    assert!(
+        !store
+            .record_observation(first.id, first.generation, stopped(), 0)
+            .await
+            .unwrap(),
+        "a stale Docker result must not overwrite stop"
+    );
+    store
+        .record_observation(
+            first.id,
+            stopping.generation,
+            EnvironmentObservation {
+                state: ObservedState::Unavailable,
+                error: Some(EnvironmentError::Timeout),
+                volume_confirmed: false,
+            },
+            0,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        store.start(three, request(installation)).await,
+        Err(EnvironmentError::CapacityReached)
+    ));
+    assert!(
+        store
+            .record_observation(first.id, stopping.generation, stopped(), 0)
+            .await
+            .unwrap()
+    );
+    let confirmed = store.get(one).await.unwrap().unwrap();
+    assert!(!confirmed.capacity_reserved);
+    assert_eq!(confirmed.provisioning_state, ProvisioningState::VolumeReady);
+    store.start(three, request(installation)).await.unwrap();
+    assert!(matches!(
+        store.start(one, request(installation)).await,
+        Err(EnvironmentError::CapacityReached)
+    ));
+    // Expiry cannot be undone by a delayed heartbeat, even before the reconciler runs.
+    sqlx::query("UPDATE factory_identity.environments SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE user_id=$1").bind(two.user_id).execute(&sql).await.unwrap();
+    assert!(matches!(
+        store.heartbeat(two, 900).await,
+        Err(EnvironmentError::Conflict)
+    ));
+    let expired = store
+        .reconcile_batch(installation, 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|e| e.user_id == two.user_id)
+        .unwrap();
+    assert_eq!(expired.desired_state, DesiredState::Stopped);
+    assert_eq!(expired.generation, second.generation + 1);
+    assert!(expired.capacity_reserved);
+    store
+        .record_observation(expired.id, expired.generation, stopped(), 0)
+        .await
+        .unwrap();
+    // Independent actors racing for the final place cannot both reserve it.
+    let (a, b) = tokio::join!(
+        store.start(one, request(installation)),
+        store.start(two, request(installation))
+    );
+    assert_ne!(a.is_ok(), b.is_ok());
+    assert!(matches!(
+        a.err().or(b.err()),
+        Some(EnvironmentError::CapacityReached)
+    ));
+    db.close().await;
+    sql.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires the explicitly owned PostgreSQL integration fixture"]
+async fn suspension_is_atomic_and_waiting_requests_recheck_live_session() {
+    let (db, sql) = fixture().await;
+    let store = db.environment_store();
+    let member = actor(&sql, 4, false).await;
+    let admin = actor(&sql, 5, true).await;
+    let installation = Uuid::new_v4();
+    let started = store.start(member, request(installation)).await.unwrap();
+    // A failure after environment intent changes rolls back the entire suspension.
+    sqlx::raw_sql("CREATE FUNCTION factory_identity.reject_environment_suspension() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic rollback'; END $$; CREATE TRIGGER reject_environment_suspension BEFORE INSERT ON factory_identity.access_events FOR EACH ROW EXECUTE FUNCTION factory_identity.reject_environment_suspension();")
+        .execute(&sql).await.unwrap();
+    let change = AccessRequest {
+        target_id: member.user_id,
+        status: AccessDecision::Suspended,
+        expected_version: 1,
+    };
+    assert!(
+        db.store()
+            .change_access(admin.session_hash, change.clone())
+            .await
+            .is_err()
+    );
+    let after = store.get(member).await.unwrap().unwrap();
+    assert_eq!(after.generation, started.generation);
+    assert_eq!(after.desired_state, DesiredState::Running);
+    sqlx::raw_sql("DROP TRIGGER reject_environment_suspension ON factory_identity.access_events; DROP FUNCTION factory_identity.reject_environment_suspension();").execute(&sql).await.unwrap();
+    db.store()
+        .change_access(admin.session_hash, change)
+        .await
+        .unwrap();
+    assert!(matches!(
+        store.heartbeat(member, 900).await,
+        Err(EnvironmentError::Unauthorized)
+    ));
+    assert!(matches!(
+        store.start(member, request(installation)).await,
+        Err(EnvironmentError::Unauthorized)
+    ));
+    assert!(matches!(
+        store.get(member).await,
+        Err(EnvironmentError::Unauthorized)
+    ));
+    let record = store
+        .reconcile_batch(installation, 10)
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(record.desired_state, DesiredState::Stopped);
+    assert_eq!(record.generation, started.generation + 1);
+    assert!(record.lease_expires_at.is_none());
+    assert!(record.capacity_reserved);
+
+    let waiting = actor(&sql, 6, false).await;
+    let mut held = sql.begin().await.unwrap();
+    sqlx::query("SELECT id FROM factory_identity.users WHERE id=$1 FOR UPDATE")
+        .bind(waiting.user_id)
+        .execute(&mut *held)
+        .await
+        .unwrap();
+    let operation = tokio::spawn(async move { store.start(waiting, request(installation)).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let count: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FOR UPDATE OF u%'").fetch_one(&sql).await.unwrap();
+            if count > 0 { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.unwrap();
+    sqlx::query("DELETE FROM factory_identity.sessions WHERE user_id=$1")
+        .bind(waiting.user_id)
+        .execute(&mut *held)
+        .await
+        .unwrap();
+    held.commit().await.unwrap();
+    assert!(matches!(
+        operation.await.unwrap(),
+        Err(EnvironmentError::Unauthorized)
+    ));
+    db.close().await;
+    sql.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires the explicitly owned PostgreSQL integration fixture"]
+async fn supervisor_is_exclusive_and_connection_loss_is_terminal() {
+    let (db, sql) = fixture().await;
+    let installation = Uuid::new_v4();
+    let mut guard = db.environment_supervisor(installation).await.unwrap();
+    assert!(matches!(
+        db.environment_supervisor(installation).await,
+        Err(EnvironmentError::Conflict)
+    ));
+    let pid: i32 = sqlx::query_scalar("SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND query LIKE '%61925%' AND pid<>pg_backend_pid() AND state='idle'")
+        .fetch_one(&sql).await.unwrap();
+    guard.check().await.unwrap();
+    // Only the dedicated supervisor backend in this verified disposable DB is terminated.
+    let killed: bool = sqlx::query_scalar("SELECT pg_terminate_backend($1)")
+        .bind(pid)
+        .fetch_one(&sql)
+        .await
+        .unwrap();
+    assert!(killed);
+    assert!(guard.check().await.is_err());
+    assert!(
+        guard.check().await.is_err(),
+        "guard must never reconnect after losing its lock"
+    );
+    let replacement = db.environment_supervisor(installation).await.unwrap();
+    replacement.close().await.unwrap();
+    db.close().await;
+    sql.close().await;
+}
