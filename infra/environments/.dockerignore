@@ -1,2 +1,4 @@
 **
 !Dockerfile
+!tmux.conf
+!auth-controller.sh

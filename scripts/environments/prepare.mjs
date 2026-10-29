@@ -38,7 +38,7 @@ export async function prepare(
     [
       "build",
       "--pull",
-      "--network=none",
+      "--force-rm",
       "--tag",
       tag,
       resolve(root, "infra/environments"),
@@ -50,7 +50,8 @@ export async function prepare(
     !imageId.test(image.Id) ||
     image.Os !== "linux" ||
     image.Config?.User !== "10000:10000" ||
-    image.Config?.Labels?.["io.factory.environment.image"] !== policyVersion
+    image.Config?.Labels?.["io.factory.environment.image"] !== policyVersion ||
+    image.Config?.Labels?.["io.factory.codex.version"] !== "0.160.0"
   ) {
     throw new Error("Prepared image does not satisfy the environment contract")
   }
