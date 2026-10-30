@@ -30,6 +30,7 @@ pub(crate) struct DockerProcess {
 pub(crate) enum FixedProcess {
     TerminalAttach,
     TerminalDetach,
+    CodexAccount,
 }
 
 impl FixedProcess {
@@ -58,6 +59,7 @@ impl FixedProcess {
                 "-s",
                 "factory",
             ],
+            Self::CodexAccount => vec!["/usr/local/bin/factory-auth-controller"],
         };
         CreateExecOptions {
             attach_stdin: Some(true),
@@ -259,7 +261,7 @@ mod tests {
         env.user_id = Uuid::nil();
         assert!(matches!(
             runtime
-                .start_process(&env, FixedProcess::TerminalAttach)
+                .start_process(&env, FixedProcess::CodexAccount)
                 .await,
             Err(EnvironmentError::OwnershipConflict)
         ));
@@ -334,6 +336,40 @@ mod tests {
             .write_all(b"cat ~/Documents/witness; printf -- '-%s\\n' restored\r")
             .await?;
         until(&mut second.output, "persistent-restored").await?;
+        let mut account = runtime
+            .start_process(env, FixedProcess::CodexAccount)
+            .await?;
+        account.input.write_all(b"{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"factory_fixture\",\"version\":\"0\"}}}\n").await?;
+        until(&mut account.output, "\"id\":1").await?;
+        let duplicate = runtime
+            .start_process(env, FixedProcess::CodexAccount)
+            .await?;
+        assert_eq!(
+            runtime
+                .wait_process_exit(&duplicate.id, Duration::from_secs(5))
+                .await?,
+            75
+        );
+        account.input.shutdown().await?;
+        let account_id = account.id.clone();
+        drop(account);
+        runtime
+            .wait_process_exit(&account_id, Duration::from_secs(15))
+            .await?;
+        drop(duplicate);
+        // EOF releases the lock, allowing a fresh controller without starting OAuth.
+        let mut fresh = runtime
+            .start_process(env, FixedProcess::CodexAccount)
+            .await?;
+        fresh.input.shutdown().await?;
+        let fresh_id = fresh.id.clone();
+        drop(fresh);
+        assert_ne!(
+            runtime
+                .wait_process_exit(&fresh_id, Duration::from_secs(15))
+                .await?,
+            75
+        );
         Ok(())
     }
 
