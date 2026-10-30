@@ -18,11 +18,11 @@ oauth2.workspace = true
 reqwest.workspace = true
 bollard.workspace = true
 uuid.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
 bollard = { workspace = true, features = ["http"] }
 axum.workspace = true
-chrono.workspace = true
 
 [lints]
 workspace = true
