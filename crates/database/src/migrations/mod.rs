@@ -7,6 +7,7 @@ const INITIALIZATION_LOCK: i64 = 0x464143544d4947;
 const TABLES: &[&str] = &[
     "_sqlx_migrations",
     "access_events",
+    "environment_upgrades",
     "environments",
     "external_identities",
     "login_attempts",

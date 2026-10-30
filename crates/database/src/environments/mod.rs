@@ -1,6 +1,7 @@
 mod mapping;
 mod requests;
 mod supervision;
+mod upgrade;
 
 use factory_core::environments::*;
 use sqlx::PgPool;

@@ -1,15 +1,45 @@
 //! Explicit local operator commands. Never invoked by the API or build process.
 use factory_adapters::identity::lookup_github_account;
+use factory_adapters::{
+    egress::EgressMetadata,
+    environments::{DockerEnvironmentUpgradeRuntime, InstallationGuard, PreparationMetadata},
+};
 use factory_api::config::RuntimeConfig;
+use factory_application::environments::{EnvironmentAvailability, EnvironmentUpgradeService};
+use factory_core::environments::{EnvironmentError, EnvironmentStart};
 use factory_core::identity::IdentityError;
 use factory_database::{identity::IdentityDatabase, local_target, migrations::Readiness};
 use std::{
     io::{self, BufRead, Write},
     process::ExitCode,
+    sync::Arc,
 };
+use uuid::Uuid;
 
-const USAGE: &str =
-    "Usage: pnpm factory admin setup --provider github --username <GitHub username>";
+const USAGE: &str = "Usage: pnpm factory admin setup --provider github --username <GitHub username>\n       pnpm factory environment upgrade --user-id <Factory user UUID>";
+
+enum Command<'a> {
+    Help,
+    Admin(&'a str),
+    Upgrade(Uuid),
+}
+
+fn command(args: &[String]) -> Result<Command<'_>, &'static str> {
+    if args.first().map(String::as_str) == Some("environment") {
+        if args.len() != 4 || args[1] != "upgrade" || args[2] != "--user-id" {
+            return Err("INVALID_ARGUMENTS");
+        }
+        let user = Uuid::parse_str(&args[3]).map_err(|_| "INVALID_USER_ID")?;
+        if user.is_nil() || user.to_string() != args[3] {
+            return Err("INVALID_USER_ID");
+        }
+        return Ok(Command::Upgrade(user));
+    }
+    Ok(match username(args)? {
+        Some(name) => Command::Admin(name),
+        None => Command::Help,
+    })
+}
 
 fn username(args: &[String]) -> Result<Option<&str>, &'static str> {
     if args == ["--help"] || args == ["-h"] {
@@ -49,12 +79,7 @@ fn confirm(input: impl BufRead, mut output: impl Write, handle: &str) -> io::Res
 }
 
 async fn configure(database: &IdentityDatabase, username: &str) -> Result<(), &'static str> {
-    match database.ready().await {
-        Ok(Readiness::Ready) => {}
-        Ok(Readiness::Missing | Readiness::Pending) => return Err("IDENTITY_MIGRATION_REQUIRED"),
-        Ok(Readiness::Invalid) => return Err("IDENTITY_SCHEMA_INVALID"),
-        Err(_) => return Err("IDENTITY_DATABASE_UNAVAILABLE"),
-    }
+    ready(database).await?;
     if database
         .has_administrator()
         .await
@@ -93,12 +118,104 @@ async fn configure(database: &IdentityDatabase, username: &str) -> Result<(), &'
     Ok(())
 }
 
+async fn ready(database: &IdentityDatabase) -> Result<(), &'static str> {
+    match database.ready().await {
+        Ok(Readiness::Ready) => {}
+        Ok(Readiness::Missing | Readiness::Pending) => return Err("IDENTITY_MIGRATION_REQUIRED"),
+        Ok(Readiness::Invalid) => return Err("IDENTITY_SCHEMA_INVALID"),
+        Err(_) => return Err("IDENTITY_DATABASE_UNAVAILABLE"),
+    }
+    Ok(())
+}
+
+fn upgrade_error(error: EnvironmentError) -> &'static str {
+    error.code()
+}
+
+async fn upgrade(
+    database: &IdentityDatabase,
+    config: &RuntimeConfig,
+    user_id: Uuid,
+) -> Result<(), &'static str> {
+    ready(database).await?;
+    let directory = config.workspace().join(".factory/environments");
+    let metadata = PreparationMetadata::load(&directory).map_err(upgrade_error)?;
+    // Excludes the API for the entire preview, confirmation and recoverable replacement.
+    let _installation =
+        InstallationGuard::acquire(&directory).map_err(|_| "STOP_API_BEFORE_UPGRADE")?;
+    let supervisor = database
+        .environment_supervisor(metadata.installation_id())
+        .await
+        .map_err(|_| "ENVIRONMENT_SUPERVISOR_UNAVAILABLE")?;
+    let target = EnvironmentStart {
+        installation_id: metadata.installation_id(),
+        image_id: metadata.image_id().to_owned(),
+        policy_version: metadata.policy_version().to_owned(),
+    };
+    let availability = EnvironmentAvailability::default();
+    let permitted = availability.clone();
+    let runtime = DockerEnvironmentUpgradeRuntime::connect(
+        metadata,
+        EgressMetadata::load(&directory).map_err(upgrade_error)?,
+        Arc::new(move || !permitted.is_failed()),
+    )
+    .map_err(upgrade_error)?;
+    let mut service = EnvironmentUpgradeService::new(
+        Arc::new(database.environment_store()),
+        Arc::new(runtime),
+        Box::new(supervisor),
+        availability,
+        target,
+    )
+    .map_err(upgrade_error)?;
+    let preview = service.preview(user_id).await.map_err(upgrade_error)?;
+    let env = &preview.snapshot.environment;
+    println!(
+        "User: {user_id}\nEnvironment: {}\nHome volume (preserved): {}",
+        env.id, env.volume_name
+    );
+    println!(
+        "Old container: {}",
+        preview
+            .snapshot
+            .pending
+            .as_ref()
+            .map(|intent| intent.old_container_id.as_str())
+            .or(preview.old_container_id.as_deref())
+            .unwrap_or("absent")
+    );
+    println!(
+        "Current image: {} (policy {})\nTarget image: {} (policy {})",
+        env.image_id, env.policy_version, preview.target.image_id, preview.target.policy_version
+    );
+    if preview.already_current {
+        println!("Already current. No replacement is needed.");
+        return Ok(());
+    }
+    if let Some(intent) = &preview.snapshot.pending {
+        println!("Resuming operation: {}", intent.operation_id);
+    }
+    println!(
+        "The stopped container will be removed; its home is preserved. Start recreates the container later."
+    );
+    if !confirm(io::stdin().lock(), io::stdout(), &user_id.to_string())
+        .map_err(|_| "CONFIRMATION_FAILED")?
+    {
+        println!("Cancelled. No upgrade was performed.");
+        return Ok(());
+    }
+    service.execute(&preview).await.map_err(upgrade_error)?;
+    println!("Upgrade recorded. Restart the API, then start the environment when ready.");
+    Ok(())
+}
+
 async fn run() -> Result<(), &'static str> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let Some(username) = username(&args)? else {
+    let command = command(&args)?;
+    if matches!(command, Command::Help) {
         println!("{USAGE}");
         return Ok(());
-    };
+    }
     let config = RuntimeConfig::from_environment()?;
     let target = local_target::from_workspace(config.workspace())
         .await
@@ -106,7 +223,11 @@ async fn run() -> Result<(), &'static str> {
     let database = IdentityDatabase::connect(&target)
         .await
         .map_err(|_| "IDENTITY_DATABASE_UNAVAILABLE")?;
-    let result = configure(&database, username).await;
+    let result = match command {
+        Command::Admin(username) => configure(&database, username).await,
+        Command::Upgrade(user) => upgrade(&database, &config, user).await,
+        Command::Help => unreachable!(),
+    };
     database.close().await;
     result
 }
@@ -125,6 +246,40 @@ async fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upgrade_requires_one_canonical_stable_user_id_and_exact_confirmation() {
+        let user = Uuid::new_v4();
+        let args = vec![
+            "environment".into(),
+            "upgrade".into(),
+            "--user-id".into(),
+            user.to_string(),
+        ];
+        assert!(matches!(command(&args), Ok(Command::Upgrade(id)) if id == user));
+        for invalid in [
+            "Westerbay",
+            "user@example.invalid",
+            "00000000-0000-0000-0000-000000000000",
+        ] {
+            let mut args = args.clone();
+            args[3] = invalid.into();
+            assert!(command(&args).is_err());
+        }
+        let mut yes = args.clone();
+        yes.push("--yes".into());
+        assert!(command(&yes).is_err());
+        assert!(!confirm(format!("{user}").as_bytes(), Vec::new(), &user.to_string()).unwrap());
+        assert!(!confirm(b"yes\n".as_slice(), Vec::new(), &user.to_string()).unwrap());
+        assert!(
+            confirm(
+                format!("{user}\n").as_bytes(),
+                Vec::new(),
+                &user.to_string()
+            )
+            .unwrap()
+        );
+    }
 
     #[test]
     fn command_rejects_ambiguous_or_unsupported_arguments() {
