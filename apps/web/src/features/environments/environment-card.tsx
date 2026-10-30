@@ -1,15 +1,8 @@
-import { useEffect, useMemo, useSyncExternalStore } from "react"
-
-import { useSession } from "../../lib/auth/session-context"
-import {
-  changeEnvironment,
-  environmentProblem,
-  readEnvironment,
-  type Environment,
-} from "./api"
+import { environmentProblem, type Environment } from "./api"
 import {
   canStopEnvironment,
-  EnvironmentController,
+  type EnvironmentController,
+  type EnvironmentState,
 } from "./environment-controller"
 import "./environments.css"
 
@@ -45,37 +38,13 @@ function timestamp(value: string | null | undefined) {
   )
 }
 
-export function EnvironmentCard() {
-  const { controller: session } = useSession()
-  const controller = useMemo(
-    () =>
-      new EnvironmentController({
-        session,
-        visible: () => document.visibilityState === "visible",
-        online: () => navigator.onLine,
-        read: readEnvironment,
-        change: changeEnvironment,
-      }),
-    [session]
-  )
-  const state = useSyncExternalStore(
-    controller.subscribe,
-    controller.getSnapshot
-  )
-
-  useEffect(() => {
-    controller.connect()
-    document.addEventListener("visibilitychange", controller.synchronize)
-    window.addEventListener("online", controller.synchronize)
-    window.addEventListener("offline", controller.synchronize)
-    return () => {
-      document.removeEventListener("visibilitychange", controller.synchronize)
-      window.removeEventListener("online", controller.synchronize)
-      window.removeEventListener("offline", controller.synchronize)
-      controller.dispose()
-    }
-  }, [controller])
-
+export function EnvironmentCard({
+  state,
+  controller,
+}: {
+  state: EnvironmentState
+  controller: EnvironmentController
+}) {
   const status = state.environment?.status
   const busy = state.pending === "start" || state.pending === "stop"
   const canStart = status === "not_created" || status === "stopped"
