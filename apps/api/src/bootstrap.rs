@@ -3,11 +3,13 @@ use crate::{
     auth::AuthState,
     config::RuntimeConfig,
 };
+use factory_adapters::codex_account::CodexAccountAdapter;
 use factory_adapters::environments::{
     DockerEnvironmentRuntime, InstallationGuard, PreparationMetadata,
 };
 use factory_adapters::identity::GitHubProvider;
 use factory_adapters::terminals::DockerTerminalRuntime;
+use factory_application::agent_connections::AgentConnectionService;
 use factory_application::environments::{
     EnvironmentAvailability, EnvironmentReconciler, EnvironmentService,
 };
@@ -30,6 +32,7 @@ const MAX_RECONCILIATION_JOBS: usize = 32;
 pub struct EnvironmentHost {
     service: Arc<EnvironmentService>,
     terminal: Arc<TerminalService>,
+    accounts: Arc<AgentConnectionService>,
     availability: EnvironmentAvailability,
     stop: watch::Sender<bool>,
     workers: Vec<JoinHandle<()>>,
@@ -88,6 +91,10 @@ impl EnvironmentHost {
             Arc::new(DockerTerminalRuntime::new(runtime.clone())),
         ));
         let job_guard = guard.clone();
+        let accounts = Arc::new(AgentConnectionService::new(
+            service.clone(),
+            Arc::new(CodexAccountAdapter::new(runtime.clone())),
+        ));
         let job_availability = availability.clone();
         let create_reconciler = move || {
             EnvironmentReconciler::new(
@@ -118,6 +125,7 @@ impl EnvironmentHost {
         Ok(Self {
             service,
             terminal,
+            accounts,
             availability,
             stop,
             workers,
@@ -131,6 +139,10 @@ impl EnvironmentHost {
 
     pub fn terminal(&self) -> Arc<TerminalService> {
         self.terminal.clone()
+    }
+
+    pub fn accounts(&self) -> Arc<AgentConnectionService> {
+        self.accounts.clone()
     }
 
     /// Drain bounded in-flight operations. Stopping the API never deletes user data.
@@ -309,11 +321,12 @@ pub async fn serve(config: RuntimeConfig) -> Result<(), &'static str> {
     } else {
         None
     };
-    let router = app::router_with_terminal(
+    let router = app::router_with_user_services(
         &config,
         identity,
         environments.as_ref().map(EnvironmentHost::service),
         environments.as_ref().map(EnvironmentHost::terminal),
+        environments.as_ref().map(EnvironmentHost::accounts),
     )?;
     let environment_shutdown = environments
         .as_ref()

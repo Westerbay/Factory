@@ -31,6 +31,70 @@ export interface paths {
     patch: operations["changeAccess"]
     trace?: never
   }
+  "/api/agent-connections/codex": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get: operations["getCodexConnection"]
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/agent-connections/codex/login": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post: operations["beginCodexLogin"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/agent-connections/codex/login/cancel": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post: operations["cancelCodexLogin"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/agent-connections/codex/logout": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post: operations["logoutCodex"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   "/api/auth/github/callback": {
     parameters: {
       query?: never
@@ -234,6 +298,38 @@ export interface components {
       /** Format: int64 */
       version: number
     }
+    AgentAccount: {
+      email?: string | null
+      plan: string
+    }
+    AgentConnectionResponse: {
+      account?: components["schemas"]["AgentAccount"] | null
+      challenge?: components["schemas"]["AgentLoginChallenge"] | null
+      /** @description Bounded application error code, never the raw provider response. */
+      errorCode?: string | null
+      /** Format: date-time */
+      observedAt?: string | null
+      provider: components["schemas"]["AgentProvider"]
+      status: components["schemas"]["AgentConnectionStatus"]
+    }
+    /** @enum {string} */
+    AgentConnectionStatus:
+      | "unavailable"
+      | "disconnected"
+      | "connecting"
+      | "connected"
+      | "error"
+    /** @description Device authorization instructions, never provider credentials or a provider login ID. */
+    AgentLoginChallenge: {
+      /** Format: date-time */
+      expiresAt: string
+      /** Format: uuid */
+      operationId: string
+      userCode: string
+      verificationUrl: string
+    }
+    /** @enum {string} */
+    AgentProvider: "codex"
     ApiError: {
       code: string
       message: string
@@ -247,6 +343,10 @@ export interface components {
       /** Format: date-time */
       expiresAt: string
       ticket: string
+    }
+    CancelAgentLoginBody: {
+      /** Format: uuid */
+      operationId: string
     }
     EnvironmentResponse: {
       /** @description Bounded public error code; never includes provider responses or resource names. */
@@ -526,6 +626,351 @@ export interface operations {
         }
       }
       /** @description Dependency unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  getCodexConnection: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Current account or unavailable state; pending codes belong only to their initiating session */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["AgentConnectionResponse"]
+        }
+      }
+      /** @description Active session required */
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Operation owned by another session or environment changed */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Rate limit */
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Identity unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  beginCodexLogin: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Session CSRF token; exact frontend Origin required; empty request body */
+        "X-CSRF-Token": string
+      }
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Device authorization started; may already be connected */
+      202: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["AgentConnectionResponse"]
+        }
+      }
+      /** @description Body must be empty */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Active session required */
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Origin or CSRF rejected */
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Already pending, expired or environment changed */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Unsupported authentication method */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Rate limit */
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Invalid provider response or login failure */
+      502: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Provider unavailable or cleanup uncertain */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  cancelCodexLogin: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Session CSRF token; exact frontend Origin required */
+        "X-CSRF-Token": string
+      }
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CancelAgentLoginBody"]
+      }
+    }
+    responses: {
+      /** @description Operation cancellation confirmed */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["AgentConnectionResponse"]
+        }
+      }
+      /** @description Invalid body */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Active session required */
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Origin or CSRF rejected */
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Operation differs or environment changed */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Unsupported authentication method */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Rate limit */
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Invalid provider response or login failure */
+      502: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Provider unavailable or cleanup uncertain */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  logoutCodex: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Session CSRF token; exact frontend Origin required; empty request body */
+        "X-CSRF-Token": string
+      }
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Provider logout confirmed */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["AgentConnectionResponse"]
+        }
+      }
+      /** @description Body must be empty */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Active session required */
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Origin or CSRF rejected */
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Operation owned by another session or environment changed */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Unsupported authentication method */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Rate limit */
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Invalid provider response or login failure */
+      502: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Provider unavailable or cleanup uncertain */
       503: {
         headers: {
           [name: string]: unknown
