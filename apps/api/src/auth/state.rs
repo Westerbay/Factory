@@ -105,6 +105,15 @@ impl AuthState {
         Ok(())
     }
 
+    /// WebSocket upgrades do not inherit browser CORS enforcement.
+    pub fn authorize_origin(&self, headers: &HeaderMap) -> Result<(), AuthError> {
+        if single_header(headers, header::ORIGIN.as_str()) == Some(self.web_origin.as_str()) {
+            Ok(())
+        } else {
+            Err(AuthError::forbidden())
+        }
+    }
+
     /// Fixed-size process-local quotas bound anonymous OAuth work without retaining IPs.
     /// They are deliberately shared by local users; distributed admission comes later.
     pub fn check_quota(&self, login: bool) -> Result<(), AuthError> {

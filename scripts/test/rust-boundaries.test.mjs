@@ -98,3 +98,43 @@ test("async application tests may use Tokio without granting a production depend
     1
   )
 })
+
+test("application production Tokio permits only explicit synchronization features", () => {
+  const synchronization = {
+    name: "tokio",
+    kind: null,
+    uses_default_features: false,
+    features: ["sync"],
+  }
+  for (const extra of [
+    {},
+    { rename: "coordination" },
+    { target: "cfg(windows)" },
+  ]) {
+    assert.deepEqual(
+      boundaryViolations(
+        metadata("factory-application", [{ ...synchronization, ...extra }])
+      ),
+      []
+    )
+  }
+  for (const extra of [
+    { uses_default_features: true },
+    { kind: "build" },
+    { features: [] },
+    ...["net", "process", "fs", "rt", "rt-multi-thread", "time", "full"].map(
+      (feature) => ({ features: ["sync", feature] })
+    ),
+  ]) {
+    assert.equal(
+      boundaryViolations(
+        metadata("factory-application", [{ ...synchronization, ...extra }])
+      ).length,
+      1
+    )
+  }
+  assert.equal(
+    boundaryViolations(metadata("factory-core", [synchronization])).length,
+    1
+  )
+})

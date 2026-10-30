@@ -9,11 +9,12 @@ publish.workspace = true
 [dependencies]
 factory-core = { path = "../core" }
 chrono.workspace = true
+tokio = { version = "=1.53.3", default-features = false, features = ["sync"] }
+uuid.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
 tokio.workspace = true
-uuid.workspace = true
 
 [lints]
 workspace = true

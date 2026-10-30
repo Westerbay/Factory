@@ -25,7 +25,8 @@ utoipa-axum.workspace = true
 dotenvy.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["serde"] }
-axum.workspace = true
+axum = { workspace = true, features = ["ws"] }
+futures-util.workspace = true
 serde.workspace = true
 tokio.workspace = true
 tower-http.workspace = true
@@ -35,6 +36,7 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 tower.workspace = true
+tokio-tungstenite = "=0.29.0"
 
 [lints]
 workspace = true

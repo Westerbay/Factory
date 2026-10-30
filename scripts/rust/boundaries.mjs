@@ -22,6 +22,22 @@ const pureDependencies = new Set([
   "thiserror",
 ])
 
+// Application coordination can use locks and notifications, but must not opt
+// into filesystem, network, process or executor facilities. Cargo feature
+// unification is not a security sandbox; this checks declared module ownership.
+function applicationSynchronization(pkg, dep) {
+  return (
+    pkg.name === "factory-application" &&
+    dep.name === "tokio" &&
+    (dep.kind === "dev" ||
+      (dep.kind === null &&
+        dep.uses_default_features === false &&
+        Array.isArray(dep.features) &&
+        dep.features.length > 0 &&
+        dep.features.every((feature) => feature === "sync")))
+  )
+}
+
 /** Cargo resolves inherited, renamed and platform-specific manifest dependencies. */
 export function boundaryViolations(metadata) {
   const members = new Set(metadata.workspace_members)
@@ -41,11 +57,7 @@ export function boundaryViolations(metadata) {
       if (
         !local &&
         ["factory-core", "factory-application"].includes(pkg.name) &&
-        !(
-          pkg.name === "factory-application" &&
-          dep.name === "tokio" &&
-          dep.kind === "dev"
-        ) &&
+        !applicationSynchronization(pkg, dep) &&
         !pureDependencies.has(dep.name)
       ) {
         violations.push(

@@ -1,14 +1,42 @@
 use factory_core::identity::*;
 use std::sync::Arc;
+use tokio::sync::broadcast;
+use uuid::Uuid;
+
+/// Local wake-up after committed identity changes. Long-lived consumers still
+/// revalidate against persistence, including after a lagged notification.
+#[derive(Clone, Copy)]
+pub enum IdentityRevocation {
+    Session(CredentialHash),
+    User(Uuid),
+}
+
+impl IdentityRevocation {
+    pub fn matches(self, user_id: Uuid, session_hash: CredentialHash) -> bool {
+        match self {
+            Self::Session(hash) => hash == session_hash,
+            Self::User(id) => id == user_id,
+        }
+    }
+}
 
 pub struct IdentityService {
     store: Arc<dyn IdentityStore>,
     provider: Arc<dyn IdentityProvider>,
+    revocations: broadcast::Sender<IdentityRevocation>,
 }
 
 impl IdentityService {
     pub fn new(store: Arc<dyn IdentityStore>, provider: Arc<dyn IdentityProvider>) -> Self {
-        Self { store, provider }
+        Self {
+            store,
+            provider,
+            revocations: broadcast::channel(256).0,
+        }
+    }
+
+    pub fn subscribe_revocations(&self) -> broadcast::Receiver<IdentityRevocation> {
+        self.revocations.subscribe()
     }
 
     pub async fn begin_login(
@@ -66,13 +94,21 @@ impl IdentityService {
         {
             return Err(IdentityError::InvalidLogin);
         }
-        self.store
+        let previous = session.previous_token_hash;
+        let outcome = self
+            .store
             .admit(LoginAdmission {
                 identity,
                 login_started_at: attempt.created_at,
                 session,
             })
-            .await
+            .await?;
+        if matches!(outcome, AdmissionOutcome::Active(_))
+            && let Some(previous) = previous
+        {
+            let _ = self.revocations.send(IdentityRevocation::Session(previous));
+        }
+        Ok(outcome)
     }
 
     pub async fn session(&self, hash: CredentialHash) -> Result<ActiveSession, IdentityError> {
@@ -84,7 +120,9 @@ impl IdentityService {
     }
 
     pub async fn logout(&self, hash: CredentialHash) -> Result<(), IdentityError> {
-        self.store.logout(hash).await
+        self.store.logout(hash).await?;
+        let _ = self.revocations.send(IdentityRevocation::Session(hash));
+        Ok(())
     }
 
     pub async fn list_users(
@@ -106,6 +144,10 @@ impl IdentityService {
             return Err(IdentityError::InvalidInput);
         }
         require_admin(&self.session(hash).await?.user)?;
-        self.store.change_access(hash, request).await
+        let user = self.store.change_access(hash, request).await?;
+        if user.status == AccessStatus::Suspended {
+            let _ = self.revocations.send(IdentityRevocation::User(user.id));
+        }
+        Ok(user)
     }
 }

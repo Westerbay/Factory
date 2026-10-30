@@ -93,6 +93,28 @@ impl EnvironmentService {
         self.store.start(actor, self.config.clone()).await
     }
 
+    /// Revalidate the owner before interactive work; a cached Running state alone
+    /// must never grant access while the supervisor or intent has changed.
+    pub async fn require_running(
+        &self,
+        actor: EnvironmentActor,
+    ) -> Result<Environment, EnvironmentError> {
+        let environment = self
+            .get(actor)
+            .await?
+            .ok_or(EnvironmentError::Unavailable)?;
+        if !self.can_report(Some(&environment)) {
+            return Err(EnvironmentError::Unavailable);
+        }
+        if environment.desired_state != DesiredState::Running
+            || environment.observed_state != ObservedState::Running
+            || environment.error_code.is_some()
+        {
+            return Err(EnvironmentError::Conflict);
+        }
+        Ok(environment)
+    }
+
     pub async fn stop(
         &self,
         actor: EnvironmentActor,
