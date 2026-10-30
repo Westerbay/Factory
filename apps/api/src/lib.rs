@@ -1,6 +1,7 @@
 //! Local HTTP composition, adapted from the Rust WebApp Template (MIT).
 
 pub mod admin;
+pub mod agent_connections;
 pub mod app;
 pub mod auth;
 pub mod bootstrap;
