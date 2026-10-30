@@ -1,0 +1,64 @@
+.terminal-panel {
+  min-width: 0;
+  margin: 1.25rem 0 2rem;
+}
+.terminal-actions,
+.terminal-keys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+}
+.terminal-actions label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.terminal-actions input {
+  width: auto;
+}
+.terminal-actions:focus-visible {
+  outline: 3px solid #6356c8;
+  outline-offset: 4px;
+}
+.terminal-status {
+  min-height: 1.5em;
+  overflow-wrap: anywhere;
+}
+.terminal-screen {
+  height: clamp(16rem, 52dvh, 38rem);
+  min-width: 0;
+  padding: 0.75rem;
+  border-radius: 0.65rem;
+  background: #15171c;
+  overflow: hidden;
+}
+.terminal-screen:focus-within {
+  outline: 3px solid #6356c8;
+  outline-offset: 2px;
+}
+.terminal-screen .xterm {
+  height: 100%;
+}
+.terminal-keys {
+  margin-top: 0.8rem;
+}
+.terminal-keys button {
+  min-width: 3rem;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.75rem;
+}
+.terminal-help {
+  color: #5d6069;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+@media (max-width: 480px) {
+  .terminal-screen {
+    height: clamp(14rem, 42dvh, 26rem);
+    padding: 0.35rem;
+  }
+  .terminal-actions button {
+    flex: 1 1 auto;
+  }
+}
