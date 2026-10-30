@@ -3,3 +3,4 @@
 pub mod egress;
 pub mod environments;
 pub mod identity;
+pub mod terminals;

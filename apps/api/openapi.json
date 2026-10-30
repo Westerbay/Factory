@@ -73,6 +73,29 @@
         "required": ["code", "message", "requestId"],
         "type": "object"
       },
+      "AttachmentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "takeOver": {
+            "type": "boolean"
+          }
+        },
+        "required": ["takeOver"],
+        "type": "object"
+      },
+      "AttachmentResponse": {
+        "properties": {
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "ticket": {
+            "type": "string"
+          }
+        },
+        "required": ["ticket", "expiresAt"],
+        "type": "object"
+      },
       "EnvironmentResponse": {
         "properties": {
           "errorCode": {
@@ -158,6 +181,134 @@
         },
         "required": ["id", "displayName", "handle", "role"],
         "type": "object"
+      },
+      "TerminalClientMessage": {
+        "description": "UTF-8 JSON inputs for factory.terminal.v1. Output data uses binary frames.",
+        "oneOf": [
+          {
+            "properties": {
+              "ticket": {
+                "type": "string"
+              },
+              "type": {
+                "enum": ["authenticate"],
+                "type": "string"
+              }
+            },
+            "required": ["ticket", "type"],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "data": {
+                "type": "string"
+              },
+              "type": {
+                "enum": ["input"],
+                "type": "string"
+              }
+            },
+            "required": ["data", "type"],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "cols": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "rows": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": {
+                "enum": ["resize"],
+                "type": "string"
+              }
+            },
+            "required": ["cols", "rows", "type"],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "bytes": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": {
+                "enum": ["ack"],
+                "type": "string"
+              }
+            },
+            "required": ["bytes", "type"],
+            "type": "object"
+          }
+        ]
+      },
+      "TerminalErrorCode": {
+        "enum": [
+          "unauthorized",
+          "unavailable",
+          "conflict",
+          "invalid_ticket",
+          "invalid_input",
+          "slow_client",
+          "cleanup_uncertain"
+        ],
+        "type": "string"
+      },
+      "TerminalServerMessage": {
+        "oneOf": [
+          {
+            "properties": {
+              "type": {
+                "enum": ["ready"],
+                "type": "string"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "code": {
+                "$ref": "#/components/schemas/TerminalErrorCode"
+              },
+              "type": {
+                "enum": ["detached"],
+                "type": "string"
+              }
+            },
+            "required": ["code", "type"],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": ["exit"],
+                "type": "string"
+              }
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "code": {
+                "$ref": "#/components/schemas/TerminalErrorCode"
+              },
+              "type": {
+                "enum": ["error"],
+                "type": "string"
+              }
+            },
+            "required": ["code", "type"],
+            "type": "object"
+          }
+        ]
       },
       "UserRole": {
         "enum": ["member", "admin"],
@@ -951,6 +1102,175 @@
               }
             },
             "description": "Dependency unavailable"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/terminal/attachments": {
+      "post": {
+        "operationId": "createTerminalAttachment",
+        "parameters": [
+          {
+            "description": "Session CSRF token; exact frontend Origin required",
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentResponse"
+                }
+              }
+            },
+            "description": "Single-use terminal ticket, expires within 30 seconds"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid body"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Active session required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Origin or CSRF rejected"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Already attached or environment changed"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Rate limit"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Terminal unavailable"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/terminal/socket": {
+      "get": {
+        "description": "Upgrade with exact Origin and factory.terminal.v1 subprotocol. Within five seconds send TerminalClientMessage.authenticate containing the single-use ticket. Further JSON controls use TerminalClientMessage; data output is binary and controls use TerminalServerMessage. No credentials in URL or subprotocol.",
+        "operationId": "connectTerminal",
+        "responses": {
+          "101": {
+            "description": "Authenticated WebSocket upgrade; ticket still required before exec"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid upgrade or subprotocol"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Active session required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Origin rejected"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Rate limit"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Terminal unavailable"
           }
         },
         "security": [

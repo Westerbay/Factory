@@ -7,10 +7,12 @@ use factory_adapters::environments::{
     DockerEnvironmentRuntime, InstallationGuard, PreparationMetadata,
 };
 use factory_adapters::identity::GitHubProvider;
+use factory_adapters::terminals::DockerTerminalRuntime;
 use factory_application::environments::{
     EnvironmentAvailability, EnvironmentReconciler, EnvironmentService,
 };
 use factory_application::identity::IdentityService;
+use factory_application::terminals::TerminalService;
 use factory_core::environments::{EnvironmentError, EnvironmentStart, EnvironmentSupervisor};
 use factory_database::environments::PgEnvironmentSupervisor;
 use factory_database::{identity::IdentityDatabase, local_target, migrations::Readiness};
@@ -27,6 +29,7 @@ const MAX_RECONCILIATION_JOBS: usize = 32;
 /// Keep this owner alive until HTTP shutdown; its file lock survives a lost DB guard.
 pub struct EnvironmentHost {
     service: Arc<EnvironmentService>,
+    terminal: Arc<TerminalService>,
     availability: EnvironmentAvailability,
     stop: watch::Sender<bool>,
     workers: Vec<JoinHandle<()>>,
@@ -80,6 +83,10 @@ impl EnvironmentHost {
             request.clone(),
             availability.clone(),
         )?);
+        let terminal = Arc::new(TerminalService::new(
+            service.clone(),
+            Arc::new(DockerTerminalRuntime::new(runtime.clone())),
+        ));
         let job_guard = guard.clone();
         let job_availability = availability.clone();
         let create_reconciler = move || {
@@ -110,6 +117,7 @@ impl EnvironmentHost {
         ];
         Ok(Self {
             service,
+            terminal,
             availability,
             stop,
             workers,
@@ -119,6 +127,10 @@ impl EnvironmentHost {
 
     pub fn service(&self) -> Arc<EnvironmentService> {
         self.service.clone()
+    }
+
+    pub fn terminal(&self) -> Arc<TerminalService> {
+        self.terminal.clone()
     }
 
     /// Drain bounded in-flight operations. Stopping the API never deletes user data.
@@ -297,10 +309,11 @@ pub async fn serve(config: RuntimeConfig) -> Result<(), &'static str> {
     } else {
         None
     };
-    let router = app::router_with_environments(
+    let router = app::router_with_terminal(
         &config,
         identity,
         environments.as_ref().map(EnvironmentHost::service),
+        environments.as_ref().map(EnvironmentHost::terminal),
     )?;
     let environment_shutdown = environments
         .as_ref()

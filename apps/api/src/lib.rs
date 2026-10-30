@@ -10,3 +10,4 @@ pub mod environments;
 mod health;
 mod http;
 pub mod openapi;
+pub mod terminals;

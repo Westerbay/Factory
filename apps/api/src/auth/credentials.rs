@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 pub(crate) const SESSION_COOKIE: &str = "factory_session";
 pub(super) const LOGIN_COOKIE: &str = "factory_login";
 
-pub(super) fn random_token() -> Result<String, IdentityError> {
+pub(crate) fn random_token() -> Result<String, IdentityError> {
     let mut bytes = [0u8; 32];
     rand::rngs::OsRng
         .try_fill_bytes(&mut bytes)
@@ -17,7 +17,7 @@ pub(super) fn random_token() -> Result<String, IdentityError> {
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
-pub(super) fn hash_token(value: &str) -> Result<CredentialHash, IdentityError> {
+pub(crate) fn hash_token(value: &str) -> Result<CredentialHash, IdentityError> {
     if value.len() != 43 {
         return Err(IdentityError::InvalidLogin);
     }

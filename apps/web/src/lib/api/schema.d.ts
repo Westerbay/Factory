@@ -147,6 +147,39 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  "/api/terminal/attachments": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post: operations["createTerminalAttachment"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/terminal/socket": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** @description Upgrade with exact Origin and factory.terminal.v1 subprotocol. Within five seconds send TerminalClientMessage.authenticate containing the single-use ticket. Further JSON controls use TerminalClientMessage; data output is binary and controls use TerminalServerMessage. No credentials in URL or subprotocol. */
+    get: operations["connectTerminal"]
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   "/health/live": {
     parameters: {
       query?: never
@@ -207,6 +240,14 @@ export interface components {
       /** Format: uuid */
       requestId: string
     }
+    AttachmentRequest: {
+      takeOver: boolean
+    }
+    AttachmentResponse: {
+      /** Format: date-time */
+      expiresAt: string
+      ticket: string
+    }
     EnvironmentResponse: {
       /** @description Bounded public error code; never includes provider responses or resource names. */
       errorCode?: string | null
@@ -244,6 +285,60 @@ export interface components {
       id: string
       role: components["schemas"]["UserRole"]
     }
+    /** @description UTF-8 JSON inputs for factory.terminal.v1. Output data uses binary frames. */
+    TerminalClientMessage:
+      | {
+          ticket: string
+          /** @enum {string} */
+          type: "authenticate"
+        }
+      | {
+          data: string
+          /** @enum {string} */
+          type: "input"
+        }
+      | {
+          /** Format: int32 */
+          cols: number
+          /** Format: int32 */
+          rows: number
+          /** @enum {string} */
+          type: "resize"
+        }
+      | {
+          /** Format: int32 */
+          bytes: number
+          /** @enum {string} */
+          type: "ack"
+        }
+    /** @enum {string} */
+    TerminalErrorCode:
+      | "unauthorized"
+      | "unavailable"
+      | "conflict"
+      | "invalid_ticket"
+      | "invalid_input"
+      | "slow_client"
+      | "cleanup_uncertain"
+    TerminalServerMessage:
+      | {
+          /** @enum {string} */
+          type: "ready"
+        }
+      | {
+          code: components["schemas"]["TerminalErrorCode"]
+          /** @enum {string} */
+          type: "detached"
+        }
+      | {
+          /** @enum {string} */
+          type: "exit"
+        }
+      | {
+          code: components["schemas"]["TerminalErrorCode"]
+          /** @enum {string} */
+          type: "error"
+        }
     /** @enum {string} */
     UserRole: "member" | "admin"
     /** @enum {string} */
@@ -875,6 +970,150 @@ export interface operations {
         }
       }
       /** @description Dependency unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  createTerminalAttachment: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Session CSRF token; exact frontend Origin required */
+        "X-CSRF-Token": string
+      }
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AttachmentRequest"]
+      }
+    }
+    responses: {
+      /** @description Single-use terminal ticket, expires within 30 seconds */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["AttachmentResponse"]
+        }
+      }
+      /** @description Invalid body */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Active session required */
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Origin or CSRF rejected */
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Already attached or environment changed */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Rate limit */
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Terminal unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  connectTerminal: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Authenticated WebSocket upgrade; ticket still required before exec */
+      101: {
+        headers: {
+          [name: string]: unknown
+        }
+        content?: never
+      }
+      /** @description Invalid upgrade or subprotocol */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Active session required */
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Origin rejected */
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Rate limit */
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Terminal unavailable */
       503: {
         headers: {
           [name: string]: unknown
