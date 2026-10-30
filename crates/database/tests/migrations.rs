@@ -187,7 +187,7 @@ async fn environment_upgrade_preserves_identity_and_rolls_back_partial_ddl() {
     .await
     .unwrap();
     assert_eq!(preserved, checksum);
-    sqlx::query("DROP TABLE factory_identity.environments")
+    sqlx::query("DROP TABLE factory_identity.environments CASCADE")
         .execute(&sql)
         .await
         .unwrap();
@@ -257,6 +257,67 @@ async fn persistent_upgrade_preserves_existing_environment_records() {
     // Persistent running intent no longer requires either legacy field.
     sqlx::query("UPDATE factory_identity.environments SET capacity_reserved=false,lease_expires_at=NULL WHERE id=$1")
         .bind(environment).execute(&sql).await.unwrap();
+    db.close().await;
+    sql.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires the explicitly owned PostgreSQL integration fixture"]
+async fn replacement_intent_migration_preserves_version_three_rows() {
+    let (db, sql) = fixture().await;
+    sqlx::raw_sql(
+        "DROP SCHEMA IF EXISTS factory_identity CASCADE; CREATE SCHEMA factory_identity;",
+    )
+    .execute(&sql)
+    .await
+    .unwrap();
+    let all = sqlx::migrate!("./migrations");
+    let legacy = sqlx::migrate::Migrator {
+        migrations: std::borrow::Cow::Owned(
+            all.iter().filter(|m| m.version <= 3).cloned().collect(),
+        ),
+        ..sqlx::migrate::Migrator::DEFAULT
+    };
+    let mut connection = sql.acquire().await.unwrap();
+    sqlx::query("SET search_path TO factory_identity")
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+    legacy.run(&mut *connection).await.unwrap();
+    drop(connection);
+    let user = uuid::Uuid::new_v4();
+    let env = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO factory_identity.users(id,display_name,role,status) VALUES($1,'Migration fixture','member','pending')")
+        .bind(user).execute(&sql).await.unwrap();
+    sqlx::query("INSERT INTO factory_identity.environments(id,user_id,installation_id,desired_state,observed_state,provisioning_state,volume_name,container_name,image_id,policy_version) VALUES($1,$2,$3,'stopped','stopped','volume_ready','existing-home','existing-container','sha256:legacy','2')")
+        .bind(env).bind(user).bind(uuid::Uuid::new_v4()).execute(&sql).await.unwrap();
+    let before: String = sqlx::query_scalar(
+        "SELECT row_to_json(e)::text FROM factory_identity.environments e WHERE id=$1",
+    )
+    .bind(env)
+    .fetch_one(&sql)
+    .await
+    .unwrap();
+    assert_eq!(db.ready().await.unwrap(), Readiness::Pending);
+    db.migrate().await.unwrap();
+    assert_eq!(db.ready().await.unwrap(), Readiness::Ready);
+    let after: String = sqlx::query_scalar(
+        "SELECT row_to_json(e)::text FROM factory_identity.environments e WHERE id=$1",
+    )
+    .bind(env)
+    .fetch_one(&sql)
+    .await
+    .unwrap();
+    assert_eq!(before, after);
+    let intents: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM factory_identity.environment_upgrades")
+            .fetch_one(&sql)
+            .await
+            .unwrap();
+    assert_eq!(
+        intents, 0,
+        "migration must not schedule replacement of existing resources"
+    );
     db.close().await;
     sql.close().await;
 }

@@ -58,6 +58,11 @@ pub(super) async fn start(
     let mut tx = pool.begin().await.map_err(unavailable)?;
     authorize(&mut tx, actor).await?;
     let existing = current(&mut tx, actor.user_id).await?;
+    let upgrading: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM factory_identity.environment_upgrades u JOIN factory_identity.environments e ON e.id=u.environment_id WHERE e.user_id=$1)")
+        .bind(actor.user_id).fetch_one(&mut *tx).await.map_err(unavailable)?;
+    if upgrading {
+        return Err(EnvironmentError::Conflict);
+    }
     if existing
         .as_ref()
         .is_some_and(|e| e.installation_id != request.installation_id)
