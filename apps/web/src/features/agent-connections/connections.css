@@ -1,0 +1,71 @@
+.codex-section {
+  margin-top: 2.5rem;
+  line-height: 1.6;
+}
+.codex-card {
+  display: block;
+  margin-top: 1rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.codex-card .codex-status {
+  color: #242529;
+  font-size: 1.125rem;
+  font-weight: 650;
+  margin-top: 0;
+}
+.codex-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+.codex-actions a {
+  padding: 0.625rem 0;
+}
+.codex-actions button:disabled {
+  cursor: default;
+}
+.codex-challenge {
+  border-block: 1px solid #e1e3e8;
+  margin-block: 1rem;
+  padding-bottom: 0.5rem;
+}
+.codex-code-label {
+  display: block;
+}
+.codex-code {
+  display: inline-block;
+  user-select: all;
+  color: #242529;
+  font-size: clamp(1.25rem, 5vw, 1.75rem);
+  letter-spacing: 0.08em;
+  margin-block: 0.5rem;
+}
+.codex-new-tab {
+  font-size: 0.8rem;
+}
+.codex-account {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 2rem;
+}
+.codex-account dt {
+  font-size: 0.875rem;
+  color: #5d6069;
+}
+.codex-account dd {
+  margin: 0;
+}
+.codex-feedback:empty {
+  margin: 0;
+}
+.codex-card .codex-observed {
+  font-size: 0.8rem;
+  margin-bottom: 0;
+}
+@media (max-width: 480px) {
+  .codex-actions button {
+    width: 100%;
+  }
+}

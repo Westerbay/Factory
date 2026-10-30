@@ -1,5 +1,6 @@
 import { createRoute } from "@tanstack/react-router"
 
+import { CodexCard } from "../features/agent-connections/codex-card"
 import { EnvironmentCard } from "../features/environments/environment-card"
 import { useEnvironment } from "../features/environments/use-environment"
 import { TerminalPanel } from "../features/terminal/terminal-panel"
@@ -21,6 +22,7 @@ function Workspace() {
         key={available ? "running" : "unavailable"}
         available={available}
       />
+      <CodexCard available={available} />
     </>
   )
 }
