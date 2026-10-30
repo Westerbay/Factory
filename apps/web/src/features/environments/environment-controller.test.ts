@@ -17,7 +17,7 @@ afterEach(() => {
 
 function setup(status: Environment["status"] = "running") {
   vi.useFakeTimers()
-  const environment: Environment = { status }
+  const environment: Environment = { status, upgradeRequired: false }
   const session: Session = {
     user: {
       id: "member",
@@ -69,6 +69,41 @@ function setup(status: Environment["status"] = "running") {
 }
 
 describe("environment activity", () => {
+  it("blocks start until an administrator upgrade is complete but preserves explicit stop", async () => {
+    const { controller, dependencies } = setup("stopped")
+    dependencies.read.mockResolvedValue({
+      status: "stopped",
+      upgradeRequired: true,
+    })
+    controller.connect()
+    await vi.advanceTimersByTimeAsync(0)
+    await controller.start()
+    expect(dependencies.change).not.toHaveBeenCalled()
+    dependencies.read.mockResolvedValue({
+      status: "running",
+      upgradeRequired: true,
+    })
+    await controller.refresh()
+    await controller.stop()
+    expect(dependencies.change).toHaveBeenCalledExactlyOnceWith(
+      "stop",
+      "synthetic-csrf",
+      expect.any(AbortSignal)
+    )
+    dependencies.change.mockClear()
+    dependencies.read.mockResolvedValue({
+      status: "stopped",
+      upgradeRequired: false,
+    })
+    await controller.refresh()
+    await controller.start()
+    expect(dependencies.change).toHaveBeenCalledExactlyOnceWith(
+      "start",
+      "synthetic-csrf",
+      expect.any(AbortSignal)
+    )
+  })
+
   it("polls while visible but sends no keepalive or stop, even a day later", async () => {
     const { controller, dependencies } = setup()
     controller.connect()
@@ -101,7 +136,10 @@ describe("environment activity", () => {
 
   it("only sends one start; closing the controller does not send a stop", async () => {
     const { controller, dependencies } = setup("not_created")
-    dependencies.change.mockResolvedValue({ status: "starting" })
+    dependencies.change.mockResolvedValue({
+      status: "starting",
+      upgradeRequired: false,
+    })
     controller.connect()
     await vi.advanceTimersByTimeAsync(0)
     await controller.start()
@@ -131,7 +169,7 @@ describe("environment activity", () => {
       dependencies[condition].mockReturnValue(false)
       controller.synchronize()
       expect(signal.aborted).toBe(true)
-      finish({ status: "running" })
+      finish({ status: "running", upgradeRequired: false })
       await vi.advanceTimersByTimeAsync(120_000)
       expect(controller.getSnapshot().environment).toBeNull()
       expect(dependencies.read).toHaveBeenCalledTimes(1)
@@ -165,7 +203,7 @@ describe("environment activity", () => {
       const signal = dependencies.read.mock.calls[0]![0]
       setSession({ status })
       expect(signal.aborted).toBe(true)
-      finish({ status: "running" })
+      finish({ status: "running", upgradeRequired: false })
       const reads = dependencies.read.mock.calls.length
       await vi.advanceTimersByTimeAsync(86_400_000)
       expect(controller.getSnapshot().environment).toBeNull()
@@ -189,7 +227,7 @@ describe("environment activity", () => {
       session: { ...session, user: { ...session.user, id: "other-member" } },
     })
     await vi.advanceTimersByTimeAsync(0)
-    finish({ status: "running" })
+    finish({ status: "running", upgradeRequired: false })
     await vi.advanceTimersByTimeAsync(0)
     expect(controller.getSnapshot().environment?.status).toBe("stopped")
   })
@@ -220,9 +258,9 @@ describe("environment activity", () => {
     await controller.start()
     await controller.refresh()
     expect(dependencies.change).toHaveBeenCalledTimes(1)
-    finishStop({ status: "stopping" })
+    finishStop({ status: "stopping", upgradeRequired: false })
     await stopping
-    finishRead({ status: "running" })
+    finishRead({ status: "running", upgradeRequired: false })
     await refresh
     expect(controller.getSnapshot().environment?.status).toBe("stopping")
   })
@@ -239,10 +277,13 @@ describe("environment activity", () => {
       message: expect.any(String),
     })
     expect(dependencies.change).not.toHaveBeenCalled()
-    dependencies.read.mockResolvedValue({ status: "stopped" })
+    dependencies.read.mockResolvedValue({
+      status: "stopped",
+      upgradeRequired: false,
+    })
     await controller.refresh()
     expect(controller.getSnapshot()).toMatchObject({
-      environment: { status: "stopped" },
+      environment: { status: "stopped", upgradeRequired: false },
       message: null,
     })
   })

@@ -2,7 +2,13 @@ import { lazy, Suspense, useState } from "react"
 
 const TerminalSession = lazy(() => import("./terminal-session"))
 
-export function TerminalPanel({ available }: { available: boolean }) {
+export function TerminalPanel({
+  available,
+  unavailableReason,
+}: {
+  available: boolean
+  unavailableReason?: string
+}) {
   const [opened, setOpened] = useState(false)
   return (
     <section aria-labelledby="terminal-heading">
@@ -26,7 +32,8 @@ export function TerminalPanel({ available }: { available: boolean }) {
       )}
       {!available && (
         <p role="status">
-          The terminal needs a running environment. Check its status above.
+          {unavailableReason ??
+            "The terminal needs a running environment. Check its status above."}
         </p>
       )}
     </section>

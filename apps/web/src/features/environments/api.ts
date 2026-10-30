@@ -5,6 +5,8 @@ import type { components } from "../../lib/api/schema"
 
 export type Environment = components["schemas"]["EnvironmentResponse"]
 export type EnvironmentAction = "start" | "stop"
+export const environmentUpgradeMessage =
+  "This environment needs an administrator upgrade. Stop it first if it is running; your saved files are kept."
 
 const problemMessages: Record<string, string> = {
   volume_missing:
@@ -28,6 +30,7 @@ export function environmentProblem(code: string | null | undefined) {
 }
 
 const environmentSchema: z.ZodType<Environment> = z.object({
+  upgradeRequired: z.boolean(),
   status: z.enum([
     "not_created",
     "starting",

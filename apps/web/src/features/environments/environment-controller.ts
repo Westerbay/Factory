@@ -9,6 +9,12 @@ import {
 } from "./api"
 
 type RequestKind = EnvironmentAction | "read"
+export function canStartEnvironment(environment: Environment | null): boolean {
+  return (
+    !environment?.upgradeRequired &&
+    (environment?.status === "not_created" || environment?.status === "stopped")
+  )
+}
 export function canStopEnvironment(environment: Environment | null): boolean {
   const status = environment?.status
   return (
@@ -106,8 +112,7 @@ export class EnvironmentController {
   }
 
   start = async () => {
-    const status = this.state.environment?.status
-    if (status !== "not_created" && status !== "stopped") return
+    if (!canStartEnvironment(this.state.environment)) return
     await this.act("start")
   }
 

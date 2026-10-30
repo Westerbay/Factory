@@ -70,8 +70,8 @@ Connection patterns were checked against the official
 ## Environment contracts
 
 - [Environment types and ports](../crates/core/src/environments/mod.rs) own durable
-  persistent intent, observations and provisioning semantics. Future terminal or
-  execution work should consume these contracts rather than create another lifecycle.
+  persistent intent, observations and provisioning semantics. Terminal, account and
+  future execution work consume these contracts rather than create another lifecycle.
 - [EnvironmentService and EnvironmentReconciler](../crates/application/src/environments/mod.rs)
   separate authenticated requests from serialized runtime effects. Generation checks
   protect newer intent; ownership loss closes availability until host restart.
@@ -84,6 +84,40 @@ Connection patterns were checked against the official
   isolation checks. [Preparation](../scripts/environments/prepare.mjs) owns image builds
   and stable installation metadata. Reuse these owners without exposing daemon access,
   Docker IDs or mutable policy parameters to browser features.
+- [useEnvironment](../apps/web/src/features/environments/use-environment.ts) owns one
+  browser lifecycle subscription shared by the environment card and its dependent panels.
+  Consumers use confirmed state and the explicit upgrade flag rather than starting a
+  second polling loop or inferring availability from an earlier successful operation.
+
+## Interactive processes and account connections
+
+- [Terminal contracts](../crates/core/src/terminals/mod.rs) and the
+  [terminal service](../crates/application/src/terminals/mod.rs) own authenticated
+  attachments, single-use tickets and explicit takeover. The
+  [HTTP/WebSocket module](../apps/api/src/terminals/mod.rs) owns browser framing and
+  session supervision. Reuse these boundaries without exposing arbitrary Docker exec
+  commands or treating a socket lifetime as the shell lifetime.
+- [Identity revocation notifications](../crates/application/src/identity/mod.rs) inform
+  terminal and account hosts immediately after local session or user revocation. Hosts
+  also revalidate access against persistence and enforce exact session expiry; local
+  notification alone is not an authorization guarantee.
+- [AgentConnectionPort](../crates/core/src/agent_connections/mod.rs) projects account
+  state and device challenges without provider credentials. The
+  [application service](../crates/application/src/agent_connections/mod.rs) binds pending
+  operations to the verified session and environment generation. Exact Factory operation
+  IDs prevent a stale cancellation from cancelling a newer sign-in.
+- [CodexAccountAdapter](../crates/adapters/src/codex_account/mod.rs) implements that
+  account port using the pinned native app-server protocol. It shares the internal
+  [fixed Docker process transport](../crates/adapters/src/environments/process.rs) with
+  the terminal adapter. Account operations never start agent turns or expose provider
+  tokens; the container home remains the credential source of truth.
+- [The account HTTP lifecycle](../apps/api/src/agent_connections/lifecycle.rs) owns
+  detached request completion, pending-operation monitoring and revocation cleanup.
+  Browser disconnection must not abandon an authorized process without an owner.
+- [DockerEgress](../crates/adapters/src/egress/mod.rs) owns installation proxy and private
+  network inspection. Network availability is separate from local terminal availability;
+  features must not infer permission to access arbitrary destinations from a running
+  container or a healthy proxy.
 
 ## Execution porting reference
 

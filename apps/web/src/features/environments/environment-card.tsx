@@ -1,6 +1,11 @@
-import { environmentProblem, type Environment } from "./api"
+import {
+  environmentProblem,
+  environmentUpgradeMessage,
+  type Environment,
+} from "./api"
 import {
   canStopEnvironment,
+  canStartEnvironment,
   type EnvironmentController,
   type EnvironmentState,
 } from "./environment-controller"
@@ -47,7 +52,8 @@ export function EnvironmentCard({
 }) {
   const status = state.environment?.status
   const busy = state.pending === "start" || state.pending === "stop"
-  const canStart = status === "not_created" || status === "stopped"
+  const canStart = canStartEnvironment(state.environment)
+  const upgradeRequired = state.environment?.upgradeRequired
   const canStop = canStopEnvironment(state.environment)
   const label = status
     ? statusLabels[status]
@@ -72,14 +78,16 @@ export function EnvironmentCard({
             aria-live="polite"
             aria-atomic="true"
           >
-            {label}
+            {upgradeRequired ? `Upgrade required — ${label}` : label}
             {state.pending === "start" ? " — Requesting start" : ""}
             {state.pending === "stop" ? " — Requesting stop" : ""}
           </p>
           <p>
-            {status
-              ? statusHelp[status]
-              : "Waiting for a confirmed environment status."}
+            {upgradeRequired
+              ? environmentUpgradeMessage
+              : status
+                ? statusHelp[status]
+                : "Waiting for a confirmed environment status."}
           </p>
         </div>
         <dl className="environment-dates">

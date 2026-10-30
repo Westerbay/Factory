@@ -11,4 +11,6 @@ pub use runtime::DockerEnvironmentRuntime;
 pub use upgrade::DockerEnvironmentUpgradeRuntime;
 
 #[cfg(test)]
+pub(crate) mod fixture;
+#[cfg(test)]
 mod tests;

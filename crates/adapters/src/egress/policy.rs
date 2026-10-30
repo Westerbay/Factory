@@ -8,6 +8,10 @@ use uuid::Uuid;
 pub const PROXY_ALIAS: &str = "factory-egress";
 pub const PROXY_URL: &str = "http://factory-egress:3128";
 
+pub fn user_network_name(installation: Uuid, environment: Uuid) -> String {
+    format!("factory-net-{installation}-{environment}")
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EgressMetadata {
@@ -68,10 +72,10 @@ impl EgressMetadata {
     }
 
     pub fn user_network_name(&self, environment: Uuid) -> String {
-        format!("factory-net-{}-{}", self.installation_id, environment)
+        user_network_name(self.installation_id, environment)
     }
 
-    pub(super) fn network_body(&self, environment: Option<Uuid>) -> NetworkCreateRequest {
+    pub(crate) fn network_body(&self, environment: Option<Uuid>) -> NetworkCreateRequest {
         let internal = environment.is_some();
         serde_json::from_value(json!({
             "Name": environment.map_or_else(|| self.outbound_name(), |id| self.user_network_name(id)),
@@ -113,7 +117,7 @@ impl EgressMetadata {
         Ok(())
     }
 
-    pub(super) fn proxy_body(&self) -> ContainerCreateBody {
+    pub(crate) fn proxy_body(&self) -> ContainerCreateBody {
         let mut labels = self.labels(None);
         labels["io.factory.egress.image"] = json!("1");
         labels["io.factory.egress.squid"] = json!("7.7");

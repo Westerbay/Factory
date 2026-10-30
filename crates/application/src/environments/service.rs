@@ -66,6 +66,12 @@ impl EnvironmentService {
         self.availability.is_available()
     }
 
+    /// Changing the prepared image or policy requires an explicit stopped upgrade.
+    pub fn needs_upgrade(&self, environment: &Environment) -> bool {
+        environment.image_id != self.config.image_id
+            || environment.policy_version != self.config.policy_version
+    }
+
     /// Do not republish a terminal observation from a previous process before
     /// this supervisor has inspected it. The last observation time stays visible.
     pub fn can_report(&self, environment: Option<&Environment>) -> bool {
@@ -90,6 +96,14 @@ impl EnvironmentService {
 
     pub async fn start(&self, actor: EnvironmentActor) -> Result<Environment, EnvironmentError> {
         self.require_available()?;
+        if self
+            .get(actor)
+            .await?
+            .as_ref()
+            .is_some_and(|environment| self.needs_upgrade(environment))
+        {
+            return Err(EnvironmentError::PolicyMismatch);
+        }
         self.store.start(actor, self.config.clone()).await
     }
 
@@ -103,6 +117,9 @@ impl EnvironmentService {
             .get(actor)
             .await?
             .ok_or(EnvironmentError::Unavailable)?;
+        if self.needs_upgrade(&environment) {
+            return Err(EnvironmentError::PolicyMismatch);
+        }
         if !self.can_report(Some(&environment)) {
             return Err(EnvironmentError::Unavailable);
         }

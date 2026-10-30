@@ -1,4 +1,5 @@
 use super::preparation::{POLICY_VERSION, immutable_image};
+use crate::egress::{PROXY_URL, user_network_name};
 use bollard::models::ContainerCreateBody;
 use factory_core::environments::{Environment, EnvironmentError};
 use serde_json::{Value, json};
@@ -40,15 +41,17 @@ impl IsolationPolicy {
     pub(super) fn create_body(&self, env: &Environment) -> ContainerCreateBody {
         serde_json::from_value(json!({
             "Image": env.image_id, "User": USER, "WorkingDir": "/home/factory/Documents",
-            "Env": ["HOME=/home/factory", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],
-            "Entrypoint": ["/bin/sleep"], "Cmd": ["infinity"], "NetworkDisabled": true,
+            "Env": ["HOME=/home/factory", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                format!("HTTP_PROXY={PROXY_URL}"), format!("HTTPS_PROXY={PROXY_URL}"),
+                format!("http_proxy={PROXY_URL}"), format!("https_proxy={PROXY_URL}"), "NO_PROXY=", "no_proxy="],
+            "Entrypoint": ["/bin/sleep"], "Cmd": ["infinity"], "NetworkDisabled": false,
             "Labels": labels(env),
             "HostConfig": {
                 "Memory": 0, "MemorySwap": 0, "NanoCpus": 0,
                 "PidsLimit": -1, "ReadonlyRootfs": true, "Init": true,
                 "Annotations": {"org.systemd.property.TasksMax": SYSTEMD_UNLIMITED_TASKS},
                 "CapDrop": ["ALL"], "SecurityOpt": ["no-new-privileges"],
-                "NetworkMode": "none", "Privileged": false, "PublishAllPorts": false,
+                "NetworkMode": user_network_name(env.installation_id, env.id), "Privileged": false, "PublishAllPorts": false,
                 "IpcMode": "private", "CgroupnsMode": "private", "AutoRemove": false,
                 "MaskedPaths": MASKED_PATHS, "ReadonlyPaths": READONLY_PATHS, "Runtime": "runc",
                 "RestartPolicy": {"Name": "no"},
@@ -68,17 +71,15 @@ impl IsolationPolicy {
             serde_json::to_value(self.create_body(env)).expect("Docker contract serializes");
         let config = &value["Config"];
         let host = &value["HostConfig"];
-        for key in [
-            "User",
-            "WorkingDir",
-            "Env",
-            "Entrypoint",
-            "Cmd",
-            "NetworkDisabled",
-        ] {
+        for key in ["User", "WorkingDir", "Env", "Entrypoint", "Cmd"] {
             if config[key] != expected[key] {
                 return Err(EnvironmentError::PolicyMismatch);
             }
+        }
+        // Docker omits NetworkDisabled when false on inspect. Only that exact
+        // normalization is accepted; interface identity is verified separately.
+        if !config["NetworkDisabled"].is_null() && config["NetworkDisabled"] != false {
+            return Err(EnvironmentError::PolicyMismatch);
         }
         if value["Image"] != env.image_id || config["Image"] != env.image_id {
             return Err(EnvironmentError::PolicyMismatch);
@@ -131,6 +132,10 @@ impl IsolationPolicy {
             "Links",
             "GroupAdd",
             "Sysctls",
+            "Dns",
+            "DnsOptions",
+            "DnsSearch",
+            "ExtraHosts",
         ] {
             if !empty(&host[key]) {
                 return Err(EnvironmentError::PolicyMismatch);
@@ -177,9 +182,11 @@ impl IsolationPolicy {
         {
             return Err(EnvironmentError::PolicyMismatch);
         }
-        if let Some(networks) = value["NetworkSettings"]["Networks"].as_object()
-            && networks.keys().any(|key| key != "none")
-        {
+        let network_name = user_network_name(env.installation_id, env.id);
+        let networks = value["NetworkSettings"]["Networks"]
+            .as_object()
+            .ok_or(EnvironmentError::PolicyMismatch)?;
+        if networks.len() != 1 || !networks.contains_key(&network_name) {
             return Err(EnvironmentError::PolicyMismatch);
         }
         if !empty(&value["NetworkSettings"]["Ports"]) {
@@ -229,6 +236,22 @@ pub(super) fn labels(env: &Environment) -> HashMap<String, String> {
 pub(super) fn verify_labels(env: &Environment, actual: &Value) -> Result<(), EnvironmentError> {
     if labels(env).iter().any(|(key, value)| actual[key] != *value) {
         return Err(EnvironmentError::OwnershipConflict);
+    }
+    Ok(())
+}
+
+pub(super) fn verify_home_labels(
+    env: &Environment,
+    actual: &Value,
+) -> Result<(), EnvironmentError> {
+    for (key, value) in [
+        ("io.factory.installation", env.installation_id),
+        ("io.factory.environment", env.id),
+        ("io.factory.user", env.user_id),
+    ] {
+        if actual[key] != value.to_string() {
+            return Err(EnvironmentError::OwnershipConflict);
+        }
     }
     Ok(())
 }

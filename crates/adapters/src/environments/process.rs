@@ -104,7 +104,7 @@ impl DockerEnvironmentRuntime {
                 .container(env)
                 .await?
                 .ok_or(EnvironmentError::Unavailable)?;
-            self.policy.verify_container(env, &container)?;
+            self.verify_current_container(env, &container).await?;
             if container["State"]["Running"] != true
                 || container["State"]["Paused"] == true
                 || container["State"]["Restarting"] == true
@@ -208,10 +208,9 @@ fn map_error(error: Error) -> EnvironmentError {
 mod tests {
     use super::*;
     use crate::environments::{POLICY_VERSION, PreparationMetadata};
-    use bollard::query_parameters::{RemoveContainerOptions, RemoveVolumeOptions};
     use chrono::Utc;
     use factory_core::environments::{EnvironmentRuntime, ObservedState, ProvisioningState};
-    use futures_util::StreamExt;
+    use futures_util::{FutureExt, StreamExt};
     use serde_json::json;
     use std::sync::Arc;
     use tokio::io::AsyncWriteExt;
@@ -249,7 +248,9 @@ mod tests {
     async fn stopped_or_foreign_records_cannot_open_docker_processes() {
         let (metadata, mut env) = environment(&format!("sha256:{}", "a".repeat(64)));
         // No daemon is contacted: both refusals must occur before any Docker operation.
-        let runtime = DockerEnvironmentRuntime::connect(metadata, Arc::new(|| true)).unwrap();
+        let egress = crate::environments::fixture::synthetic_egress(metadata.installation_id());
+        let runtime =
+            DockerEnvironmentRuntime::connect(metadata, egress, Arc::new(|| true)).unwrap();
         env.desired_state = DesiredState::Stopped;
         assert!(matches!(
             runtime
@@ -379,25 +380,13 @@ mod tests {
         let image =
             std::env::var("FACTORY_PROCESS_TEST_IMAGE").expect("Explicit fixture image required");
         let (metadata, mut env) = environment(&image);
-        let runtime = DockerEnvironmentRuntime::connect(metadata, Arc::new(|| true)).unwrap();
-        let result = exercise(&runtime, &mut env).await;
-        // Only this test's UUID-labelled resources can be removed, never names alone.
-        runtime.stop(&env).await.unwrap();
-        if let Some(container) = runtime.container(&env).await.unwrap() {
-            let id = container["Id"].as_str().unwrap();
-            runtime
-                .docker
-                .remove_container(id, None::<RemoveContainerOptions>)
-                .await
-                .unwrap();
-        }
-        if runtime.volume(&env).await.unwrap() == VolumePresence::Present {
-            runtime
-                .docker
-                .remove_volume(&env.volume_name, None::<RemoveVolumeOptions>)
-                .await
-                .unwrap();
-        }
-        result.unwrap();
+        let egress = crate::environments::fixture::egress_metadata(metadata.installation_id());
+        let runtime =
+            DockerEnvironmentRuntime::connect(metadata, egress, Arc::new(|| true)).unwrap();
+        let result = std::panic::AssertUnwindSafe(exercise(&runtime, &mut env))
+            .catch_unwind()
+            .await;
+        crate::environments::fixture::cleanup(&runtime, &[&env]).await;
+        result.unwrap().unwrap();
     }
 }

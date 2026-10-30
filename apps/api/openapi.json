@@ -206,9 +206,13 @@
           },
           "status": {
             "$ref": "#/components/schemas/EnvironmentStatus"
+          },
+          "upgradeRequired": {
+            "description": "Explicit administrator upgrade required before starting or interactive work.",
+            "type": "boolean"
           }
         },
-        "required": ["status"],
+        "required": ["status", "upgradeRequired"],
         "type": "object"
       },
       "EnvironmentStatus": {

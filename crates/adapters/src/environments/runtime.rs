@@ -1,4 +1,5 @@
 use super::{IsolationPolicy, PreparationMetadata, policy::*};
+use crate::egress::{DockerEgress, EgressMetadata};
 use async_trait::async_trait;
 use bollard::{
     API_DEFAULT_VERSION, Docker, errors::Error, models::VolumeCreateRequest, query_parameters::*,
@@ -16,27 +17,43 @@ pub struct DockerEnvironmentRuntime {
     pub(super) policy: IsolationPolicy,
     pub(super) timeout: Duration,
     pub(super) mutation_permitted: Arc<dyn Fn() -> bool + Send + Sync>,
+    pub(super) egress: Arc<DockerEgress>,
 }
 
 impl DockerEnvironmentRuntime {
     pub fn connect(
         metadata: PreparationMetadata,
+        egress_metadata: EgressMetadata,
         mutation_permitted: Arc<dyn Fn() -> bool + Send + Sync>,
     ) -> Result<Self, EnvironmentError> {
         metadata.validate()?;
+        if egress_metadata.installation_id != metadata.installation_id() {
+            return Err(EnvironmentError::OwnershipConflict);
+        }
         // Explicit endpoints. Never use *_defaults, DOCKER_HOST, contexts or TLS settings.
         #[cfg(windows)]
         let docker =
             Docker::connect_with_named_pipe("//./pipe/docker_engine", 30, API_DEFAULT_VERSION);
         #[cfg(unix)]
         let docker = Docker::connect_with_unix("/var/run/docker.sock", 30, API_DEFAULT_VERSION);
+        let docker = docker.map_err(map_error)?;
+        let egress = Arc::new(DockerEgress::new(
+            docker.clone(),
+            egress_metadata,
+            mutation_permitted.clone(),
+        )?);
         Ok(Self {
-            docker: docker.map_err(map_error)?,
+            docker,
             metadata,
             policy: IsolationPolicy,
             timeout: OPERATION_TIMEOUT,
             mutation_permitted,
+            egress,
         })
+    }
+
+    pub fn egress(&self) -> Arc<DockerEgress> {
+        self.egress.clone()
     }
 
     /// Recheck the host's terminal supervisor state before every individual mutation.
@@ -80,7 +97,7 @@ impl DockerEnvironmentRuntime {
             Err(e) => return Err(map_error(e)),
         };
         let value = json_value(volume)?;
-        verify_labels(env, &value["Labels"])?;
+        verify_home_labels(env, &value["Labels"])?;
         if value["Name"] != env.volume_name
             || value["Driver"] != "local"
             || !empty(&value["Options"])
@@ -137,6 +154,24 @@ impl DockerEnvironmentRuntime {
         Ok(())
     }
 
+    /// Proxy liveness is separate from network ownership so a proxy outage never
+    /// prevents an owned local shell. Only the verified dedicated bridge is accepted.
+    pub(super) async fn verify_current_container(
+        &self,
+        env: &Environment,
+        container: &Value,
+    ) -> Result<(), EnvironmentError> {
+        self.policy.verify_container(env, container)?;
+        let network = self.egress.inspect_user_network(env).await?;
+        let endpoint = &container["NetworkSettings"]["Networks"][&network.name];
+        if endpoint["NetworkID"] != network.id
+            && !(container["State"]["Running"] == false && endpoint["NetworkID"] == "")
+        {
+            return Err(EnvironmentError::OwnershipConflict);
+        }
+        Ok(())
+    }
+
     async fn inspect_inner(
         &self,
         env: &Environment,
@@ -155,7 +190,7 @@ impl DockerEnvironmentRuntime {
             Some(value) => {
                 if env.desired_state == DesiredState::Running {
                     require_current_policy(env)?;
-                    self.policy.verify_container(env, &value)?;
+                    self.verify_current_container(env, &value).await?;
                     if volume == VolumePresence::Missing {
                         return Err(EnvironmentError::VolumeMissing);
                     }
@@ -187,6 +222,8 @@ impl DockerEnvironmentRuntime {
         self.image(env).await?;
         if self.container(env).await?.is_none() {
             self.require_mutation_permission()?;
+            self.egress.prepare_user_network(env).await?;
+            self.require_mutation_permission()?;
             let result = self
                 .docker
                 .create_container(
@@ -211,10 +248,12 @@ impl DockerEnvironmentRuntime {
             .container(env)
             .await?
             .ok_or(EnvironmentError::Unavailable)?;
-        self.policy.verify_container(env, &container)?;
+        self.verify_current_container(env, &container).await?;
         if container["State"]["Running"] == true {
             return Ok(());
         }
+        self.require_mutation_permission()?;
+        self.egress.prepare_user_network(env).await?;
         let id = container["Id"]
             .as_str()
             .ok_or(EnvironmentError::OwnershipConflict)?;

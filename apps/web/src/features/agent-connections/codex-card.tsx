@@ -80,7 +80,13 @@ function DeviceCode({ challenge }: { challenge: LoginChallenge }) {
   )
 }
 
-export function CodexCard({ available }: { available: boolean }) {
+export function CodexCard({
+  available,
+  unavailableReason,
+}: {
+  available: boolean
+  unavailableReason?: string
+}) {
   const { controller: session } = useSession()
   const statusElement = useRef<HTMLParagraphElement>(null)
   const controller = useMemo(
@@ -149,9 +155,8 @@ export function CodexCard({ available }: { available: boolean }) {
       </p>
       {!available ? (
         <p role="status">
-          {
-            "A running environment is required. Check its status above, then start it if needed."
-          }
+          {unavailableReason ??
+            "A running environment is required. Check its status above, then start it if needed."}
         </p>
       ) : (
         <div className="connection-panel codex-card">

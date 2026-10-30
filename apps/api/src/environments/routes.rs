@@ -90,12 +90,15 @@ async fn get(
 ) -> Result<Json<EnvironmentResponse>, Response> {
     let actor = state.actor(&headers, false).await?;
     let Some(service) = &state.service else {
-        return Ok(Json(EnvironmentResponse::project(None, false)));
+        return Ok(Json(EnvironmentResponse::project(None, false, false)));
     };
     let environment = service.get(actor).await.map_err(error)?;
     Ok(Json(EnvironmentResponse::project(
         environment.as_ref(),
         service.can_report(environment.as_ref()),
+        environment
+            .as_ref()
+            .is_some_and(|environment| service.needs_upgrade(environment)),
     )))
 }
 
@@ -128,6 +131,7 @@ async fn start(
         Json(EnvironmentResponse::project(
             Some(&environment),
             service.can_report(Some(&environment)),
+            service.needs_upgrade(&environment),
         )),
     ))
 }
@@ -161,6 +165,9 @@ async fn stop(
         Json(EnvironmentResponse::project(
             environment.as_ref(),
             service.can_report(environment.as_ref()),
+            environment
+                .as_ref()
+                .is_some_and(|environment| service.needs_upgrade(environment)),
         )),
     ))
 }

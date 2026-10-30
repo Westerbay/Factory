@@ -4,6 +4,7 @@ use crate::{
     config::RuntimeConfig,
 };
 use factory_adapters::codex_account::CodexAccountAdapter;
+use factory_adapters::egress::EgressMetadata;
 use factory_adapters::environments::{
     DockerEnvironmentRuntime, InstallationGuard, PreparationMetadata,
 };
@@ -78,6 +79,7 @@ impl EnvironmentHost {
         let mutation_availability = availability.clone();
         let runtime = Arc::new(DockerEnvironmentRuntime::connect(
             metadata,
+            EgressMetadata::load(&directory)?,
             Arc::new(move || !mutation_availability.is_failed()),
         )?);
         let store = Arc::new(database.environment_store());

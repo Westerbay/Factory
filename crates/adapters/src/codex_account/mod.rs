@@ -51,6 +51,13 @@ impl CodexAccountAdapter {
             .or_insert_with(|| Arc::new(AsyncMutex::new(None)))
             .clone())
     }
+    async fn require_egress(&self) -> Result<(), AgentConnectionError> {
+        if self.runtime.egress().available().await? {
+            Ok(())
+        } else {
+            Err(AgentConnectionError::Unavailable)
+        }
+    }
     async fn open(
         &self,
         environment: &Environment,
@@ -86,6 +93,7 @@ impl AgentConnectionPort for CodexAccountAdapter {
         &self,
         environment: &Environment,
     ) -> Result<ConnectionSnapshot, AgentConnectionError> {
+        self.require_egress().await?;
         let slot = self.slot(environment.id)?;
         let mut pending = slot.lock().await;
         if let Some(snapshot) = take_observation(&mut pending) {
@@ -99,6 +107,7 @@ impl AgentConnectionPort for CodexAccountAdapter {
         operation_id: Uuid,
         expires_at: DateTime<Utc>,
     ) -> Result<ConnectionSnapshot, AgentConnectionError> {
+        self.require_egress().await?;
         let slot = self.slot(environment.id)?;
         let mut pending = slot.lock().await;
         if pending

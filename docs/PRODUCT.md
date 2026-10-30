@@ -3,8 +3,9 @@
 ## Current capabilities
 
 Factory offers a private member space and an administrator backoffice. Sign-in uses
-GitHub only; there are no passwords, email invitations or additional agent connections
-in this increment. A successful GitHub identity check does not itself grant membership.
+GitHub only; there are no passwords or email invitations. A successful GitHub identity
+check does not itself grant membership. Connecting Codex is a separate explicit action
+inside an active member's private environment.
 
 An operator configures the first administrator with the local CLI, selecting a GitHub
 username and confirming the resolved profile. The stable provider ID is stored in the
@@ -15,8 +16,9 @@ can activate that account, after which the member must begin a new sign-in. Hand
 display names identify people visually but never determine authorization.
 
 The member home offers Start environment, Stop environment and Refresh for the user's
-own private local environment, with observed status and observation time. Repository
-selection, cloning, terminal, agent execution, history and skills are not available there.
+own private local environment, with observed status and observation time, a web terminal
+and a personal Codex account card. Repository selection, cloning, Factory agent
+conversations, execution history and global skills are not available there.
 GitHub sign-in does not request repository permissions or save a provider access token.
 
 ## Private local environments
@@ -42,9 +44,50 @@ This does not guarantee task completion across host outages or process failures.
 
 Factory imposes no limit on the number of started environments, CPU, memory or process
 counts. They share available host resources; Docker Desktop and operating-system limits
-still apply. Containers retain no network access, a non-root user and a read-only root
+still apply. Containers retain a non-root user and a read-only root
 filesystem. Temporary storage and logs remain bounded; persistent named volumes have no
-portable disk quota. This increment supplies no terminal or file editor.
+portable disk quota. Each user has an isolated internal network; only approved Codex
+HTTPS destinations are reachable through the shared installation proxy. General Internet,
+host/LAN and other-user access are blocked. There is no file editor.
+
+Existing environments with an old image or policy require an operator upgrade. Start
+cannot replace them. The operator must stop the environment and API before previewing
+and confirming the exact user's upgrade. The home is retained; the next explicit Start
+creates the replacement container. Interrupted upgrades can resume without deleting or
+reinitializing storage, and mismatched resources remain blocked.
+
+## Terminal and personal Codex account
+
+The terminal opens in `~/Documents` and attaches to a persistent tmux shell. Closing the
+page, losing the connection or restarting the API detaches the display without stopping
+the shell. Stop environment ends its processes; saved files remain. One view owns input
+at a time, and another view must explicitly take over. Reconnection never replays unsent
+keystrokes. A slow display is detached while the shell continues to consume output.
+Keyboard escape, screen-reader mode and mobile modifier keys are available.
+
+Factory rechecks session access when returning to the page. This can close the displayed
+terminal; use Open terminal again after verification to reattach. Offline or revoked
+sessions hide private terminal and account data immediately in the browser. The server
+checks input authorization and periodically closes passive revoked streams.
+
+Connect Codex displays a short-lived authorization code and a validated official OpenAI
+link. The member authorizes their personal ChatGPT/Codex account on that site; Factory
+never asks for a password or API key. A code alone does not mean connected: the provider
+must confirm completion and the account must be read successfully. Model access still
+depends on the member's subscription and permissions. The connection can be cancelled;
+only its initiating Factory session can see or cancel the pending code.
+
+Credentials remain in that user's private container home. The browser holds account and
+challenge information only in memory. Signing out of Factory does not delete the saved
+Codex account. Disconnect Codex removes that saved sign-in while preserving projects,
+but does not guarantee interruption of Codex processes already launched from the shell.
+Stop environment is the explicit way to end all its processes. If an account controller
+is abandoned during API failure, its watchdog bounds recovery to at most ten minutes.
+
+A missing or stopped proxy makes Codex status/login unavailable. The local terminal
+and local account cancellation/logout remain independent of proxy availability. The web
+application does not yet start agent turns; a member can deliberately run Codex in the
+terminal after connecting their account.
 
 ## Access and sessions
 
@@ -74,10 +117,10 @@ tab; another tab's choice does not automatically reload it.
 
 ## Direction and preserved execution behavior
 
-Future work will connect each user's isolated server environment to repository providers
-and an agent subscription, with a terminal and global skills. Providers should remain
-replaceable. Repository authorization, Codex connection and execution are
-separate increments, not hidden actions of sign-in.
+Future work will connect each user's isolated server environment to repository providers,
+Factory agent conversations and global skills. Providers should remain replaceable.
+Repository authorization and agent execution remain explicit capabilities, never hidden
+actions of sign-in.
 
 The retained TypeScript execution implementation defines behavior to preserve during
 porting: explicit task start and continuation, provider-observed parent/child agents,

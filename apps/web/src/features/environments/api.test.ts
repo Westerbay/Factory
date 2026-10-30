@@ -22,7 +22,10 @@ it.each(["start", "stop"] as const)(
   "sends %s with credentials, CSRF and no body",
   async (action) => {
     const api = await apiWith(
-      Response.json({ status: "starting" }, { status: 202 })
+      Response.json(
+        { status: "starting", upgradeRequired: false },
+        { status: 202 }
+      )
     )
     await api.changeEnvironment(
       action,
@@ -43,6 +46,8 @@ it.each(["start", "stop"] as const)(
 it.each([
   { status: "unknown" },
   { status: "running", observedAt: "yesterday" },
+  { status: "running" },
+  { status: "running", upgradeRequired: "false" },
 ])("rejects untrusted environment response %j", async (body) => {
   const api = await apiWith(Response.json(body))
   await expect(
@@ -50,9 +55,18 @@ it.each([
   ).rejects.toThrow()
 })
 
+it("preserves an explicit upgrade requirement even while the environment runs", async () => {
+  const body = { status: "running", upgradeRequired: true }
+  const api = await apiWith(Response.json(body))
+  await expect(
+    api.readEnvironment(new AbortController().signal)
+  ).resolves.toEqual(body)
+})
+
 it("accepts unavailable and nullable dates without sending a mutation", async () => {
   const body = {
     status: "unavailable",
+    upgradeRequired: false,
     observedAt: null,
     errorCode: "unavailable",
   }

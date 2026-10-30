@@ -5,7 +5,8 @@
 - Node.js 24.22.1, pinned in `.node-version`, and pnpm 12.11.2.
 - Rust 1.90.0 with rustfmt, clippy and a native linker/platform SDK.
 - On Windows, MSVC C++ build tools and the Windows SDK, preferably from Developer PowerShell.
-- Local Docker Engine and Compose for database setup, environment preparation and integration;
+- Local Docker Engine API 1.48+ (Engine 28+) with isolated bridge support and Compose
+  for database setup, environment preparation and integration;
   on Windows, Docker Desktop running Linux containers.
 - Network access for initial dependency/toolchain downloads.
 
@@ -195,8 +196,8 @@ provider credentials or connect to PostgreSQL. Inspect both generated files afte
 contract changes; do not hand-edit them.
 
 `pnpm test:integration` explicitly requires Docker and exercises retained execution
-persistence, SQLx identity/environment persistence, API composition with synthetic
-identities and real Docker environment integration.
+persistence, SQLx identity/environment/upgrade persistence, API composition with synthetic
+identities, real Docker terminal/account/upgrade behavior and isolated egress/DNS fixtures.
 Fixtures use unique verified projects and isolated volumes, not the development target.
 A synthetic provider is test-only; production has no fixture-provider switch.
 These regressions do not replace human acceptance or prove live OAuth behavior.
@@ -268,19 +269,27 @@ temporary fixture content never belongs in migrations.
 
 ## Local environments
 
-After preparing and migrating the owned database, explicitly prepare the shared image:
+After preparing and migrating the owned database, stop the API before explicitly
+preparing the shared images so it cannot create resources from an older manifest:
 
 ```bash
 pnpm environments:prepare
 ```
 
-This operator command builds the versioned [Dockerfile](../infra/environments/Dockerfile)
-from its pinned base image, so the initial preparation may require network access. It
+This operator command builds the pinned [workspace image](../infra/environments/Dockerfile)
+and [egress proxy](../infra/egress/Dockerfile), so initial preparation requires network
+access and may take several minutes. The workspace contains tmux and native Codex
+0.160.0; no host Codex installation or credentials are imported. Preparation
 stores the stable installation UUID in `.factory/environments/installation.json` and
-the immutable image ID/policy in `prepared.json`. Preserve this ignored directory while
+the immutable workspace image ID/policy in `prepared.json` and the proxy metadata in
+`egress.json`. Preserve this ignored directory while
 its resources exist; do not regenerate its identity or delete `supervisor.lock` to bypass
 a conflict. Repeated preparation retains the installation identity. Existing environments
 keep their recorded image and policy; preparation does not migrate or replace them.
+If an existing proxy differs from the proposed image or host-address configuration,
+preparation preserves the previous manifest and refuses publication. Follow the
+[explicit proxy maintenance procedure](../infra/egress/README.md) before retrying;
+preparation never stops or removes a running proxy on the operator's behalf.
 Each Docker CLI invocation uses its own temporary configuration directory. Cleanup
 removes that directory and generated Buildx metadata without following symbolic links;
 it does not use or remove the operator's Docker configuration.
@@ -296,18 +305,45 @@ or process ceilings. The old `FACTORY_ENV_MAX_RUNNING`, `FACTORY_ENV_IDLE_MINUTE
 `FACTORY_ENV_MEMORY_MIB`, `FACTORY_ENV_CPUS` and `FACTORY_ENV_PIDS` values are ignored and
 can be removed from operator configuration. Host and Docker Desktop limits still apply.
 Containers retain a fixed non-root user, read-only root, bounded tmpfs/logs, dropped
-capabilities, no-new-privileges, no network and no published ports. They receive neither
+capabilities, no-new-privileges, isolated per-user internal networks and no published
+ports. They receive neither
 host bind mounts, platform credentials nor the Docker socket. Named volumes have no
-portable disk quota. No repository clone, terminal or agent runs in this increment.
+portable disk quota. Only the approved Codex HTTPS destinations pass through the shared
+proxy; direct Internet, host/LAN and other-user access remain blocked. Package downloads,
+GitHub cloning and development-server publishing are not enabled in this increment.
 
 Run `pnpm db:migrate:identity` explicitly before restarting an upgraded API. Migration 3
-removes the old lease/capacity requirements while preserving all environment records and
-storage identities. Stop old API versions before migrating; they implement the obsolete
-idle policy. Do not rewrite already-applied migrations or reset the database.
-Prepare the image again for policy version 2. Previously created containers with finite
-Docker resource ceilings or without the unlimited systemd task annotation fail the new policy
-check; they are never silently deleted or replaced. Their home volumes remain intact.
-An operator must plan their container replacement separately if such resources exist.
+retains the persistent environment semantics; migration 4 adds durable container-upgrade
+reservations without deleting records or storage identities. Stop old API versions before
+migrating. Do not rewrite already-applied migrations or reset the database.
+Prepare the images for policy version 3. Existing environments display **Upgrade required**
+when their image or policy differs. They are never silently deleted or replaced.
+
+### Upgrade an existing environment
+
+1. Ask the member to finish their work and use **Stop environment**. Stop ends running
+   processes; it preserves the home. The upgrade refuses a running container.
+2. Stop the API process, then apply pending identity migrations and prepare current images
+   using the explicit commands above. The upgrade needs the same installation and database
+   supervisor locks; it does not stop the API automatically.
+3. Before stopping the API, identify the member's **Factory user UUID** in the `id`
+   field of the authenticated backoffice's `/api/admin/users` response (browser Network
+   panel). This is not the GitHub numeric ID. Then run:
+
+   ```bash
+   pnpm factory environment upgrade --user-id FACTORY_USER_UUID
+   ```
+
+4. Review the old container ID, home, current/target image and policy. Confirm by typing
+   the exact UUID shown. The CLI removes only that owned stopped container and leaves
+   the home and Stopped intent intact.
+5. Restart the API. The member's next explicit Start creates the new container on the
+   retained home. Verify their files before resuming work.
+
+If interrupted, rerun the same command and review the pending intent. Missing volumes,
+foreign resources, changed IDs/names and conflicting generations remain errors. Never
+delete volumes, reservations or lock files to force an upgrade. This development workflow
+does not execute upgrades or migrations against real user data automatically.
 
 Missing preparation leaves the environment card unavailable while otherwise-ready
 authentication and administration remain usable. Docker failures produce environment
@@ -334,6 +370,52 @@ WSL behavior remains unverified, and installation/checkout identities must
 not be assumed interchangeable. Integration commands create their own labeled fixtures
 and verify ownership before cleanup; they never prune or remove user volumes.
 
+## Terminal and Codex account
+
+Start the environment and wait for Running. **Open terminal** loads xterm and attaches
+to its tmux shell in `/home/factory/Documents`. **Disconnect display** detaches only
+that view; **Reconnect** or **Open terminal** returns to the shell. A second tab must
+choose **Take over terminal** before it can type. Closing the browser or restarting the
+API does not stop the shell; stopping the environment or Docker does. Files survive
+Stop/start, but running processes do not. Unsent keystrokes are never replayed.
+
+Use Ctrl+Shift+M to leave terminal input and reach its controls. Screen reader mode is
+optional. The mobile toolbar provides Ctrl, Enter, Tab, Ctrl+C, Ctrl+D and Esc. Session
+checks on focus can remove the displayed terminal; reopen it after access is confirmed.
+The shell remains independent of this browser lifecycle.
+
+Choose **Connect Codex** to request a device code. Copy it and open the displayed official
+OpenAI link in a separate tab, then authorize your personal ChatGPT/Codex account there.
+Do not paste a password, API key or credentials into Factory. Keep the code private and
+cancel it if it is no longer needed. The card polls pending authorization every two
+seconds while visible and shows Connected only after provider confirmation and account
+verification. The reported plan does not guarantee access to a particular model.
+
+Only the initiating Factory session can retrieve a pending code. Reloading that page
+recovers its current state without starting another login. Expiry, logout or suspension
+closes access and attempts to cancel pending authorization. After an API crash, an
+abandoned controller may keep the account lock until its watchdog exits, at most ten
+minutes; refresh after recovery rather than killing arbitrary container processes.
+
+Codex stores credentials under `/home/factory/.codex` with private permissions. The API
+does not read host credentials or store provider tokens in PostgreSQL or browser storage.
+**Disconnect Codex** clears the saved sign-in through the account protocol and preserves
+the rest of the home. This does not prove already-running manual Codex requests stopped;
+use **Stop environment** when all processes must end. Factory sign-out leaves an already
+connected Codex account saved in its owner's home.
+
+The initial proxy allows only `auth.openai.com`, `chatgpt.com` and `api.openai.com` over
+HTTPS CONNECT on port 443. Direct egress and private destinations are refused. If the
+proxy is down, the account card reports unavailable while local terminal work continues;
+local account cancellation/logout does not require the proxy. No HTTP endpoint can
+open an arbitrary Docker exec or target another user's container.
+
+The integration commands exercise real PTYs, reattachment after adapter restart, a
+detached 4-MiB output producer, account-controller cleanup with synthetic cache data,
+stopped-container upgrade, and controlled DNS/private-address refusals. They neither
+authorize a real account nor consume model allowance. A successful real login and a
+small intentional Codex command remain human acceptance.
+
 ## Execution reference and Codex diagnostics
 
 The TypeScript execution packages are maintained as porting references. They are not
@@ -341,9 +423,10 @@ wired to member routes or a web terminal. Their deterministic checks remain in
 `pnpm check`; package JavaScript exports use built `dist` entries, while TypeScript
 consumers resolve source types. Build packages before invoking their JavaScript directly.
 
-The retained provider adapter targets **codex-cli 0.160.0**. Factory does not install
-or upgrade it. An intentional diagnostic must select an existing compatible executable
-by absolute path. Sign-in belongs to Codex's supported UI/CLI outside Factory; these
+The retained TypeScript provider adapter targets **codex-cli 0.160.0**. These diagnostics
+do not install or upgrade the host CLI. An intentional diagnostic must select an existing
+compatible executable by absolute path. Sign-in for these host-only diagnostics belongs
+to Codex's supported UI/CLI; these
 diagnostics never read token files, refresh tokens, change global configuration or
 accept an API key.
 
@@ -403,7 +486,11 @@ notice appears after focus/reconnection and only an explicit action reloads the 
 tab. Check that another tab is not forced to reload and no private API/OAuth content
 appears in CacheStorage. Record actual observations and limits locally.
 
-Live Codex acceptance belongs to the later execution increment. It may consume model
-allowance and requires an explicitly chosen disposable workspace, harmless content,
-deliberate questions/permissions and confirmed native cleanup. Synthetic fixtures or a
-UI projection cannot establish live agent execution, provider delegation or cleanup.
+For terminal/account acceptance, use a deliberately chosen disposable directory in the
+user's home. Connect the personal account through the code flow, verify the reported
+account, then intentionally run a small harmless Codex request in the terminal. This may
+consume model allowance. Check detached work and reconnection, cancellation of a second
+login, saved-account persistence after Stop/start and explicit account disconnect.
+Verify cross-user separation and the upgrade path on a disposable legacy home before
+using it for important work. Synthetic fixtures and UI projections cannot establish
+live model access, provider delegation or cleanup of manually launched agents.
