@@ -147,6 +147,7 @@ async function runFixture(populated) {
       ["factory-api", "composition"],
       ["factory-database", "identity"],
       ["factory-database", "environments"],
+      ["factory-database", "environment_upgrades"],
     ]) {
       const result = runCargo(
         [

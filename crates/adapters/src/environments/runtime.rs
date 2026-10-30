@@ -41,7 +41,7 @@ impl DockerEnvironmentRuntime {
 
     /// Recheck the host's terminal supervisor state before every individual mutation.
     /// An already dispatched Docker request remains uncertain after guard loss.
-    fn require_mutation_permission(&self) -> Result<(), EnvironmentError> {
+    pub(super) fn require_mutation_permission(&self) -> Result<(), EnvironmentError> {
         if (self.mutation_permitted)() {
             Ok(())
         } else {
@@ -118,7 +118,7 @@ impl DockerEnvironmentRuntime {
         Ok(Some(value))
     }
 
-    async fn image(&self, env: &Environment) -> Result<(), EnvironmentError> {
+    pub(super) async fn image(&self, env: &Environment) -> Result<(), EnvironmentError> {
         let value = json_value(
             self.docker
                 .inspect_image(&env.image_id)

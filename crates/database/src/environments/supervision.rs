@@ -68,7 +68,7 @@ pub(super) async fn batch(
     if !(1..=100).contains(&limit) {
         return Err(EnvironmentError::InvalidConfiguration);
     }
-    let users: Vec<Uuid> = sqlx::query_scalar("SELECT user_id FROM factory_identity.environments WHERE installation_id=$1 AND next_reconcile_at<=clock_timestamp() ORDER BY next_reconcile_at,id LIMIT $2")
+    let users: Vec<Uuid> = sqlx::query_scalar("SELECT user_id FROM factory_identity.environments e WHERE installation_id=$1 AND next_reconcile_at<=clock_timestamp() AND NOT EXISTS(SELECT 1 FROM factory_identity.environment_upgrades u WHERE u.environment_id=e.id) ORDER BY next_reconcile_at,id LIMIT $2")
         .bind(installation).bind(i64::from(limit)).fetch_all(pool).await.map_err(unavailable)?;
     let mut records = Vec::with_capacity(users.len());
     for user_id in users {
@@ -87,7 +87,13 @@ pub(super) async fn batch(
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(unavailable)?;
-        records.push(mapping::environment(&row)?);
+        let env = mapping::environment(&row)?;
+        // Recheck after locking: a preview may have become a durable intent since selection.
+        let upgrading: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM factory_identity.environment_upgrades WHERE environment_id=$1)")
+            .bind(env.id).fetch_one(&mut *tx).await.map_err(unavailable)?;
+        if !upgrading {
+            records.push(env);
+        }
         tx.commit().await.map_err(unavailable)?;
     }
     Ok(records)
