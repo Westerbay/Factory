@@ -310,7 +310,8 @@ async fn reads_are_actor_scoped_and_never_create_or_expose_internal_identifiers(
     assert_eq!(response.status(), 202);
     let body = json(response).await;
     assert_eq!(body["status"], "starting");
-    assert_eq!(body.as_object().unwrap().len(), 3);
+    assert_eq!(body.as_object().unwrap().len(), 4);
+    assert_eq!(body["upgradeRequired"], false);
     assert!(!body.to_string().contains("private-"));
     assert_eq!(
         json(f.call(Method::GET, "/api/environment", 1, "").await).await["status"],
@@ -475,4 +476,44 @@ async fn unprepared_or_lost_supervisor_is_honest_and_preserves_last_observation(
             .status(),
         202
     );
+}
+
+#[tokio::test]
+async fn image_or_policy_upgrade_is_explicit_start_is_refused_and_stop_preserves_home() {
+    for image_changed in [false, true] {
+        let f = Fixture::new().await;
+        f.call(Method::POST, "/api/environment/start", 0, "").await;
+        let original = {
+            let mut rows = f.store.rows.lock().unwrap();
+            let row = rows.get_mut(&f.users[0]).unwrap();
+            if image_changed {
+                row.image_id = "previous-image".into();
+            } else {
+                row.policy_version = "previous-policy".into();
+            }
+            row.observed_state = ObservedState::Running;
+            row.observed_at = Some(Utc::now());
+            row.clone()
+        };
+        let read = json(f.call(Method::GET, "/api/environment", 0, "").await).await;
+        assert_eq!(read["status"], "running");
+        assert_eq!(read["upgradeRequired"], true);
+        assert!(!read.to_string().contains("previous-"));
+        let start = f.call(Method::POST, "/api/environment/start", 0, "").await;
+        assert_eq!(start.status(), 503);
+        assert_eq!(json(start).await["code"], "policy_mismatch");
+        assert_eq!(
+            f.store.rows.lock().unwrap()[&f.users[0]].generation,
+            original.generation
+        );
+        let stop = f.call(Method::POST, "/api/environment/stop", 0, "").await;
+        assert_eq!(stop.status(), 202);
+        assert_eq!(json(stop).await["upgradeRequired"], true);
+        let rows = f.store.rows.lock().unwrap();
+        let stopped = &rows[&f.users[0]];
+        assert_eq!(stopped.desired_state, DesiredState::Stopped);
+        assert_eq!(stopped.image_id, original.image_id);
+        assert_eq!(stopped.policy_version, original.policy_version);
+        assert_eq!(stopped.volume_name, original.volume_name);
+    }
 }

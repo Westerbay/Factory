@@ -1,13 +1,10 @@
 use super::*;
 use crate::environments::{POLICY_VERSION, PreparationMetadata};
-use bollard::{
-    API_DEFAULT_VERSION, Docker,
-    container::LogOutput,
-    query_parameters::{RemoveContainerOptions, RemoveVolumeOptions},
-};
+use bollard::container::LogOutput;
 use chrono::Utc;
 use factory_core::environments::*;
-use serde_json::{Value, json};
+use futures_util::FutureExt;
+use serde_json::json;
 use uuid::Uuid;
 
 #[tokio::test]
@@ -81,6 +78,8 @@ async fn exercise(
     let handle = first.handle.clone();
     drop(first);
     terminal.detach(environment, &handle).await?;
+    crate::environments::fixture::stop_proxy(&runtime).await;
+    assert!(!runtime.egress().available().await?);
     // tmux keeps consuming the 4-MiB output with no browser/API reader attached.
     // A new adapter has no in-memory terminal state, as after restarting the API.
     let restarted = DockerTerminalRuntime::new(runtime.clone());
@@ -108,21 +107,6 @@ async fn exercise(
     Ok(())
 }
 
-fn verify_labels(environment: &Environment, labels: &Value) {
-    for (name, expected) in [
-        (
-            "io.factory.installation",
-            environment.installation_id.to_string(),
-        ),
-        ("io.factory.environment", environment.id.to_string()),
-        ("io.factory.user", environment.user_id.to_string()),
-        ("io.factory.policy", environment.policy_version.clone()),
-        ("io.factory.image", environment.image_id.clone()),
-    ] {
-        assert_eq!(labels[name], expected);
-    }
-}
-
 #[tokio::test]
 #[ignore = "Requires explicit FACTORY_PROCESS_TEST_IMAGE and the local Docker daemon; creates UUID-labelled disposable resources"]
 async fn local_docker_terminal_adapter_reconnects_without_losing_work() {
@@ -148,50 +132,17 @@ async fn local_docker_terminal_adapter_reconnects_without_losing_work() {
         error_code: None,
         next_reconcile_at: Utc::now(),
     };
-    let runtime = Arc::new(DockerEnvironmentRuntime::connect(metadata, Arc::new(|| true)).unwrap());
+    let egress = crate::environments::fixture::egress_metadata(metadata.installation_id());
+    let runtime =
+        Arc::new(DockerEnvironmentRuntime::connect(metadata, egress, Arc::new(|| true)).unwrap());
     runtime.create_volume(&environment).await.unwrap();
     environment.provisioning_state = ProvisioningState::VolumeReady;
-    let result = async {
+    let result = std::panic::AssertUnwindSafe(async {
         runtime.start(&environment).await?;
         exercise(runtime.clone(), &environment).await
-    }
+    })
+    .catch_unwind()
     .await;
-    runtime.stop(&environment).await.unwrap();
-    #[cfg(windows)]
-    let docker =
-        Docker::connect_with_named_pipe("//./pipe/docker_engine", 30, API_DEFAULT_VERSION).unwrap();
-    #[cfg(unix)]
-    let docker =
-        Docker::connect_with_unix("/var/run/docker.sock", 30, API_DEFAULT_VERSION).unwrap();
-    let container = serde_json::to_value(
-        docker
-            .inspect_container(&environment.container_name, None)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    verify_labels(&environment, &container["Config"]["Labels"]);
-    assert_eq!(container["State"]["Running"], false);
-    assert_eq!(container["Image"], environment.image_id);
-    docker
-        .remove_container(
-            container["Id"].as_str().unwrap(),
-            None::<RemoveContainerOptions>,
-        )
-        .await
-        .unwrap();
-    let volume = serde_json::to_value(
-        docker
-            .inspect_volume(&environment.volume_name)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    verify_labels(&environment, &volume["Labels"]);
-    assert_eq!(volume["Name"], environment.volume_name);
-    docker
-        .remove_volume(&environment.volume_name, None::<RemoveVolumeOptions>)
-        .await
-        .unwrap();
-    result.unwrap();
+    crate::environments::fixture::cleanup(&runtime, &[&environment]).await;
+    result.unwrap().unwrap();
 }

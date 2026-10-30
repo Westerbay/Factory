@@ -3,9 +3,10 @@ import { mkdir, readFile, writeFile, rename, unlink } from "node:fs/promises"
 import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { docker } from "./docker.mjs"
+import { prepareEgress } from "../egress/prepare.mjs"
 
 const root = fileURLToPath(new URL("../../", import.meta.url))
-export const policyVersion = "2"
+export const policyVersion = "3"
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const imageId = /^sha256:[0-9a-f]{64}$/
 
@@ -62,6 +63,8 @@ export async function prepare(
     policyVersion,
   }
   const temporary = resolve(directory, `prepared-${randomUUID()}.tmp`)
+  // Never publish the user manifest before proxy image and engine validation succeeds.
+  await prepareEgress(directory, runDocker)
   try {
     await writeFile(temporary, JSON.stringify(metadata, null, 2) + "\n", {
       flag: "wx",

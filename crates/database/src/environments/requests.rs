@@ -69,6 +69,14 @@ pub(super) async fn start(
     {
         return Err(EnvironmentError::OwnershipConflict);
     }
+    // Enforce the same prepared target under the row lock, including a change
+    // between the application's read and this transaction.
+    if existing.as_ref().is_some_and(|environment| {
+        environment.image_id != request.image_id
+            || environment.policy_version != request.policy_version
+    }) {
+        return Err(EnvironmentError::PolicyMismatch);
+    }
     if existing.is_none() {
         let id = Uuid::new_v4();
         let name = format!(

@@ -147,13 +147,15 @@ retried after 15 seconds. The supervisor also repairs suspended-user intent inde
 up to 32 environment jobs concurrently, so a slow container does not block another
 user's stop when worker capacity is available. This is bounded supervision, not a
 real-time shutdown guarantee under saturation. API shutdown stops supervision while containers keep running; API restart resumes
-reconciliation. No independent watchdog is installed.
+reconciliation. No independent environment supervisor runs outside the API.
 
 [Environment routes](../apps/api/src/environments/routes.rs) accept no target user ID or
 Docker configuration. GET reads status without creating resources; POST start/stop return
 accepted persistent intent. There is no heartbeat endpoint.
 All require an active session and mutations require Origin/CSRF checks. Public responses
-contain status, observation time and bounded error codes, never Docker identifiers.
+contain status, observation time, an upgrade-required flag and bounded error codes,
+never Docker identifiers. Image/policy mismatch blocks Start and interactive use while
+Stop remains useful.
 The [member controller](../apps/web/src/features/environments/environment-controller.ts)
 polls only while visible, online and authenticated. Session loss, logout and unmount
 cancel browser requests without changing server intent or stopping the container.
@@ -164,8 +166,69 @@ Prepared metadata keeps the installation UUID and immutable image ID under
 `.factory/environments`; preparing a newer image does not migrate existing environments.
 Linux socket and Windows named-pipe transports ignore ambient Docker contexts and remote
 daemon settings. The API is trusted to access Docker; the browser and containers are not
-given the socket. User containers run non-root with a read-only root, no network and a persistent home volume. CPU, memory and process counts have no
+given the socket. User containers run non-root with a read-only root and a persistent
+home volume. CPU, memory and process counts have no
 Factory-imposed ceiling; temporary storage and logs remain bounded. Named volumes do not supply a portable disk quota.
+
+The [operator upgrade service](../crates/application/src/environments/upgrade.rs) and
+[upgrade store](../crates/database/src/environments/upgrade.rs) reserve an additive
+[durable upgrade intent](../crates/database/migrations/4_environment_upgrades.sql)
+before removing an owned stopped container. The CLI requires both installation and
+database supervisor locks, so the API must be stopped. Preview and confirmation bind
+the user, generation, old container ID and target image/policy. Only the old container
+is removed, never its volume. Finalization retains Stopped intent and atomically consumes
+the reservation. Start refuses pending reservations. Home identity labels remain stable
+across image upgrades; container labels still bind the exact image and policy.
+
+## Isolated egress
+
+[DockerEgress](../crates/adapters/src/egress/runtime.rs) owns one shared proxy and one
+internal bridge per user, using Docker's isolated gateway mode and disabled IPv6. User
+containers have no external default route or published ports. The runtime checks exact
+network membership and ownership before interactive exec. Only the proxy joins both
+the user's bridge and the installation's outbound bridge; IP forwarding is disabled.
+
+The pinned [Squid policy](../infra/egress/squid.conf) permits CONNECT on port 443 only for
+`auth.openai.com`, `chatgpt.com` and `api.openai.com`. DNS answers and actual destination
+addresses are both checked against private/reserved ranges. The proxy entrypoint installs
+its nftables policy, then drops privilege and all capabilities before serving requests.
+There is no TLS interception or tunnel-content logging. Unsupported engine/network policy
+fails closed. Proxy failure affects Codex availability without disabling the local shell;
+status reads never start the proxy or user environment.
+
+## Terminal and account operations
+
+[TerminalService](../crates/application/src/terminals/mod.rs) owns one-use, 30-second
+attachment tickets bound to user, session, environment generation and takeover decision.
+HTTP ticket creation requires Origin and CSRF. WebSocket upgrade requires the session,
+exact Origin and fixed subprotocol; the ticket travels in the first message, never the URL.
+Input and resize requests revalidate access. Passive streams check at most every five
+seconds and expire at the exact session deadline; local logout/suspension notifications
+close them promptly. An in-flight Docker attachment is settled and detached after
+revocation rather than abandoning its handle.
+
+The [Docker terminal adapter](../crates/adapters/src/terminals/mod.rs) attaches a fixed
+non-root tmux command. tmux owns shell lifetime; the API owns only the attached client.
+The stream uses 16-KiB output chunks and a 256-KiB unacknowledged window. xterm acknowledges
+only after processing output; a slow client is detached. Input/output buffers are bounded,
+and reconnect never replays input. Explicit takeover invalidates the previous attachment
+generation so its cleanup cannot detach a later writer.
+
+[AgentConnectionService](../crates/application/src/agent_connections/mod.rs) owns account
+operations through a provider-neutral port. The [Codex adapter](../crates/adapters/src/codex_account/mod.rs)
+maps the pinned 0.160.0 app-server JSON-RPC account protocol. It validates IDs, message size,
+depth, account projections and the official authorization URL. Device authorization is
+session/generation-bound; success requires the completion notification plus a confirmed
+account read. The API monitors expiry and revocation even after the initiating HTTP
+handler disappears. No account operation issues `turn/start`.
+
+Account controllers run under a fixed image wrapper with a single-controller lock,
+private file permissions and a watchdog shorter than ten minutes. Cleanup shuts down
+stdin and drops both Docker stream halves before waiting for exit. Credentials stay in
+`/home/factory/.codex`; only a bounded account projection and pending device challenge
+cross HTTP. Cancellation/logout remain local when the proxy is stopped. Browser account
+polling runs only for an active pending login and visible, authenticated page. The route
+shares one environment controller between the lifecycle card and dependent panels.
 
 ## PWA and static hosting
 

@@ -15,6 +15,28 @@ unavailable states replace stale private content. Errors offer an explicit recov
 action; an unconfirmed sign-out keeps private content hidden and offers retry. Status
 messages use text and accessible live regions, not color alone.
 
+The workspace shares one environment status controller across the environment card,
+terminal and Codex account card. Terminal and account actions require a confirmed running
+environment on the current policy. An explicit upgrade requirement disables Start and new
+connections, explains that administrator action is needed, and keeps Stop available for
+a running or uncertain environment. The interface never upgrades a container implicitly.
+
+The terminal loads on explicit Open, reconnects only on request and requires an explicit
+takeover when another tab owns input. Its accessible xterm area has an exit-focus action,
+responsive sizing and mobile Enter, Tab and Ctrl controls. A transport interruption does
+not replay queued input. Closing the view detaches from the persistent shell; Stop ends
+running processes while preserving files.
+
+Codex sign-in shows a private device code, explicit Copy action and a validated official
+OpenAI link opened with `noopener noreferrer`. It reports pending, cancelled, expired,
+connected, unavailable and uncertain states without claiming a displayed code is success.
+Mutations move focus to a stable status element when their buttons disappear; background
+polling does not steal focus. Polling runs only during sign-in on an active page. Returning
+to the page reads the existing operation and never starts another sign-in automatically.
+Code and account data stay in memory and disappear on session invalidation, account change
+or unavailable environment. Expired codes disappear even when a request is stalled.
+Disconnect explains that manually launched Codex processes may still require Stop.
+
 The access backoffice uses readable user cards with provider, role and status. Filters
 and pagination remain in the URL. Pending mutations disable only the affected row;
 access is not changed optimistically. A conflict refreshes server state and asks the user
@@ -31,6 +53,7 @@ Controls and identity text wrap at narrow widths, including a 360-pixel viewport
 The PWA update notice is non-blocking and provides an explicit update/reload action.
 The offline page contains only public instructions. No installed-app state should suggest
 that a cached private session remains usable without server verification.
+API responses, terminal output and account data are excluded from the service-worker cache.
 
 Keep English UI text close to its owning component until an actual localization runtime
 is needed. Reuse shadcn primitives when an implemented interaction benefits from them;

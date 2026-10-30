@@ -521,3 +521,37 @@ async fn previous_process_terminal_observations_stay_unavailable_until_inspected
     f.reconciler().reconcile_once().await.unwrap();
     assert!(f.service().can_report(Some(&f.store.row())));
 }
+
+#[tokio::test]
+async fn prepared_target_changes_require_explicit_upgrade_before_interactive_work() {
+    for image_changed in [false, true] {
+        let f = Fixture::new();
+        f.availability.ready();
+        f.provisioned(DesiredState::Running);
+        {
+            let mut row = f.store.row.lock().unwrap();
+            if image_changed {
+                row.image_id = "previous-image".into();
+            } else {
+                row.policy_version = "previous-policy".into();
+            }
+        }
+        let service = f.service();
+        let original = f.store.row();
+        assert!(service.needs_upgrade(&original));
+        assert_eq!(
+            service.require_running(f.actor()).await.unwrap_err(),
+            EnvironmentError::PolicyMismatch
+        );
+        assert_eq!(
+            service.start(f.actor()).await.unwrap_err(),
+            EnvironmentError::PolicyMismatch
+        );
+        assert_eq!(f.store.row(), original);
+        let stopped = service.stop(f.actor()).await.unwrap().unwrap();
+        assert_eq!(stopped.desired_state, DesiredState::Stopped);
+        assert_eq!(stopped.volume_name, original.volume_name);
+        assert_eq!(stopped.image_id, original.image_id);
+        assert_eq!(stopped.policy_version, original.policy_version);
+    }
+}

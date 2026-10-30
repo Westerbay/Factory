@@ -15,13 +15,24 @@ test("Docker cleans buildx metadata on success and command failure without follo
   writeFileSync(sentinel, "preserve")
   let config
   let fail = false
+  let diagnostic = false
   const command = t.mock.method(childProcess, "execFileSync", (_file, args) => {
     config = args[1]
     const buildx = join(config, "buildx")
     mkdirSync(buildx)
     writeFileSync(join(buildx, "activity"), "owned build metadata")
     symlinkSync(outside, join(config, "external"), "junction")
-    if (fail) throw new Error("command failed with sensitive details")
+    if (fail) {
+      const error = new Error("command failed with sensitive details")
+      if (diagnostic)
+        Object.assign(error, {
+          code: "ETIMEDOUT",
+          status: 137,
+          signal: "SIGTERM",
+          stderr: "private build output",
+        })
+      throw error
+    }
     return "image built\n"
   })
   syncBuiltinESMExports()
@@ -35,6 +46,12 @@ test("Docker cleans buildx metadata on success and command failure without follo
     })
     assert.equal(existsSync(config), false)
     assert.equal(await readFile(sentinel, "utf8"), "preserve")
+    diagnostic = true
+    assert.throws(runDocker.bind(null, ["build"]), {
+      message:
+        "Local environment Docker operation failed or timed out (code=ETIMEDOUT, status=137, signal=SIGTERM)",
+    })
+    assert.equal(existsSync(config), false)
   } finally {
     command.mock.restore()
     syncBuiltinESMExports()
@@ -46,10 +63,30 @@ test("Docker cleans buildx metadata on success and command failure without follo
 test("repeated preparation preserves installation and changes only the prepared image", async () => {
   const directory = await mkdtemp(join(tmpdir(), "factory-prepare-test-"))
   let image = "a"
+  let proxyFailure = false
   const commands = []
   const docker = (args) => {
     commands.push(args)
     if (args[0] === "build") return ""
+    if (args[0] === "container" && args[1] === "ls") return ""
+    if (args[0] === "version")
+      return JSON.stringify({ Os: "linux", ApiVersion: "1.56" })
+    if (args[2].startsWith("factory-egress:")) {
+      if (proxyFailure) throw new Error("fixture proxy failure")
+      return JSON.stringify([
+        {
+          Id: `sha256:${"c".repeat(64)}`,
+          Os: "linux",
+          Config: {
+            User: "0:0",
+            Labels: {
+              "io.factory.egress.image": "1",
+              "io.factory.egress.squid": "7.7",
+            },
+          },
+        },
+      ])
+    }
     return JSON.stringify([
       {
         Id: `sha256:${image.repeat(64)}`,
@@ -57,7 +94,7 @@ test("repeated preparation preserves installation and changes only the prepared 
         Config: {
           User: "10000:10000",
           Labels: {
-            "io.factory.environment.image": "2",
+            "io.factory.environment.image": "3",
             "io.factory.codex.version": "0.160.0",
           },
         },
@@ -76,7 +113,27 @@ test("repeated preparation preserves installation and changes only the prepared 
     )
     assert.deepEqual(
       commands.map((args) => args[0]),
-      ["build", "image", "build", "image"]
+      [
+        "build",
+        "image",
+        "version",
+        "build",
+        "image",
+        "container",
+        "build",
+        "image",
+        "version",
+        "build",
+        "image",
+        "container",
+      ]
+    )
+    proxyFailure = true
+    image = "d"
+    await assert.rejects(prepare(directory, docker), /fixture proxy failure/)
+    assert.deepEqual(
+      JSON.parse(await readFile(join(directory, "prepared.json"), "utf8")),
+      second
     )
     image = "invalid"
     await assert.rejects(prepare(directory, docker), /does not satisfy/)
@@ -86,6 +143,7 @@ test("repeated preparation preserves installation and changes only the prepared 
     )
   } finally {
     await unlink(join(directory, "prepared.json"))
+    await unlink(join(directory, "egress.json"))
     await unlink(join(directory, "installation.json"))
     await rmdir(directory)
   }

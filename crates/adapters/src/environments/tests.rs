@@ -1,7 +1,9 @@
 use super::*;
+use crate::egress::{DockerEgress, EgressMetadata, user_network_name};
 use bollard::{API_DEFAULT_VERSION, Docker};
 use chrono::Utc;
 use factory_core::environments::*;
+use futures_util::FutureExt;
 use serde_json::{Value, json};
 use std::{
     collections::VecDeque,
@@ -14,7 +16,7 @@ use std::{
 use uuid::Uuid;
 
 fn metadata() -> PreparationMetadata {
-    serde_json::from_value(json!({"schemaVersion":1,"installationId":Uuid::new_v4().to_string(),"imageId":format!("sha256:{}", "a".repeat(64)),"policyVersion":"2"})).unwrap()
+    serde_json::from_value(json!({"schemaVersion":1,"installationId":Uuid::new_v4().to_string(),"imageId":format!("sha256:{}", "a".repeat(64)),"policyVersion":POLICY_VERSION})).unwrap()
 }
 fn environment(metadata: &PreparationMetadata) -> Environment {
     let id = Uuid::new_v4();
@@ -34,7 +36,7 @@ fn environment(metadata: &PreparationMetadata) -> Environment {
         volume_name: format!("{name}-home"),
         container_name: name,
         image_id: metadata.image_id().into(),
-        policy_version: "2".into(),
+        policy_version: POLICY_VERSION.into(),
         observed_at: None,
         error_code: None,
         next_reconcile_at: Utc::now(),
@@ -50,7 +52,8 @@ fn container(env: &Environment) -> Value {
     let body = serde_json::to_value(policy().create_body(env)).unwrap();
     json!({"Id":"b".repeat(64),"Name":format!("/{}",env.container_name),"Image":env.image_id,
         "Config":body,"HostConfig":body["HostConfig"],"State":{"Status":"running","Running":true},
-        "Mounts":[{"Type":"volume","Name":env.volume_name,"Destination":"/home/factory","RW":true,"Driver":"local"}]})
+        "Mounts":[{"Type":"volume","Name":env.volume_name,"Destination":"/home/factory","RW":true,"Driver":"local"}],
+        "NetworkSettings":{"Networks":{user_network_name(env.installation_id,env.id):{"NetworkID":"e".repeat(64)}}}})
 }
 
 type Reply = (
@@ -71,6 +74,59 @@ struct Fixture {
 struct FixtureState {
     replies: Arc<Mutex<VecDeque<Reply>>>,
     requests: Arc<AtomicUsize>,
+    egress: EgressMetadata,
+}
+
+fn egress_reply(state: &FixtureState, path: &str) -> Option<Value> {
+    let metadata = &state.egress;
+    if path.ends_with(&format!("/images/{}/json", metadata.image_id)) {
+        return Some(
+            json!({"Id":metadata.image_id,"Os":"linux","Config":{"Labels":{"io.factory.egress.image":"1","io.factory.egress.squid":"7.7"}}}),
+        );
+    }
+    if path.ends_with(&format!("/containers/{}/json", metadata.proxy_name())) {
+        let body = serde_json::to_value(metadata.proxy_body()).unwrap();
+        return Some(
+            json!({"Id":"c".repeat(64),"Name":format!("/{}",metadata.proxy_name()),"Image":metadata.image_id,
+            "Config":body,"HostConfig":body["HostConfig"],"State":{"Running":true},"Mounts":[],
+            "NetworkSettings":{"Networks":{metadata.outbound_name():{"NetworkID":"d".repeat(64)}}}}),
+        );
+    }
+    if path.contains("/networks/") {
+        let name = path.rsplit('/').next().unwrap();
+        let environment = if name == metadata.outbound_name() {
+            None
+        } else {
+            Some(
+                Uuid::parse_str(
+                    name.strip_prefix(&format!("factory-net-{}-", metadata.installation_id))
+                        .unwrap(),
+                )
+                .unwrap(),
+            )
+        };
+        let mut network = serde_json::to_value(metadata.network_body(environment)).unwrap();
+        network["Id"] = json!(if environment.is_some() {
+            "e".repeat(64)
+        } else {
+            "d".repeat(64)
+        });
+        network["Scope"] = json!("local");
+        network["IPAM"] = json!({"Driver":"default","Options":{}});
+        network["Containers"] = json!({"c".repeat(64):{"Name":metadata.proxy_name()}});
+        return Some(network);
+    }
+    if path.ends_with("/version")
+        && state
+            .replies
+            .lock()
+            .unwrap()
+            .front()
+            .is_none_or(|reply| reply.1 != "/version")
+    {
+        return Some(json!({"ApiVersion":"1.53","Os":"linux"}));
+    }
+    None
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -87,9 +143,18 @@ async fn fixture(metadata: PreparationMetadata, replies: Vec<Reply>, timeout: Du
     };
     let replies = Arc::new(Mutex::new(VecDeque::from(replies)));
     let requests = Arc::new(AtomicUsize::new(0));
+    let egress_metadata = super::fixture::synthetic_egress(metadata.installation_id());
     let router = Router::new()
         .fallback(any(
             |State(state): State<FixtureState>, request: Request<Body>| async move {
+                if let Some(body) = egress_reply(&state, request.uri().path()) {
+                    assert_eq!(request.method(), "GET", "mock egress is already prepared");
+                    return Response::builder()
+                        .status(200)
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap();
+                }
                 state.requests.fetch_add(1, Ordering::SeqCst);
                 let next = state
                     .replies
@@ -117,6 +182,7 @@ async fn fixture(metadata: PreparationMetadata, replies: Vec<Reply>, timeout: Du
         .with_state(FixtureState {
             replies: replies.clone(),
             requests: requests.clone(),
+            egress: egress_metadata.clone(),
         });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -126,6 +192,9 @@ async fn fixture(metadata: PreparationMetadata, replies: Vec<Reply>, timeout: Du
         Docker::connect_with_http(&format!("http://{address}"), 5, API_DEFAULT_VERSION).unwrap();
     Fixture {
         runtime: DockerEnvironmentRuntime {
+            egress: Arc::new(
+                DockerEgress::new(docker.clone(), egress_metadata, Arc::new(|| true)).unwrap(),
+            ),
             docker,
             metadata,
             policy: policy(),
@@ -191,6 +260,56 @@ async fn foreign_container_cannot_be_stopped() {
         Err(EnvironmentError::OwnershipConflict)
     );
     assert!(fixture.replies.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn home_identity_survives_image_policy_changes_but_container_network_id_must_match() {
+    let metadata = metadata();
+    let env = environment(&metadata);
+    let mut legacy_home = volume(&env);
+    legacy_home["Labels"]["io.factory.image"] = json!(format!("sha256:{}", "0".repeat(64)));
+    legacy_home["Labels"]["io.factory.policy"] = json!("2");
+    let mut wrong_network = container(&env);
+    wrong_network["NetworkSettings"]["Networks"][user_network_name(env.installation_id, env.id)]
+        ["NetworkID"] = json!("0".repeat(64));
+    let fixture = fixture(
+        metadata,
+        vec![
+            version(),
+            reply(
+                "GET",
+                format!("/volumes/{}", env.volume_name),
+                200,
+                legacy_home,
+            ),
+            reply(
+                "GET",
+                format!("/containers/{}/json", env.container_name),
+                200,
+                wrong_network,
+            ),
+        ],
+        Duration::from_secs(2),
+    )
+    .await;
+    assert_eq!(
+        fixture.runtime.inspect(&env).await,
+        Err(EnvironmentError::OwnershipConflict)
+    );
+    assert!(
+        fixture.replies.lock().unwrap().is_empty(),
+        "legacy home accepted before rejecting mismatched actual network"
+    );
+}
+
+#[test]
+fn egress_metadata_cannot_select_another_installation() {
+    let metadata = metadata();
+    let other = super::fixture::synthetic_egress(Uuid::new_v4());
+    assert!(matches!(
+        DockerEnvironmentRuntime::connect(metadata, other, Arc::new(|| true)),
+        Err(EnvironmentError::OwnershipConflict)
+    ));
 }
 
 #[tokio::test]
@@ -267,6 +386,10 @@ fn full_policy_rejects_unsafe_mutations_and_finite_resource_ceilings() {
     assert!(policy().verify_container(&env, &base).is_ok());
     let mut normalized = base.clone();
     normalized["HostConfig"]["PidsLimit"] = Value::Null;
+    normalized["Config"]
+        .as_object_mut()
+        .unwrap()
+        .remove("NetworkDisabled");
     assert!(policy().verify_container(&env, &normalized).is_ok());
     for (path, value) in [
         ("/HostConfig/Privileged", json!(true)),
@@ -285,6 +408,7 @@ fn full_policy_rejects_unsafe_mutations_and_finite_resource_ceilings() {
         ("/HostConfig/Init", json!(false)),
         ("/HostConfig/SecurityOpt", json!(["seccomp=unconfined"])),
         ("/Config/User", json!("root")),
+        ("/Config/NetworkDisabled", json!(true)),
         ("/Config/Env", json!(["SECRET=bad"])),
         ("/Mounts/0/Name", json!("foreign")),
         ("/HostConfig/Mounts/0/Source", json!("foreign")),
@@ -417,7 +541,7 @@ async fn create_conflict_requires_reinspection_and_never_starts_foreign_containe
 fn preparation_rejects_tag_and_oversized_metadata() {
     let directory = std::env::temp_dir().join(format!("factory-env-metadata-{}", Uuid::new_v4()));
     std::fs::create_dir(&directory).unwrap();
-    for bytes in [json!({"schemaVersion":1,"installationId":Uuid::new_v4().to_string(),"imageId":"alpine:latest","policyVersion":"2"}).to_string(), " ".repeat(4097)] {
+    for bytes in [json!({"schemaVersion":1,"installationId":Uuid::new_v4().to_string(),"imageId":"alpine:latest","policyVersion":POLICY_VERSION}).to_string(), " ".repeat(4097)] {
         std::fs::write(directory.join("prepared.json"),bytes).unwrap();
         assert!(matches!(PreparationMetadata::load(&directory),Err(EnvironmentError::InvalidConfiguration)));
     }
@@ -569,41 +693,16 @@ async fn real_docker_persistence_isolation_and_unlimited_resources() {
         std::env::var("FACTORY_ENV_TEST_DIRECTORY").expect("explicit fixture directory required");
     let prepared = PreparationMetadata::load(&directory).unwrap();
     // Every test gets a fresh installation identity, even when reusing a prepared image.
-    let metadata: PreparationMetadata=serde_json::from_value(json!({"schemaVersion":1,"installationId":Uuid::new_v4().to_string(),"imageId":prepared.image_id(),"policyVersion":"2"})).unwrap();
-    let runtime = DockerEnvironmentRuntime::connect(metadata.clone(), Arc::new(|| true)).unwrap();
+    let metadata: PreparationMetadata=serde_json::from_value(json!({"schemaVersion":1,"installationId":Uuid::new_v4().to_string(),"imageId":prepared.image_id(),"policyVersion":POLICY_VERSION})).unwrap();
+    let egress = super::fixture::egress_metadata(metadata.installation_id());
+    let runtime =
+        DockerEnvironmentRuntime::connect(metadata.clone(), egress, Arc::new(|| true)).unwrap();
     let environments = [environment(&metadata), environment(&metadata)];
-    let result = exercise_real(&runtime, &environments, &directory).await;
-    // Exact generated resources only, with independent ownership verification before cleanup.
-    for env in &environments {
-        if let Some(container) = runtime
-            .container(env)
-            .await
-            .expect("cleanup ownership inspection")
-        {
-            runtime
-                .docker
-                .remove_container(
-                    container["Id"].as_str().unwrap(),
-                    Some(bollard::query_parameters::RemoveContainerOptions {
-                        force: true,
-                        ..Default::default()
-                    }),
-                )
-                .await
-                .unwrap();
-        }
-        if runtime.volume(env).await.unwrap() == VolumePresence::Present {
-            runtime
-                .docker
-                .remove_volume(
-                    &env.volume_name,
-                    None::<bollard::query_parameters::RemoveVolumeOptions>,
-                )
-                .await
-                .unwrap();
-        }
-    }
-    result.unwrap();
+    let result = std::panic::AssertUnwindSafe(exercise_real(&runtime, &environments, &directory))
+        .catch_unwind()
+        .await;
+    super::fixture::cleanup(&runtime, &[&environments[0], &environments[1]]).await;
+    result.unwrap().unwrap();
 }
 
 async fn exercise_real(

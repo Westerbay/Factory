@@ -23,10 +23,20 @@ Only an explicit stop or account suspension requests a stop, while the API and D
 are available. Factory imposes no count, CPU, memory or process quota; host and Docker
 Desktop limits still apply. Named volumes have no portable disk quota.
 
-The intended next stages connect GitHub projects and a personal ChatGPT/Codex
-subscription, and provide a terminal with global skills. These capabilities are not
-connected to the web application yet. GitLab, Azure and Claude remain future adapters;
-GitHub identity currently grants no repository access.
+Members can open a persistent xterm terminal through the Rust API and Docker exec.
+tmux owns the shell independently of browser and API connections. Explicit takeover
+allows only one attached writer. Codex device authorization connects the member's
+personal ChatGPT/Codex account inside that same home; Factory exposes account status,
+not an agent conversation or execution history. GitHub projects and global skills remain
+future work. GitLab, Azure and Claude remain future adapters; GitHub identity currently
+grants no repository access.
+
+Policy-3 environments use a dedicated isolated internal network per user and one
+installation-owned HTTPS CONNECT proxy. Only the initial Codex destinations are allowed;
+direct Internet, host/LAN and other-user access remain blocked. A stopped proxy makes
+the account service unavailable while the local shell remains usable. Existing containers
+require an explicit stopped-container upgrade that preserves their home; Start never
+silently replaces them.
 
 The TypeScript core, application, contracts, Codex adapter and PostgreSQL execution store
 remain tested references for the later Rust execution port. Their existing tables and
@@ -38,8 +48,10 @@ it. Missing image preparation affects only environment availability.
 
 Local PostgreSQL ownership checks support Linux Docker Engine and Windows Docker Desktop
 using exact checkout paths and the local socket or named pipe. Windows database support
-does not establish live Codex execution or native cleanup. The Codex reference adapter
-targets CLI 0.160.0, but no agent is started by the web runtime or routine checks.
+alone does not establish live Codex execution. The workspace image pins native Codex
+0.160.0. The web runtime uses short-lived app-server account operations and never issues
+agent turns; a member may intentionally run Codex in the terminal. Routine checks use
+synthetic credentials and do not call a model.
 The new environment adapter uses Rust/Bollard directly against that local Docker
 transport. CI exercises environment integration on Ubuntu with Docker Engine, alongside
 local Windows Docker Desktop validation with Linux containers. WSL remains unverified.

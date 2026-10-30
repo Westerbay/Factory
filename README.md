@@ -2,11 +2,13 @@
 
 Factory is a private React/TypeScript web application with a Rust API. Its current
 foundation provides GitHub sign-in, administrator-controlled admission, revocable
-server sessions, a user-access backoffice and on-demand private local Docker environments.
+server sessions, a user-access backoffice and on-demand private local Docker environments,
+with a persistent web terminal and personal ChatGPT/Codex account connection.
 The frontend builds to static assets
 hosted independently of Rust and is installable as a PWA.
 
-The member workspace deliberately has no agent, repository or terminal controls yet.
+The member workspace provides xterm, Docker exec and tmux, plus Codex device authorization.
+Repository selection, Factory agent conversations and global skills remain future work.
 The existing TypeScript execution packages remain references for a later Rust port;
 their history is not assigned or exposed to web users. Hosting and deployment are
 outside the current local increment.
@@ -31,10 +33,12 @@ pnpm environments:prepare
 
 The CLI displays the selected profile and asks you to type its username to confirm.
 It stores the stable provider ID and refuses to replace an existing administrator.
-Environment preparation builds one shared image and records its immutable image ID
-and installation identity in `.factory/environments`; it does not create user containers.
+Environment preparation builds pinned workspace and egress-proxy images and records
+their immutable identities in `.factory/environments`; it does not create user containers.
 The first **Start environment** action creates the user's container and persistent home
-volume. Stop preserves files. Keep the preparation directory with its Docker resources.
+volume. Stop preserves files but ends running processes. Keep the preparation directory
+with its Docker resources. Docker Engine API 1.48+ and isolated bridge support are required;
+the runtime refuses unsupported isolation instead of falling back.
 Then run these in separate terminals:
 
 ```bash
@@ -50,9 +54,19 @@ Open `http://localhost:3000`. The browser calls the separate API at
 sign-in remains unavailable until OAuth configuration, the verified owned PostgreSQL
 target and identity migrations are ready. Runtime startup reads `.env` but never
 provisions or migrates the database. Restart the API after changing its configuration.
-Existing databases need the additive environment migration through
+Existing databases need the additive environment/upgrade migrations through
 `pnpm db:migrate:identity` before identity readiness succeeds. Missing environment
 preparation leaves only environments unavailable when identity is otherwise ready.
+
+For an existing environment marked **Upgrade required**, stop it first, then stop the
+API and run `pnpm factory environment upgrade --user-id <Factory-user-UUID>`.
+Review the exact container and home shown before confirming. The CLI preserves the home
+and leaves the environment stopped; its next explicit Start creates the updated container.
+
+Once Running, choose **Open terminal** or **Connect Codex**. Codex authorization uses
+your personal subscription and keeps credentials in your container's home. Closing
+Factory leaves the shell running; reconnecting never replays unsent input. See the
+[terminal and account instructions](docs/DEVELOPMENT.md#terminal-and-codex-account).
 
 See [development](docs/DEVELOPMENT.md) for explicit local database setup, API
 configuration, [persistent environment lifecycle](docs/DEVELOPMENT.md#local-environments),
@@ -71,7 +85,7 @@ OpenAPI parity, documentation links and builds without Docker or provider creden
 `test:integration` explicitly requires local Docker and uses isolated, identity-verified
 fixtures; it does not migrate the development database or call a model.
 
-Human QA and live GitHub/PWA acceptance remain separate. Temporary acceptance scripts
+Human QA and live GitHub/Codex/PWA acceptance remain separate. Temporary acceptance scripts
 and captures stay in ignored local scratch; meaningful unit and integration regressions
 remain versioned.
 

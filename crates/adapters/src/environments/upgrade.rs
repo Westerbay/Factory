@@ -14,7 +14,7 @@ use std::{future::Future, sync::Arc};
 /// Explicit operator replacement. Never used by normal Start or reconciliation.
 pub struct DockerEnvironmentUpgradeRuntime {
     runtime: DockerEnvironmentRuntime,
-    egress: DockerEgress,
+    egress: Arc<DockerEgress>,
 }
 
 impl DockerEnvironmentUpgradeRuntime {
@@ -26,8 +26,8 @@ impl DockerEnvironmentUpgradeRuntime {
         if metadata.installation_id() != egress.installation_id {
             return Err(EnvironmentError::OwnershipConflict);
         }
-        let runtime = DockerEnvironmentRuntime::connect(metadata, permitted.clone())?;
-        let egress = DockerEgress::new(runtime.docker.clone(), egress, permitted)?;
+        let runtime = DockerEnvironmentRuntime::connect(metadata, egress, permitted)?;
+        let egress = runtime.egress();
         Ok(Self { runtime, egress })
     }
 
@@ -268,19 +268,12 @@ mod tests {
             volume_name: format!("{name}-home"),
             container_name: name,
             image_id: image.clone(),
-            policy_version: "1".into(),
+            policy_version: "2".into(),
             observed_at: None,
             error_code: None,
             next_reconcile_at: chrono::Utc::now(),
         };
-        // Egress is not mutated by the removal test. Its real preparation/isolation has
-        // a separate guarded fixture; the constructor still receives valid metadata.
-        let egress = EgressMetadata {
-            schema_version: 1,
-            installation_id: installation,
-            image_id: image,
-            host_ipv4: vec![std::net::Ipv4Addr::LOCALHOST],
-        };
+        let egress = crate::environments::fixture::egress_metadata(installation);
         let runtime =
             DockerEnvironmentUpgradeRuntime::connect(metadata, egress, Arc::new(|| true)).unwrap();
         let docker = &runtime.runtime.docker;
@@ -305,14 +298,21 @@ mod tests {
                 })
                 .await
                 .unwrap();
-            let body = runtime.runtime.policy.create_body(&env);
+            // Synthetic legacy policy-2 container, disconnected from all networks.
+            let mut body = serde_json::to_value(runtime.runtime.policy.create_body(&env)).unwrap();
+            body["NetworkDisabled"] = json!(true);
+            body["HostConfig"]["NetworkMode"] = json!("none");
+            body["Env"] = json!([
+                "HOME=/home/factory",
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            ]);
             let old = docker
                 .create_container(
                     Some(CreateContainerOptions {
                         name: Some(env.container_name.clone()),
                         ..Default::default()
                     }),
-                    body,
+                    serde_json::from_value(body).unwrap(),
                 )
                 .await
                 .unwrap()
@@ -384,26 +384,23 @@ mod tests {
                 runtime.inspect_upgrade(&foreign).await,
                 Err(EnvironmentError::OwnershipConflict)
             );
+            let mut target = env.clone();
+            target.policy_version = super::super::POLICY_VERSION.into();
+            runtime.prepare_upgrade(&target).await.unwrap();
             runtime.remove_upgrade_container(&env, &old).await.unwrap();
             assert_eq!(runtime.inspect_upgrade(&env).await.unwrap(), None);
             runtime.remove_upgrade_container(&env, &old).await.unwrap();
             assert!(docker.inspect_volume(&env.volume_name).await.is_ok());
-            let mut target = env.clone();
-            target.policy_version = super::super::POLICY_VERSION.into();
-            runtime.runtime.image(&target).await.unwrap();
-            let replacement = docker
-                .create_container(
-                    Some(CreateContainerOptions {
-                        name: Some(env.container_name.clone()),
-                        ..Default::default()
-                    }),
-                    runtime.runtime.policy.create_body(&target),
-                )
-                .await
+            target.desired_state = DesiredState::Running;
+            runtime.runtime.start(&target).await.unwrap();
+            let replacement = runtime.runtime.container(&target).await.unwrap().unwrap()["Id"]
+                .as_str()
                 .unwrap()
-                .id;
+                .to_owned();
             created_ids.push(replacement.clone());
             assert_ne!(replacement, old);
+            runtime.runtime.stop(&target).await.unwrap();
+            target.desired_state = DesiredState::Stopped;
             // Old-operation retry refuses the replacement, even while it is stopped.
             assert_eq!(
                 runtime.remove_upgrade_container(&env, &old).await,
@@ -468,26 +465,7 @@ mod tests {
                 }
             }
         }
-        let volume = match docker.inspect_volume(&env.volume_name).await {
-            Ok(volume) => Some(volume),
-            Err(error) if missing(&error) => None,
-            Err(error) => panic!("fixture volume cleanup inspection failed: {error}"),
-        };
-        if let Some(volume) = volume {
-            let value = serde_json::to_value(volume).unwrap();
-            assert_eq!(
-                value["Labels"]["io.factory.installation"],
-                installation.to_string()
-            );
-            assert_eq!(
-                value["Labels"]["io.factory.environment"],
-                env.id.to_string()
-            );
-            docker
-                .remove_volume(&env.volume_name, None::<RemoveVolumeOptions>)
-                .await
-                .unwrap();
-        }
+        crate::environments::fixture::cleanup(&runtime.runtime, &[&env]).await;
         if let Err(panic) = result {
             std::panic::resume_unwind(panic);
         }

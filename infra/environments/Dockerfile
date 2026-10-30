@@ -23,7 +23,7 @@ RUN set -eu; \
     test -s /tmp/schema/v2/LogoutAccountResponse.json
 
 FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
-LABEL io.factory.environment.image="2"
+LABEL io.factory.environment.image="3"
 LABEL io.factory.codex.version="0.160.0"
 RUN printf '%s\n' 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261027T000000Z bookworm main' \
       'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20261027T000000Z bookworm-security main' > /etc/apt/sources.list \

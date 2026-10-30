@@ -354,6 +354,8 @@ export interface components {
       /** Format: date-time */
       observedAt?: string | null
       status: components["schemas"]["EnvironmentStatus"]
+      /** @description Explicit administrator upgrade required before starting or interactive work. */
+      upgradeRequired: boolean
     }
     /** @enum {string} */
     EnvironmentStatus:

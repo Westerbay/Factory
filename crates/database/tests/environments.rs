@@ -121,10 +121,20 @@ async fn persistent_requests_preserve_ownership_and_generation_without_capacity_
     );
     let mut changed_image = request(installation);
     changed_image.image_id = "sha256:new".into();
-    assert_eq!(
-        store.start(one, changed_image).await.unwrap().image_id,
-        first.image_id
-    );
+    assert!(matches!(
+        store.start(one, changed_image).await,
+        Err(EnvironmentError::PolicyMismatch)
+    ));
+    let mut changed_policy = request(installation);
+    changed_policy.policy_version = "next-policy".into();
+    assert!(matches!(
+        store.start(one, changed_policy).await,
+        Err(EnvironmentError::PolicyMismatch)
+    ));
+    let unchanged = store.get(one).await.unwrap().unwrap();
+    assert_eq!(unchanged.image_id, first.image_id);
+    assert_eq!(unchanged.policy_version, first.policy_version);
+    assert_eq!(unchanged.generation, first.generation);
     let stopping = store.stop(one).await.unwrap().unwrap();
     assert_eq!(stopping.generation, first.generation + 1);
     assert_eq!(
