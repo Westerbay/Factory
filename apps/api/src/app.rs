@@ -1,5 +1,5 @@
 use crate::{
-    admin,
+    admin, agent_connections,
     auth::{self, AuthState},
     config::RuntimeConfig,
     environments, health, http, terminals,
@@ -9,6 +9,7 @@ use axum::{
     http::{HeaderValue, Method, header},
     middleware,
 };
+use factory_application::agent_connections::AgentConnectionService;
 use factory_application::environments::EnvironmentService;
 use factory_application::terminals::TerminalService;
 use factory_database::identity::IdentityDatabase;
@@ -35,14 +36,15 @@ pub fn router_with_environments(
     identity: Option<IdentityRuntime>,
     environments: Option<Arc<EnvironmentService>>,
 ) -> Result<Router, &'static str> {
-    router_with_terminal(config, identity, environments, None)
+    router_with_user_services(config, identity, environments, None, None)
 }
 
-pub fn router_with_terminal(
+pub fn router_with_user_services(
     config: &RuntimeConfig,
     identity: Option<IdentityRuntime>,
     environments: Option<Arc<EnvironmentService>>,
     terminal: Option<Arc<TerminalService>>,
+    accounts: Option<Arc<AgentConnectionService>>,
 ) -> Result<Router, &'static str> {
     let origin = HeaderValue::from_str(config.web_origin()).map_err(|_| "WEB_ORIGIN_INVALID")?;
     let cors = CorsLayer::new()
@@ -54,7 +56,8 @@ pub fn router_with_terminal(
             axum::http::HeaderName::from_static("x-csrf-token"),
         ])
         .max_age(Duration::from_secs(60));
-    let (routes, _) = documented_router(identity, environments, terminal).split_for_parts();
+    let (routes, _) =
+        documented_router(identity, environments, terminal, accounts).split_for_parts();
     Ok(routes
         .fallback(http::not_found)
         .layer(middleware::from_fn_with_state(
@@ -70,13 +73,15 @@ pub(crate) fn documented_router(
     identity: Option<IdentityRuntime>,
     environments: Option<Arc<EnvironmentService>>,
     terminal: Option<Arc<TerminalService>>,
+    accounts: Option<Arc<AgentConnectionService>>,
 ) -> OpenApiRouter {
     let database = identity.as_ref().map(|runtime| runtime.database.clone());
     let auth = identity.map(|runtime| runtime.auth);
     auth::documented_router(auth.clone())
         .merge(admin::documented_router(auth.clone()))
         .merge(environments::documented_router(auth.clone(), environments))
-        .merge(terminals::documented_router(auth, terminal))
+        .merge(terminals::documented_router(auth.clone(), terminal))
+        .merge(agent_connections::documented_router(auth, accounts))
         .merge(health::documented_router(database))
 }
 
