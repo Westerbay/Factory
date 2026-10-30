@@ -56,7 +56,10 @@ test("repeated preparation preserves installation and changes only the prepared 
         Os: "linux",
         Config: {
           User: "10000:10000",
-          Labels: { "io.factory.environment.image": "2" },
+          Labels: {
+            "io.factory.environment.image": "2",
+            "io.factory.codex.version": "0.160.0",
+          },
         },
       },
     ])
