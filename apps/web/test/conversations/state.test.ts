@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest"
-import { latestReader, mergeOlderConversations, runOutcome } from "./state"
-import type { History } from "./api"
+import {
+  latestReader,
+  mergeOlderConversations,
+  runOutcome,
+} from "../../src/features/conversations/state"
+import type { History } from "../../src/features/conversations/api"
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -48,7 +52,8 @@ describe("conversation snapshots", () => {
 
 describe("question receipts", () => {
   it("does not offer a new submission after a write without confirmation", async () => {
-    const { questionReceipt } = await import("./state")
+    const { questionReceipt } =
+      await import("../../src/features/conversations/state")
     expect(questionReceipt("pending", true)).toMatchObject({
       disabled: true,
       message: expect.stringContaining("Waiting"),

@@ -1,14 +1,14 @@
 import { afterEach, expect, it, vi } from "vitest"
 
-import type { Session } from "../../lib/auth/session-api"
-import type { SessionState } from "../../lib/auth/session-controller"
+import type { Session } from "../../src/lib/auth/session-api"
+import type { SessionState } from "../../src/lib/auth/session-controller"
 import {
   ConnectionFailure,
   canDisconnectConnection,
   type Connection,
   type ConnectionAction,
-} from "./api"
-import { ConnectionController } from "./connection-controller"
+} from "../../src/features/agent-connections/api"
+import { ConnectionController } from "../../src/features/agent-connections/connection-controller"
 
 const controllers: ConnectionController[] = []
 const disconnected: Connection = { provider: "codex", status: "disconnected" }

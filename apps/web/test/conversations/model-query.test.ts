@@ -6,9 +6,9 @@ import {
 } from "@tanstack/react-query"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 
-import { ApiFailure } from "../../lib/api/client"
-import { modelQueryOptions } from "./model-query"
-import * as api from "./api"
+import { ApiFailure } from "../../src/lib/api/client"
+import { modelQueryOptions } from "../../src/features/conversations/model-query"
+import * as api from "../../src/features/conversations/api"
 
 const models = [{ id: "model", name: "Model" }]
 const clients: QueryClient[] = []

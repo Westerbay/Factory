@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import type { Session } from "../../lib/auth/session-api"
-import type { SessionState } from "../../lib/auth/session-controller"
+import type { Session } from "../../src/lib/auth/session-api"
+import type { SessionState } from "../../src/lib/auth/session-controller"
 import {
   EnvironmentFailure,
   type Environment,
   type EnvironmentAction,
-} from "./api"
-import { EnvironmentController } from "./environment-controller"
+} from "../../src/features/environments/api"
+import { EnvironmentController } from "../../src/features/environments/environment-controller"
 
 const controllers: EnvironmentController[] = []
 afterEach(() => {

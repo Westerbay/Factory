@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { ApiFailure } from "../../lib/api/client"
-import type { SessionState } from "../../lib/auth/session-controller"
-import type { requestAttachment } from "./api"
-import { TerminalController } from "./terminal-controller"
+import { ApiFailure } from "../../src/lib/api/client"
+import type { SessionState } from "../../src/lib/auth/session-controller"
+import type { requestAttachment } from "../../src/features/terminal/api"
+import { TerminalController } from "../../src/features/terminal/terminal-controller"
 
 class Socket {
   static OPEN = 1

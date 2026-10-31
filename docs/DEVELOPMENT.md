@@ -167,6 +167,8 @@ documentation links, OpenAPI parity and builds, including Cargo formatting, Clip
 tests. It does not require provider credentials, Docker or a database. `web:check`
 targets frontend types/tests/build; `rust:build` produces a locked release build.
 Node and Cargo lockfiles remain versioned. `pnpm format` applies formatting.
+Web tests live under `apps/web/test/`, grouped by feature. Vitest discovers both
+TypeScript and TSX tests there.
 
 GitHub Actions runs TypeScript and Rust checks in parallel. Pull requests limited to
 `apps/web/`, `docs/` and `README.md` skip Docker and database integrations; all other

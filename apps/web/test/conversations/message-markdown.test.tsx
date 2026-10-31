@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
 
-import { MessageMarkdown } from "./message-markdown"
+import { MessageMarkdown } from "../../src/features/conversations/message-markdown"
 
 function render(content: string) {
   return renderToStaticMarkup(<MessageMarkdown>{content}</MessageMarkdown>)

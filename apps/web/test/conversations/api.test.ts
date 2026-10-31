@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { apiClient, ApiFailure } from "../../lib/api/client"
-import { cancel, list, listRecoverable, recoverModelProbe, stream } from "./api"
+import { apiClient, ApiFailure } from "../../src/lib/api/client"
+import {
+  cancel,
+  list,
+  listRecoverable,
+  recoverModelProbe,
+  stream,
+} from "../../src/features/conversations/api"
 
 const userRun = "f7eae12b-e8f7-4ee3-a27c-a9c84a12962b"
 const conversation = "9bf3cbec-9818-44c2-bd7a-a9c722b910e6"

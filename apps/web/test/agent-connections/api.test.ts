@@ -3,7 +3,7 @@ import {
   connectionSchema,
   isOfficialVerificationUrl,
   connectionProblem,
-} from "./api"
+} from "../../src/features/agent-connections/api"
 
 afterEach(() => vi.unstubAllGlobals())
 it.each([
@@ -48,7 +48,10 @@ async function apiWith(body: unknown, status = 200) {
   const fetch = vi.fn().mockResolvedValue(Response.json(body, { status }))
   vi.stubGlobal("fetch", fetch)
   vi.resetModules()
-  return { ...(await import("./api")), fetch }
+  return {
+    ...(await import("../../src/features/agent-connections/api")),
+    fetch,
+  }
 }
 it.each(["login", "logout"] as const)(
   "sends %s with credentials and CSRF but no body",
