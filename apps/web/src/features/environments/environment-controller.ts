@@ -11,8 +11,7 @@ import {
 type RequestKind = EnvironmentAction | "read"
 export function canStartEnvironment(environment: Environment | null): boolean {
   return (
-    !environment?.upgradeRequired &&
-    (environment?.status === "not_created" || environment?.status === "stopped")
+    environment?.status === "not_created" || environment?.status === "stopped"
   )
 }
 export function canStopEnvironment(environment: Environment | null): boolean {
@@ -52,6 +51,8 @@ export class EnvironmentController {
   private request?: AbortController
   private poll?: ReturnType<typeof setInterval>
   private unsubscribe?: () => void
+  private initializedFor?: string
+  private initializationFailed = false
 
   constructor(private dependencies: Dependencies) {}
 
@@ -101,6 +102,9 @@ export class EnvironmentController {
   }
 
   private cancel() {
+    // Initialize is idempotent on the server. If visibility or session changes
+    // before its result, allow the next authoritative read to retry safely.
+    if (this.state.pending === "initialize") this.initializedFor = undefined
     this.generation++
     this.request?.abort()
     this.request = undefined
@@ -114,6 +118,11 @@ export class EnvironmentController {
   start = async () => {
     if (!canStartEnvironment(this.state.environment)) return
     await this.act("start")
+  }
+
+  initialize = async () => {
+    if (this.state.pending && this.state.pending !== "read") return
+    await this.run("initialize", true)
   }
 
   stop = async () => {
@@ -139,6 +148,7 @@ export class EnvironmentController {
     }
     const session = this.session
     if (!session) return
+    if (kind === "initialize") this.initializationFailed = false
     this.cancel()
     const generation = this.generation
     const request = new AbortController()
@@ -162,10 +172,22 @@ export class EnvironmentController {
         ...this.state,
         environment,
         pending: null,
-        message: null,
+        message:
+          kind === "read" && this.initializationFailed
+            ? this.state.message
+            : null,
       })
+      if (
+        kind === "read" &&
+        environment.status === "not_created" &&
+        this.initializedFor !== session.user.id
+      ) {
+        this.initializedFor = session.user.id
+        await this.run("initialize")
+      }
     } catch (error) {
       if (generation !== this.generation) return
+      if (kind === "initialize") this.initializationFailed = true
       // Even a failed write may have reached the server. Never retain a Running
       // badge until a fresh response confirms the state.
       this.setState({

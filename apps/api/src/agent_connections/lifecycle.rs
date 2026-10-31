@@ -28,6 +28,7 @@ pub(super) async fn begin(
     auth: AuthState,
     service: Arc<AgentConnectionService>,
     authenticated: Authenticated,
+    held: Box<dyn Send>,
 ) -> Result<ConnectionSnapshot, AgentConnectionError> {
     let actor = EnvironmentActor {
         user_id: authenticated.session.user.id,
@@ -43,6 +44,7 @@ pub(super) async fn begin(
         session_expiry,
         revocations,
         sender,
+        held,
     ));
     receiver
         .await
@@ -56,6 +58,7 @@ async fn start_and_monitor(
     session_expiry: DateTime<Utc>,
     mut revocations: broadcast::Receiver<IdentityRevocation>,
     sender: oneshot::Sender<Result<ConnectionSnapshot, AgentConnectionError>>,
+    held: Box<dyn Send>,
 ) {
     let mut reply = Some(sender);
     let mut starting = Box::pin(service.begin_login(actor, session_expiry));
@@ -129,6 +132,7 @@ async fn start_and_monitor(
         interrupt(&service, actor, operation_id).await;
         return;
     }
+    drop(held);
     let poll = async {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);

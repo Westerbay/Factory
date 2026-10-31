@@ -97,7 +97,7 @@ impl DockerEnvironmentRuntime {
             Err(e) => return Err(map_error(e)),
         };
         let value = json_value(volume)?;
-        verify_home_labels(env, &value["Labels"])?;
+        verify_labels(env, &value["Labels"])?;
         if value["Name"] != env.volume_name
             || value["Driver"] != "local"
             || !empty(&value["Options"])

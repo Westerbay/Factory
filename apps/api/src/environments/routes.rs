@@ -36,6 +36,7 @@ pub(crate) fn documented_router(
     OpenApiRouter::new()
         .routes(routes!(get))
         .routes(routes!(start))
+        .routes(routes!(initialize))
         .routes(routes!(stop))
         .layer(DefaultBodyLimit::max(0))
         .layer(axum::middleware::from_fn(crate::http::response_headers))
@@ -90,16 +91,45 @@ async fn get(
 ) -> Result<Json<EnvironmentResponse>, Response> {
     let actor = state.actor(&headers, false).await?;
     let Some(service) = &state.service else {
-        return Ok(Json(EnvironmentResponse::project(None, false, false)));
+        return Ok(Json(EnvironmentResponse::project(None, false)));
     };
     let environment = service.get(actor).await.map_err(error)?;
     Ok(Json(EnvironmentResponse::project(
         environment.as_ref(),
         service.can_report(environment.as_ref()),
-        environment
-            .as_ref()
-            .is_some_and(|environment| service.needs_upgrade(environment)),
     )))
+}
+
+#[utoipa::path(
+    post, path = "/api/environment/initialize", operation_id = "initializeEnvironment",
+    security(("sessionCookie" = [])),
+    params(("X-CSRF-Token" = String, Header, description = "Session CSRF token. Exact frontend Origin and an empty body are required.")),
+    description = "Create a running intent only if the current user has no environment; existing intent is never changed.",
+    responses(
+        (status = 202, description = "Current environment intent", body = EnvironmentResponse),
+        (status = 400, description = "Body must be empty", body = ApiError),
+        (status = 401, description = "Active session required", body = ApiError),
+        (status = 403, description = "Origin or CSRF rejected", body = ApiError),
+        (status = 429, description = "Rate limit", body = ApiError),
+        (status = 503, description = "Environment service unavailable", body = ApiError)
+    )
+)]
+async fn initialize(
+    State(state): State<EnvironmentState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<(StatusCode, Json<EnvironmentResponse>), Response> {
+    let actor = state.actor(&headers, true).await?;
+    empty_body(body).map_err(IntoResponse::into_response)?;
+    let service = state.service().map_err(error)?;
+    let environment = service.initialize_if_absent(actor).await.map_err(error)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(EnvironmentResponse::project(
+            Some(&environment),
+            service.can_report(Some(&environment)),
+        )),
+    ))
 }
 
 #[utoipa::path(
@@ -131,7 +161,6 @@ async fn start(
         Json(EnvironmentResponse::project(
             Some(&environment),
             service.can_report(Some(&environment)),
-            service.needs_upgrade(&environment),
         )),
     ))
 }
@@ -165,9 +194,6 @@ async fn stop(
         Json(EnvironmentResponse::project(
             environment.as_ref(),
             service.can_report(environment.as_ref()),
-            environment
-                .as_ref()
-                .is_some_and(|environment| service.needs_upgrade(environment)),
         )),
     ))
 }

@@ -24,15 +24,53 @@ use uuid::Uuid;
 struct ConnectionState {
     auth: Option<AuthState>,
     service: Option<Arc<AgentConnectionService>>,
+    disconnect: Option<Arc<dyn DisconnectGuard>>,
+}
+
+#[async_trait::async_trait]
+pub trait DisconnectGuard: Send + Sync {
+    async fn acquire_login(
+        &self,
+        actor: EnvironmentActor,
+    ) -> Result<Box<dyn Send>, AgentConnectionError>;
+    async fn logout(
+        &self,
+        actor: EnvironmentActor,
+    ) -> Result<ConnectionSnapshot, AgentConnectionError>;
+}
+
+#[async_trait::async_trait]
+impl DisconnectGuard for crate::conversations::runtime::ConversationRuntime {
+    async fn acquire_login(
+        &self,
+        actor: EnvironmentActor,
+    ) -> Result<Box<dyn Send>, AgentConnectionError> {
+        self.acquire_account_change(actor).await
+    }
+    async fn logout(
+        &self,
+        actor: EnvironmentActor,
+    ) -> Result<ConnectionSnapshot, AgentConnectionError> {
+        crate::conversations::runtime::ConversationRuntime::logout(self, actor).await
+    }
 }
 
 pub fn router(auth: AuthState, service: Option<Arc<AgentConnectionService>>) -> Router {
-    documented_router(Some(auth), service).into()
+    documented_router(Some(auth), service, None).into()
+}
+
+pub fn router_with_disconnect_guard(
+    auth: AuthState,
+    service: Option<Arc<AgentConnectionService>>,
+    guard: Arc<dyn DisconnectGuard>,
+) -> Router {
+    documented_router(Some(auth), service, Some(guard)).into()
 }
 
 pub(crate) fn documented_router(
     auth: Option<AuthState>,
     service: Option<Arc<AgentConnectionService>>,
+    disconnect: Option<Arc<dyn DisconnectGuard>>,
 ) -> OpenApiRouter {
     OpenApiRouter::new()
         .routes(routes!(read))
@@ -41,7 +79,11 @@ pub(crate) fn documented_router(
         .routes(routes!(logout))
         .layer(DefaultBodyLimit::max(1024))
         .layer(axum::middleware::from_fn(crate::http::response_headers))
-        .with_state(ConnectionState { auth, service })
+        .with_state(ConnectionState {
+            auth,
+            service,
+            disconnect,
+        })
 }
 
 impl ConnectionState {
@@ -130,7 +172,13 @@ async fn login(
 ) -> Result<(StatusCode, Json<AgentConnectionResponse>), Response> {
     let (auth, authenticated) = state.authenticate(&headers, Some(false)).await?;
     require_empty(body).map_err(IntoResponse::into_response)?;
-    let snapshot = lifecycle::begin(auth, state.service().map_err(error)?, authenticated)
+    let service = state.service().map_err(error)?;
+    let guard = state
+        .disconnect
+        .ok_or_else(|| error(AgentConnectionError::Unavailable))?;
+    let actor = actor(&authenticated);
+    let held = guard.acquire_login(actor).await.map_err(error)?;
+    let snapshot = lifecycle::begin(auth, service, authenticated, held)
         .await
         .map_err(error)?;
     Ok((StatusCode::ACCEPTED, Json(snapshot.into())))
@@ -190,9 +238,11 @@ async fn logout(
 ) -> Result<Json<AgentConnectionResponse>, Response> {
     let (_, authenticated) = state.authenticate(&headers, Some(false)).await?;
     require_empty(body).map_err(IntoResponse::into_response)?;
-    let service = state.service().map_err(error)?;
+    let conversations = state
+        .disconnect
+        .ok_or_else(|| error(AgentConnectionError::Unavailable))?;
     let actor = actor(&authenticated);
-    lifecycle::settle(async move { service.logout(actor).await })
+    lifecycle::settle(async move { conversations.logout(actor).await })
         .await
         .map(|snapshot| Json(snapshot.into()))
         .map_err(error)

@@ -1,21 +1,15 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react"
+import { useEffect, useRef, useState } from "react"
 
-import { useSession } from "../../lib/auth/session-context"
 import {
-  changeConnection,
   canDisconnectConnection,
   connectionProblem,
-  readConnection,
   type Connection,
   type LoginChallenge,
 } from "./api"
-import { ConnectionController } from "./connection-controller"
+import type {
+  ConnectionController,
+  ConnectionState,
+} from "./connection-controller"
 import "./connections.css"
 
 const labels: Record<Connection["status"], string> = {
@@ -83,40 +77,15 @@ function DeviceCode({ challenge }: { challenge: LoginChallenge }) {
 export function CodexCard({
   available,
   unavailableReason,
+  state,
+  controller,
 }: {
   available: boolean
   unavailableReason?: string
+  state: ConnectionState
+  controller: ConnectionController
 }) {
-  const { controller: session } = useSession()
   const statusElement = useRef<HTMLParagraphElement>(null)
-  const controller = useMemo(
-    () =>
-      new ConnectionController({
-        session,
-        visible: () => document.visibilityState === "visible",
-        online: () => navigator.onLine,
-        available: () => available,
-        read: readConnection,
-        change: changeConnection,
-      }),
-    [session, available]
-  )
-  const state = useSyncExternalStore(
-    controller.subscribe,
-    controller.getSnapshot
-  )
-  useEffect(() => {
-    controller.connect()
-    document.addEventListener("visibilitychange", controller.synchronize)
-    window.addEventListener("online", controller.synchronize)
-    window.addEventListener("offline", controller.synchronize)
-    return () => {
-      document.removeEventListener("visibilitychange", controller.synchronize)
-      window.removeEventListener("online", controller.synchronize)
-      window.removeEventListener("offline", controller.synchronize)
-      controller.dispose()
-    }
-  }, [controller])
   const connection = state.connection
   const busy = state.pending !== null && state.pending !== "read"
   const challenge = connection?.challenge

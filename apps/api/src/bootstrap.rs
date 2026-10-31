@@ -1,9 +1,11 @@
+use crate::conversations::runtime::ConversationRuntime;
 use crate::{
     app::{self, IdentityRuntime},
     auth::AuthState,
     config::RuntimeConfig,
 };
 use factory_adapters::codex_account::CodexAccountAdapter;
+use factory_adapters::codex_execution::CodexExecutionAdapter;
 use factory_adapters::egress::EgressMetadata;
 use factory_adapters::environments::{
     DockerEnvironmentRuntime, InstallationGuard, PreparationMetadata,
@@ -11,6 +13,7 @@ use factory_adapters::environments::{
 use factory_adapters::identity::GitHubProvider;
 use factory_adapters::terminals::DockerTerminalRuntime;
 use factory_application::agent_connections::AgentConnectionService;
+use factory_application::conversations::ConversationService;
 use factory_application::environments::{
     EnvironmentAvailability, EnvironmentReconciler, EnvironmentService,
 };
@@ -18,7 +21,7 @@ use factory_application::identity::IdentityService;
 use factory_application::terminals::TerminalService;
 use factory_core::environments::{EnvironmentError, EnvironmentStart, EnvironmentSupervisor};
 use factory_database::environments::PgEnvironmentSupervisor;
-use factory_database::{identity::IdentityDatabase, local_target, migrations::Readiness};
+use factory_database::{identity::IdentityDatabase, local_target, schema::Readiness};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{
     sync::{Mutex, watch},
@@ -34,6 +37,7 @@ pub struct EnvironmentHost {
     service: Arc<EnvironmentService>,
     terminal: Arc<TerminalService>,
     accounts: Arc<AgentConnectionService>,
+    conversations: Arc<ConversationRuntime>,
     availability: EnvironmentAvailability,
     stop: watch::Sender<bool>,
     workers: Vec<JoinHandle<()>>,
@@ -97,6 +101,14 @@ impl EnvironmentHost {
             service.clone(),
             Arc::new(CodexAccountAdapter::new(runtime.clone())),
         ));
+        let conversations = crate::conversations::runtime::new(
+            Arc::new(ConversationService::new(
+                service.clone(),
+                Arc::new(database.conversation_store()),
+            )),
+            Arc::new(CodexExecutionAdapter::new(runtime.clone())),
+            accounts.clone(),
+        );
         let job_availability = availability.clone();
         let create_reconciler = move || {
             EnvironmentReconciler::new(
@@ -128,6 +140,7 @@ impl EnvironmentHost {
             service,
             terminal,
             accounts,
+            conversations,
             availability,
             stop,
             workers,
@@ -145,6 +158,10 @@ impl EnvironmentHost {
 
     pub fn accounts(&self) -> Arc<AgentConnectionService> {
         self.accounts.clone()
+    }
+
+    pub(crate) fn conversations(&self) -> Arc<ConversationRuntime> {
+        self.conversations.clone()
     }
 
     /// Drain bounded in-flight operations. Stopping the API never deletes user data.
@@ -274,7 +291,7 @@ async fn identity(config: &RuntimeConfig) -> Result<IdentityRuntime, &'static st
     );
     let code = match database.ready().await {
         Ok(Readiness::Ready) => None,
-        Ok(Readiness::Missing | Readiness::Pending) => Some("IDENTITY_MIGRATION_REQUIRED"),
+        Ok(Readiness::Missing) => Some("IDENTITY_SCHEMA_REQUIRED"),
         Ok(Readiness::Invalid) => Some("IDENTITY_SCHEMA_INVALID"),
         Err(_) => Some("IDENTITY_DATABASE_UNAVAILABLE"),
     };
@@ -302,7 +319,7 @@ pub async fn serve(config: RuntimeConfig) -> Result<(), &'static str> {
             tracing::warn!(
                 event = "api.identity.unavailable",
                 code,
-                guidance = "Check explicit OAuth configuration and owned database; run identity migrations explicitly, then restart."
+                guidance = "Check explicit OAuth configuration and owned database; initialize the database, then restart."
             );
             None
         }
@@ -323,12 +340,13 @@ pub async fn serve(config: RuntimeConfig) -> Result<(), &'static str> {
     } else {
         None
     };
-    let router = app::router_with_user_services(
+    let router = app::router_with_conversations(
         &config,
         identity,
         environments.as_ref().map(EnvironmentHost::service),
         environments.as_ref().map(EnvironmentHost::terminal),
         environments.as_ref().map(EnvironmentHost::accounts),
+        environments.as_ref().map(EnvironmentHost::conversations),
     )?;
     let environment_shutdown = environments
         .as_ref()

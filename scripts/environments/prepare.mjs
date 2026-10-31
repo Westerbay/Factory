@@ -6,7 +6,7 @@ import { docker } from "./docker.mjs"
 import { prepareEgress } from "../egress/prepare.mjs"
 
 const root = fileURLToPath(new URL("../../", import.meta.url))
-export const policyVersion = "3"
+export const policyVersion = "5"
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const imageId = /^sha256:[0-9a-f]{64}$/
 

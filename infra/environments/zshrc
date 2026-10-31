@@ -1,0 +1,10 @@
+# Use the image defaults only when the member has not supplied a personal zshrc.
+# Oh My Zsh remains in the read-only image; member configuration is never replaced.
+if [[ -o interactive && ! -f "$HOME/.zshrc" ]]; then
+  export ZSH=/opt/oh-my-zsh
+  export ZSH_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/oh-my-zsh"
+  ZSH_THEME=robbyrussell
+  plugins=(git)
+  zstyle ':omz:update' mode disabled
+  source "$ZSH/oh-my-zsh.sh"
+fi

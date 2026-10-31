@@ -2,4 +2,6 @@
 pub mod environments;
 pub mod identity;
 pub mod local_target;
-pub mod migrations;
+pub mod schema;
+
+pub mod conversations;

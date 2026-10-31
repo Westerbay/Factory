@@ -9,7 +9,20 @@ export const API_ORIGIN = parseApiOrigin(import.meta.env.VITE_API_BASE_URL)
 const livenessSchema = z.object({ status: z.literal("ok") })
 const authorizationListeners = new Set<(status: number) => void>()
 
-export const apiClient = createClient<paths>({
+// Browsers control Origin and add it to cross-origin requests; JavaScript cannot
+// set it. Keep it required in OpenAPI for other clients while omitting only that
+// transport-managed header from the browser client's input types.
+type BrowserParameters<P> = P extends { header: infer H }
+  ? Omit<P, "header"> & { header: Omit<H, "Origin"> }
+  : P
+type BrowserOperation<O> = O extends { parameters: infer P }
+  ? Omit<O, "parameters"> & { parameters: BrowserParameters<P> }
+  : O
+type BrowserPaths = {
+  [P in keyof paths]: { [M in keyof paths[P]]: BrowserOperation<paths[P][M]> }
+}
+
+export const apiClient = createClient<BrowserPaths>({
   baseUrl: API_ORIGIN,
   credentials: "include",
   cache: "no-store",

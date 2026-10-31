@@ -11,15 +11,15 @@ import {
 } from "./owned.mjs"
 import { createDatabase } from "../../packages/database/dist/index.js"
 const action = process.argv[2]
-if (!["setup", "migrate", "status", "stop"].includes(action))
-  throw new Error("Use setup, migrate, status or stop")
+if (!["setup", "reset", "status", "stop"].includes(action))
+  throw new Error("Use setup, reset, status or stop")
 const directory = resolve(root, ".factory")
 const marker = resolve(directory, "database-owner")
 let owner
 try {
   owner = (await readFile(marker, "utf8")).trim()
 } catch (error) {
-  if (error.code !== "ENOENT" || action !== "setup")
+  if (error.code !== "ENOENT" || !["setup", "reset"].includes(action))
     throw new Error("Run pnpm db:setup to create an owned local database")
   // Before creating a new identity, reject any preexisting same-name resources.
   if (
@@ -64,7 +64,7 @@ const target = {
   port: 55432,
   container: "factory-local-postgres-1",
 }
-if (action === "setup") {
+if (action === "setup" || action === "reset") {
   const existing = docker([
     "ps",
     "-a",
@@ -108,7 +108,11 @@ if (action === "stop") {
 } else {
   const database = createDatabase(inspectTarget(target))
   try {
-    if (action === "setup" || action === "migrate") await database.migrate()
+    if (action === "reset") await database.reset()
+    if (action === "setup") {
+      const status = await database.ready()
+      if (!status.available) await database.initialize()
+    }
     console.log(JSON.stringify(await database.ready()))
   } finally {
     await database.close()

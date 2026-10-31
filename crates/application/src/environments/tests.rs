@@ -37,6 +37,14 @@ impl EnvironmentStore for Store {
         self.authorize(actor)?;
         Ok(Some(self.row()))
     }
+    async fn initialize_if_absent(
+        &self,
+        actor: EnvironmentActor,
+        _: EnvironmentStart,
+    ) -> Result<Environment, EnvironmentError> {
+        self.authorize(actor)?;
+        Ok(self.row())
+    }
     async fn start(
         &self,
         actor: EnvironmentActor,
@@ -522,8 +530,25 @@ async fn previous_process_terminal_observations_stay_unavailable_until_inspected
     assert!(f.service().can_report(Some(&f.store.row())));
 }
 
+#[test]
+fn stopped_observation_before_supervisor_start_is_not_recovery_evidence() {
+    let f = Fixture::new();
+    f.availability.ready();
+    {
+        let mut row = f.store.row.lock().unwrap();
+        row.desired_state = DesiredState::Stopped;
+        row.observed_state = ObservedState::Stopped;
+        row.observed_at = Some(Utc::now() - Duration::minutes(1));
+    }
+    assert!(!f.service().can_report(Some(&f.store.row())));
+    f.store.row.lock().unwrap().observed_at = Some(Utc::now());
+    assert!(f.service().can_report(Some(&f.store.row())));
+    f.availability.fail_closed();
+    assert!(!f.service().can_report(Some(&f.store.row())));
+}
+
 #[tokio::test]
-async fn prepared_target_changes_require_explicit_upgrade_before_interactive_work() {
+async fn prepared_target_changes_refuse_interactive_work() {
     for image_changed in [false, true] {
         let f = Fixture::new();
         f.availability.ready();
@@ -538,7 +563,7 @@ async fn prepared_target_changes_require_explicit_upgrade_before_interactive_wor
         }
         let service = f.service();
         let original = f.store.row();
-        assert!(service.needs_upgrade(&original));
+        assert!(service.has_policy_mismatch(&original));
         assert_eq!(
             service.require_running(f.actor()).await.unwrap_err(),
             EnvironmentError::PolicyMismatch

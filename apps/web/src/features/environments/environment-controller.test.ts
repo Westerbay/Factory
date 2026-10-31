@@ -17,7 +17,7 @@ afterEach(() => {
 
 function setup(status: Environment["status"] = "running") {
   vi.useFakeTimers()
-  const environment: Environment = { status, upgradeRequired: false }
+  const environment: Environment = { status }
   const session: Session = {
     user: {
       id: "member",
@@ -69,41 +69,6 @@ function setup(status: Environment["status"] = "running") {
 }
 
 describe("environment activity", () => {
-  it("blocks start until an administrator upgrade is complete but preserves explicit stop", async () => {
-    const { controller, dependencies } = setup("stopped")
-    dependencies.read.mockResolvedValue({
-      status: "stopped",
-      upgradeRequired: true,
-    })
-    controller.connect()
-    await vi.advanceTimersByTimeAsync(0)
-    await controller.start()
-    expect(dependencies.change).not.toHaveBeenCalled()
-    dependencies.read.mockResolvedValue({
-      status: "running",
-      upgradeRequired: true,
-    })
-    await controller.refresh()
-    await controller.stop()
-    expect(dependencies.change).toHaveBeenCalledExactlyOnceWith(
-      "stop",
-      "synthetic-csrf",
-      expect.any(AbortSignal)
-    )
-    dependencies.change.mockClear()
-    dependencies.read.mockResolvedValue({
-      status: "stopped",
-      upgradeRequired: false,
-    })
-    await controller.refresh()
-    await controller.start()
-    expect(dependencies.change).toHaveBeenCalledExactlyOnceWith(
-      "start",
-      "synthetic-csrf",
-      expect.any(AbortSignal)
-    )
-  })
-
   it("polls while visible but sends no keepalive or stop, even a day later", async () => {
     const { controller, dependencies } = setup()
     controller.connect()
@@ -122,6 +87,54 @@ describe("environment activity", () => {
     expect(dependencies.change).not.toHaveBeenCalled()
   })
 
+  it.each(["visible", "online"] as const)(
+    "retries a cancelled first initialization when %s returns",
+    async (condition) => {
+      const { controller, dependencies } = setup("not_created")
+      let complete!: (environment: Environment) => void
+      dependencies.change.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            complete = resolve
+          })
+      )
+      dependencies.change.mockResolvedValue({
+        status: "starting",
+      })
+      controller.connect()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dependencies.change).toHaveBeenCalledTimes(1)
+      const firstSignal = dependencies.change.mock.calls[0]![2]
+      dependencies[condition].mockReturnValue(false)
+      controller.synchronize()
+      expect(firstSignal.aborted).toBe(true)
+      complete({ status: "starting" })
+      dependencies[condition].mockReturnValue(true)
+      controller.synchronize()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(dependencies.change).toHaveBeenCalledTimes(2)
+      expect(dependencies.change.mock.calls[1]![0]).toBe("initialize")
+      expect(controller.getSnapshot().environment?.status).toBe("starting")
+    }
+  )
+
+  it("never starts an already stopped environment automatically", async () => {
+    const { controller, dependencies } = setup("stopped")
+    controller.connect()
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(dependencies.change).not.toHaveBeenCalled()
+  })
+
+  it("does not automatically repeat a failed initialization", async () => {
+    const { controller, dependencies } = setup("not_created")
+    dependencies.change.mockRejectedValue(new EnvironmentFailure(503))
+    controller.connect()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(dependencies.change).toHaveBeenCalledTimes(1)
+    await controller.initialize()
+    expect(dependencies.change).toHaveBeenCalledTimes(2)
+  })
+
   it("allows an explicit stop while Docker is unavailable", async () => {
     const { controller, dependencies } = setup("unavailable")
     controller.connect()
@@ -134,11 +147,10 @@ describe("environment activity", () => {
     )
   })
 
-  it("only sends one start; closing the controller does not send a stop", async () => {
+  it("initializes once; closing the controller does not send a stop", async () => {
     const { controller, dependencies } = setup("not_created")
     dependencies.change.mockResolvedValue({
       status: "starting",
-      upgradeRequired: false,
     })
     controller.connect()
     await vi.advanceTimersByTimeAsync(0)
@@ -147,7 +159,7 @@ describe("environment activity", () => {
     controller.dispose()
     await vi.advanceTimersByTimeAsync(86_400_000)
     expect(dependencies.change).toHaveBeenCalledExactlyOnceWith(
-      "start",
+      "initialize",
       "synthetic-csrf",
       expect.any(AbortSignal)
     )
@@ -169,7 +181,7 @@ describe("environment activity", () => {
       dependencies[condition].mockReturnValue(false)
       controller.synchronize()
       expect(signal.aborted).toBe(true)
-      finish({ status: "running", upgradeRequired: false })
+      finish({ status: "running" })
       await vi.advanceTimersByTimeAsync(120_000)
       expect(controller.getSnapshot().environment).toBeNull()
       expect(dependencies.read).toHaveBeenCalledTimes(1)
@@ -203,7 +215,7 @@ describe("environment activity", () => {
       const signal = dependencies.read.mock.calls[0]![0]
       setSession({ status })
       expect(signal.aborted).toBe(true)
-      finish({ status: "running", upgradeRequired: false })
+      finish({ status: "running" })
       const reads = dependencies.read.mock.calls.length
       await vi.advanceTimersByTimeAsync(86_400_000)
       expect(controller.getSnapshot().environment).toBeNull()
@@ -227,7 +239,7 @@ describe("environment activity", () => {
       session: { ...session, user: { ...session.user, id: "other-member" } },
     })
     await vi.advanceTimersByTimeAsync(0)
-    finish({ status: "running", upgradeRequired: false })
+    finish({ status: "running" })
     await vi.advanceTimersByTimeAsync(0)
     expect(controller.getSnapshot().environment?.status).toBe("stopped")
   })
@@ -258,9 +270,9 @@ describe("environment activity", () => {
     await controller.start()
     await controller.refresh()
     expect(dependencies.change).toHaveBeenCalledTimes(1)
-    finishStop({ status: "stopping", upgradeRequired: false })
+    finishStop({ status: "stopping" })
     await stopping
-    finishRead({ status: "running", upgradeRequired: false })
+    finishRead({ status: "running" })
     await refresh
     expect(controller.getSnapshot().environment?.status).toBe("stopping")
   })
@@ -279,11 +291,10 @@ describe("environment activity", () => {
     expect(dependencies.change).not.toHaveBeenCalled()
     dependencies.read.mockResolvedValue({
       status: "stopped",
-      upgradeRequired: false,
     })
     await controller.refresh()
     expect(controller.getSnapshot()).toMatchObject({
-      environment: { status: "stopped", upgradeRequired: false },
+      environment: { status: "stopped" },
       message: null,
     })
   })

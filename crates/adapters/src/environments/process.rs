@@ -25,12 +25,30 @@ pub(crate) struct DockerProcess {
     pub output: ProcessOutput,
 }
 
+/// The phase is determined structurally: the preflight future completes before
+/// the create/start future is constructed. No mutable flag survives cancellation.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ProcessStartError {
+    PreSubmission(EnvironmentError),
+    Submitted(EnvironmentError),
+}
+impl From<ProcessStartError> for EnvironmentError {
+    fn from(error: ProcessStartError) -> Self {
+        match error {
+            ProcessStartError::PreSubmission(error) | ProcessStartError::Submitted(error) => error,
+        }
+    }
+}
+
 /// No string command or Docker identifier supplied by a browser can reach this enum.
 #[derive(Clone, Copy)]
 pub(crate) enum FixedProcess {
     TerminalAttach,
     TerminalDetach,
     CodexAccount,
+    CodexExecution,
+    #[cfg(test)]
+    CodexSchema,
 }
 
 impl FixedProcess {
@@ -60,6 +78,26 @@ impl FixedProcess {
                 "factory",
             ],
             Self::CodexAccount => vec!["/usr/local/bin/factory-auth-controller"],
+            // The fixed executable and fixed arguments are never selected by the browser.
+            // A watchdog bounds orphan lifetime; it does not prove descendant cleanup.
+            Self::CodexExecution => vec![
+                "/usr/bin/timeout",
+                "--signal=TERM",
+                "--kill-after=5s",
+                "86400s",
+                "/opt/codex/bin/codex",
+                "-c",
+                "cli_auth_credentials_store=\"file\"",
+                "app-server",
+                "--listen",
+                "stdio://",
+            ],
+            #[cfg(test)]
+            Self::CodexSchema => vec![
+                "/bin/sh",
+                "-c",
+                "/opt/codex/bin/codex app-server generate-json-schema --out /tmp/factory-schema && cat /tmp/factory-schema/v2/TurnStartParams.json",
+            ],
         };
         CreateExecOptions {
             attach_stdin: Some(true),
@@ -88,7 +126,21 @@ impl DockerEnvironmentRuntime {
         env: &Environment,
         command: FixedProcess,
     ) -> Result<DockerProcess, EnvironmentError> {
-        tokio::time::timeout(self.timeout, async {
+        self.start_process_checked(env, command)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Only a completed preflight may construct a create/start future. Any
+    /// error after its construction is conservative: Docker may have received
+    /// a request even if the caller observed a timeout or transport failure.
+    pub(crate) async fn start_process_checked(
+        &self,
+        env: &Environment,
+        command: FixedProcess,
+    ) -> Result<DockerProcess, ProcessStartError> {
+        let deadline = tokio::time::Instant::now() + self.timeout;
+        let container_id = tokio::time::timeout_at(deadline, async {
             validate_record(env, self.metadata.installation_id())?;
             require_current_policy(env)?;
             if env.desired_state != DesiredState::Running {
@@ -111,14 +163,21 @@ impl DockerEnvironmentRuntime {
             {
                 return Err(EnvironmentError::Unavailable);
             }
-            let container_id = container["Id"]
+            container["Id"]
                 .as_str()
-                .ok_or(EnvironmentError::OwnershipConflict)?;
+                .map(str::to_owned)
+                .ok_or(EnvironmentError::OwnershipConflict)
+        })
+        .await
+        .map_err(|_| ProcessStartError::PreSubmission(EnvironmentError::Timeout))?
+        .map_err(ProcessStartError::PreSubmission)?;
+
+        tokio::time::timeout_at(deadline, async {
             let options = command.options();
             let tty = options.tty == Some(true);
             let exec = self
                 .docker
-                .create_exec(container_id, options)
+                .create_exec(&container_id, options)
                 .await
                 .map_err(map_error)?;
             if !(self.mutation_permitted)() {
@@ -146,7 +205,8 @@ impl DockerEnvironmentRuntime {
             }
         })
         .await
-        .map_err(|_| EnvironmentError::Timeout)?
+        .map_err(|_| ProcessStartError::Submitted(EnvironmentError::Timeout))?
+        .map_err(ProcessStartError::Submitted)
     }
 
     /// Exec IDs originate only from start_process and are retained by the owning adapter.
@@ -272,8 +332,8 @@ mod tests {
         output: &mut ProcessOutput,
         marker: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut text = String::new();
         tokio::time::timeout(Duration::from_secs(15), async {
-            let mut text = String::new();
             while let Some(chunk) = output.next().await {
                 text.push_str(&String::from_utf8_lossy(chunk?.as_ref()));
                 if text.contains(marker) {
@@ -285,7 +345,8 @@ mod tests {
             }
             Err(format!("Process exited before fixture marker {marker:?}: {text:?}").into())
         })
-        .await?
+        .await
+        .map_err(|_| format!("Timed out waiting for fixture marker: {marker}; output: {text:?}"))?
     }
 
     async fn exercise(
@@ -334,7 +395,7 @@ mod tests {
             .await?;
         second
             .input
-            .write_all(b"cat ~/Documents/witness; printf -- '-%s\\n' restored\r")
+            .write_all(b"printf '%s-restored\\n' \"$(cat ~/Documents/witness)\"\r")
             .await?;
         until(&mut second.output, "persistent-restored").await?;
         let mut account = runtime
@@ -371,6 +432,50 @@ mod tests {
                 .await?,
             75
         );
+        // Exercise the exact fixed app-server launch without credentials or a provider turn.
+        let mut execution = runtime
+            .start_process(env, FixedProcess::CodexExecution)
+            .await?;
+        execution.input.write_all(b"{\"id\":9,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"factory_fixture\",\"version\":\"0\"}}}\n").await?;
+        until(&mut execution.output, "\"id\":9").await?;
+        execution.input.shutdown().await?;
+        let execution_id = execution.id.clone();
+        drop(execution);
+        assert_eq!(
+            runtime
+                .wait_process_exit(&execution_id, Duration::from_secs(15))
+                .await?,
+            0
+        );
+
+        // The image's pinned binary owns the contract, not a copied documentation enum.
+        let mut schema = runtime
+            .start_process(env, FixedProcess::CodexSchema)
+            .await?;
+        schema.input.shutdown().await?;
+        let mut bytes = Vec::new();
+        while let Some(chunk) =
+            tokio::time::timeout(Duration::from_secs(30), schema.output.next()).await?
+        {
+            if let LogOutput::StdOut { message } = chunk? {
+                bytes.extend_from_slice(&message);
+            }
+            if bytes.len() > 1024 * 1024 {
+                return Err("Schema fixture exceeded output limit".into());
+            }
+        }
+        let schema_id = schema.id.clone();
+        drop(schema);
+        assert_eq!(
+            runtime
+                .wait_process_exit(&schema_id, Duration::from_secs(15))
+                .await?,
+            0
+        );
+        let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+        let rendered = serde_json::to_string(&value)?;
+        assert!(rendered.contains("approvalPolicy") && rendered.contains("sandboxPolicy"));
+        assert!(rendered.contains("dangerFullAccess") && rendered.contains("never"));
         Ok(())
     }
 

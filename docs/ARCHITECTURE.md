@@ -7,15 +7,15 @@ in `apps/web` and the Axum API in `apps/api`. The browser calls an explicit API 
 with credentials. Rust does not serve frontend files, and the built frontend requires
 no Node application server. Vite development and preview are local tooling.
 
-| Owner                   | Responsibility                                               | Internal dependency direction                 |
-| ----------------------- | ------------------------------------------------------------ | --------------------------------------------- |
-| `crates/core`           | Identity/environment types, policies and outbound ports      | No application or infrastructure dependencies |
-| `crates/application`    | Identity use cases and environment reconciliation            | Core                                          |
-| `crates/adapters`       | GitHub identity and local Docker runtime                     | Core                                          |
-| `crates/database`       | SQLx identity/environment persistence and verified targets   | Core                                          |
-| `apps/api`              | Composition, configuration, HTTP, cookies, CORS and OpenAPI  | Application, core and concrete adapters       |
-| `apps/web/src/lib`      | Browser transport, session lifecycle and query configuration | Browser code and generated API types          |
-| `apps/web/src/features` | Member and administrator interfaces                          | Shared browser libraries and components       |
+| Owner                   | Responsibility                                                  | Internal dependency direction                 |
+| ----------------------- | --------------------------------------------------------------- | --------------------------------------------- |
+| `crates/core`           | Identity, environment and conversation types and ports          | No application or infrastructure dependencies |
+| `crates/application`    | Identity and conversation use cases, environment reconciliation | Core                                          |
+| `crates/adapters`       | GitHub, Codex and local Docker adapters                         | Core                                          |
+| `crates/database`       | SQLx identity, environment and conversation persistence         | Core                                          |
+| `apps/api`              | Composition, configuration, HTTP, cookies, CORS and OpenAPI     | Application, core and concrete adapters       |
+| `apps/web/src/lib`      | Browser transport, session lifecycle and query configuration    | Browser code and generated API types          |
+| `apps/web/src/features` | Member and administrator interfaces                             | Shared browser libraries and components       |
 
 Cargo and TypeScript boundary checks enforce dependency direction, including type-only
 imports. Browser code must not import Rust implementation details, Node, filesystem,
@@ -94,13 +94,10 @@ or remains pending; an unconfirmed logout cannot silently restore the session.
 ## Persistence and local ownership
 
 [IdentityDatabase](../crates/database/src/identity/mod.rs) accepts only a verified target.
-It does not consume an arbitrary database URL, read credential files or apply migrations
-on connection. Startup and readiness inspect state without DDL. Explicit migration uses
-[the SQLx lifecycle](../crates/database/src/migrations/mod.rs) and a dedicated connection.
-
-Identity objects and their migration ledger live in `factory_identity`. Legacy
-execution tables and the Drizzle ledger remain separate and untouched. No historical
-execution is assigned to a web user, and the new API exposes no execution endpoints.
+It does not consume an arbitrary database URL or read credential files. Startup and
+readiness inspect state without DDL. The local setup and reset commands apply the single
+[initial schema](../crates/database/schema.sql) to a verified local database. Reset is
+explicit and deletes database records; runtime startup never resets data.
 
 [Local target verification](../crates/database/src/local_target/mod.rs) checks the owned
 Docker project, checkout, owner marker, service, volume, credentials and published
@@ -121,15 +118,10 @@ the common image explicitly; user operations call the Rust
 startup nor a start request builds or pulls images.
 
 The [environment store](../crates/database/src/environments/mod.rs) shares the verified
-IdentityDatabase without exposing its SQLx pool. The additive
-[migration](../crates/database/migrations/2_environments.sql) records one environment
-per user, installation/image/policy identity, desired and observed states, generation,
-provisioning phase and persistent running intent. The follow-up
-[migration](../crates/database/migrations/3_persistent_environments.sql) retires the old
-lease/capacity constraints without deleting existing records; legacy columns are no longer
-read or written by the runtime. Requests revalidate the session and active user under a
-consistent user-then-environment lock order. Observation writes match the generation so a
-stale operation cannot overwrite a newer intent. There is no global capacity admission.
+IdentityDatabase without exposing its SQLx pool. The initial schema records one environment
+per user, desired and observed states, generation and provisioning phase. Requests
+revalidate the active session under a user-then-environment lock. Generation checks
+prevent stale observations from overwriting newer intent.
 
 Provisioning records intent before volume creation and confirms the volume before
 starting the container. A previously confirmed volume that disappears is an error;
@@ -150,35 +142,22 @@ real-time shutdown guarantee under saturation. API shutdown stops supervision wh
 reconciliation. No independent environment supervisor runs outside the API.
 
 [Environment routes](../apps/api/src/environments/routes.rs) accept no target user ID or
-Docker configuration. GET reads status without creating resources; POST start/stop return
-accepted persistent intent. There is no heartbeat endpoint.
+Docker configuration. GET reads status without creating resources; POST initialize
+creates intent only if no environment exists, while POST start/stop return accepted
+persistent intent. Initialization and stop serialize under the user lock so a delayed
+request cannot restart an existing stopped environment. There is no heartbeat endpoint.
 All require an active session and mutations require Origin/CSRF checks. Public responses
-contain status, observation time, an upgrade-required flag and bounded error codes,
+contain status, observation time, and bounded error codes,
 never Docker identifiers. Image/policy mismatch blocks Start and interactive use while
 Stop remains useful.
 The [member controller](../apps/web/src/features/environments/environment-controller.ts)
 polls only while visible, online and authenticated. Session loss, logout and unmount
 cancel browser requests without changing server intent or stopping the container.
 
-Missing preparation affects only environments when identity is otherwise ready. In
-contrast, a pending SQLx migration leaves identity readiness unavailable as before.
-Prepared metadata keeps the installation UUID and immutable image ID under
-`.factory/environments`; preparing a newer image does not migrate existing environments.
-Linux socket and Windows named-pipe transports ignore ambient Docker contexts and remote
-daemon settings. The API is trusted to access Docker; the browser and containers are not
-given the socket. User containers run non-root with a read-only root and a persistent
-home volume. CPU, memory and process counts have no
-Factory-imposed ceiling; temporary storage and logs remain bounded. Named volumes do not supply a portable disk quota.
-
-The [operator upgrade service](../crates/application/src/environments/upgrade.rs) and
-[upgrade store](../crates/database/src/environments/upgrade.rs) reserve an additive
-[durable upgrade intent](../crates/database/migrations/4_environment_upgrades.sql)
-before removing an owned stopped container. The CLI requires both installation and
-database supervisor locks, so the API must be stopped. Preview and confirmation bind
-the user, generation, old container ID and target image/policy. Only the old container
-is removed, never its volume. Finalization retains Stopped intent and atomically consumes
-the reservation. Start refuses pending reservations. Home identity labels remain stable
-across image upgrades; container labels still bind the exact image and policy.
+Missing preparation affects only environments when identity is otherwise ready. Prepared
+metadata keeps the installation UUID and immutable image ID under `.factory/environments`.
+Existing containers are not silently replaced. Linux and Windows use local Docker
+transports; containers have no Docker socket, run non-root and keep a persistent home.
 
 ## Isolated egress
 
@@ -208,7 +187,7 @@ close them promptly. An in-flight Docker attachment is settled and detached afte
 revocation rather than abandoning its handle.
 
 The [Docker terminal adapter](../crates/adapters/src/terminals/mod.rs) attaches a fixed
-non-root tmux command. tmux owns shell lifetime; the API owns only the attached client.
+non-root tmux command with zsh in the current image. tmux owns shell lifetime; the API owns only the attached client.
 The stream uses 16-KiB output chunks and a 256-KiB unacknowledged window. xterm acknowledges
 only after processing output; a slow client is detached. Input/output buffers are bounded,
 and reconnect never replays input. Explicit takeover invalidates the previous attachment
@@ -229,6 +208,53 @@ stdin and drops both Docker stream halves before waiting for exit. Credentials s
 cross HTTP. Cancellation/logout remain local when the proxy is stopped. Browser account
 polling runs only for an active pending login and visible, authenticated page. The route
 shares one environment controller between the lifecycle card and dependent panels.
+Codex logout is blocked when a conversation run is active or cleanup remains uncertain.
+
+## Conversations and execution
+
+[Conversation contracts](../crates/core/src/conversations/mod.rs) and
+[service](../crates/application/src/conversations/mod.rs) bind user-owned conversations,
+runs, completed messages and grouped questions to the verified session and environment
+generation. [PostgreSQL persistence](../crates/database/src/conversations/mod.rs)
+serializes owner/session checks with changes, reserves turns idempotently and retains
+completed message items. Legacy TypeScript execution history remains separate and is
+not assigned to a web user.
+
+The [conversation coordinator](../crates/application/src/conversations/coordinator.rs)
+uses the [Codex execution adapter](../crates/adapters/src/codex_execution/mod.rs),
+persists the private provider thread reference before starting a turn and delivers
+bounded event updates. Account and model operations use per-user gates. Each conversation
+admits only one active or uncertain run; independent conversations have no Factory-wide
+run-count ceiling. Model probes reserve
+a durable lease before starting a provider process, with at most one lease per user;
+unconfirmed cleanup retains it across API restart. The web client caches each user’s
+model list briefly in memory and clears it on account or session changes. The [API host](../apps/api/src/conversations/runtime.rs) supplies
+task execution, timers and HTTP-compatible encoding; application policy stays in the
+coordinator. The adapter uses the pinned native app-server inside the owned environment with
+`dangerFullAccess` and approval policy `never`. Commands therefore have the container
+user's access, including the home and stored credentials. The container and egress
+policy remain the outer isolation boundary; there is no Codex workspace sandbox in this
+mode. Unexpected actionable provider requests fail visibly. Model lists are not proof of
+account entitlement.
+
+[HTTP and SSE routes](../apps/api/src/conversations/mod.rs) require a verified session;
+mutations also require Origin and CSRF checks. Provider IDs remain internal. Completed
+messages are durable; streaming fragments are transient. Conversation listing uses
+user-owned keyset cursors, newest first, and provides older pages on request. History
+presents a bounded
+recent window, prioritizing active or uncertain work, and marks truncated runs, messages
+and requests. Question replies are validated and claimed idempotently; a successful
+write alone is not delivery, which requires a correlated provider notification. Claimed
+or uncertain replies are not silently resent. Interruption
+or process exit alone does not establish descendant cleanup; uncertain runs remain
+blocking. Explicit recovery requires a current supervisor observation of the owned
+environment stopped at a later generation and a conclusively settled launch request.
+An unsettled launch stays fenced even after Stop; no verified operator recovery currently
+exists. A stopped-state route exposes only owned
+recoverable run identifiers. A fresh, error-free stopped observation at a later generation
+also releases a settled uncertain model-probe lease in the supervisor transaction, including for
+a suspended member; it does not change the environment intent or session. A separate
+guarded route can check the same recovery. Recovery does not undo external effects.
 
 ## PWA and static hosting
 
@@ -254,7 +280,7 @@ The `packages/core`, `packages/application`, `packages/contracts`,
 `packages/adapters` and `packages/database` boundaries remain independent of the web
 identity runtime. Core owns provider-neutral models, projections and ports; application
 owns execution orchestration; concrete adapters implement Codex and PostgreSQL behavior.
-These packages are references for a later port, not a second live web backend.
+These packages remain porting references, not a second live web backend.
 
 `packages/execution-reference` retains only the Electron-free host, message relay,
 client and UI model/view closure needed by the existing behavior tests. It has no
@@ -275,5 +301,5 @@ cleanup. Unconfirmed ownership blocks new execution even if a recorded run is in
 
 The pinned Codex adapter keeps provider IDs and request correlation private. Generated
 protocol bindings preserve provenance, unsupported actionable requests fail visibly, and
-conversation correlation is currently session-local. These constraints and the absence of
-per-user ownership must be resolved before exposing execution through the web API.
+conversation correlation in that reference remains session-local. These mechanisms have
+no per-user ownership and are not the web execution implementation.

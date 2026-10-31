@@ -22,21 +22,14 @@ pub struct EnvironmentResponse {
     pub observed_at: Option<DateTime<Utc>>,
     /// Bounded public error code; never includes provider responses or resource names.
     pub error_code: Option<String>,
-    /// Explicit administrator upgrade required before starting or interactive work.
-    pub upgrade_required: bool,
 }
 
 impl EnvironmentResponse {
-    pub(super) fn project(
-        environment: Option<&Environment>,
-        available: bool,
-        upgrade_required: bool,
-    ) -> Self {
+    pub(super) fn project(environment: Option<&Environment>, available: bool) -> Self {
         let mut response = Self {
             status: EnvironmentStatus::NotCreated,
             observed_at: environment.and_then(|e| e.observed_at),
             error_code: environment.and_then(|e| e.error_code.map(|error| error.code().to_owned())),
-            upgrade_required,
         };
         if !available {
             response.status = EnvironmentStatus::Unavailable;
@@ -46,7 +39,7 @@ impl EnvironmentResponse {
                 ObservedState::Error => EnvironmentStatus::Error,
                 ObservedState::Unavailable => EnvironmentStatus::Unavailable,
                 ObservedState::NotCreated if environment.desired_state == DesiredState::Stopped => {
-                    EnvironmentStatus::NotCreated
+                    EnvironmentStatus::Stopped
                 }
                 ObservedState::Stopped if environment.desired_state == DesiredState::Stopped => {
                     EnvironmentStatus::Stopped

@@ -123,6 +123,13 @@ impl EnvironmentStore for Store {
         let environment = self.environment.lock().unwrap();
         Ok((environment.user_id == actor.user_id).then(|| environment.clone()))
     }
+    async fn initialize_if_absent(
+        &self,
+        _: EnvironmentActor,
+        _: EnvironmentStart,
+    ) -> Result<Environment, EnvironmentError> {
+        unreachable!()
+    }
     async fn start(
         &self,
         _: EnvironmentActor,

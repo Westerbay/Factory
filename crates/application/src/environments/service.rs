@@ -66,8 +66,8 @@ impl EnvironmentService {
         self.availability.is_available()
     }
 
-    /// Changing the prepared image or policy requires an explicit stopped upgrade.
-    pub fn needs_upgrade(&self, environment: &Environment) -> bool {
+    /// A container recorded for a different image or policy cannot be used.
+    pub fn has_policy_mismatch(&self, environment: &Environment) -> bool {
         environment.image_id != self.config.image_id
             || environment.policy_version != self.config.policy_version
     }
@@ -76,6 +76,7 @@ impl EnvironmentService {
     /// this supervisor has inspected it. The last observation time stays visible.
     pub fn can_report(&self, environment: Option<&Environment>) -> bool {
         self.is_available()
+            && environment.is_none_or(|environment| !self.has_policy_mismatch(environment))
             && environment.is_none_or(|environment| {
                 !matches!(
                     environment.observed_state,
@@ -94,13 +95,24 @@ impl EnvironmentService {
         self.store.get(actor).await
     }
 
+    /// First access may only create an absent record, never restart an existing one.
+    pub async fn initialize_if_absent(
+        &self,
+        actor: EnvironmentActor,
+    ) -> Result<Environment, EnvironmentError> {
+        self.require_available()?;
+        self.store
+            .initialize_if_absent(actor, self.config.clone())
+            .await
+    }
+
     pub async fn start(&self, actor: EnvironmentActor) -> Result<Environment, EnvironmentError> {
         self.require_available()?;
         if self
             .get(actor)
             .await?
             .as_ref()
-            .is_some_and(|environment| self.needs_upgrade(environment))
+            .is_some_and(|environment| self.has_policy_mismatch(environment))
         {
             return Err(EnvironmentError::PolicyMismatch);
         }
@@ -117,7 +129,7 @@ impl EnvironmentService {
             .get(actor)
             .await?
             .ok_or(EnvironmentError::Unavailable)?;
-        if self.needs_upgrade(&environment) {
+        if self.has_policy_mismatch(&environment) {
             return Err(EnvironmentError::PolicyMismatch);
         }
         if !self.can_report(Some(&environment)) {

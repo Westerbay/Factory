@@ -17,7 +17,7 @@ async function setup({ available = true, recoverFailure = false } = {}) {
     incoming = new EventEmitter()
   if (!available)
     store.getActive = async () => {
-      throw new Error("Tables unavailable before migrations")
+      throw new Error("Tables unavailable before initialization")
     }
   let recoveries = 0,
     closed = false

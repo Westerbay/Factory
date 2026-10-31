@@ -18,6 +18,13 @@ impl EnvironmentStore for Store {
         }
         Ok(Some(row.clone()))
     }
+    async fn initialize_if_absent(
+        &self,
+        _: EnvironmentActor,
+        _: EnvironmentStart,
+    ) -> Result<Environment, EnvironmentError> {
+        unreachable!()
+    }
     async fn start(
         &self,
         _: EnvironmentActor,

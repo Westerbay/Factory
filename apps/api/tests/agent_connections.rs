@@ -117,6 +117,13 @@ impl EnvironmentStore for Store {
         let environment = self.environment.lock().unwrap();
         Ok((environment.user_id == actor.user_id).then(|| environment.clone()))
     }
+    async fn initialize_if_absent(
+        &self,
+        _: EnvironmentActor,
+        _: EnvironmentStart,
+    ) -> Result<Environment, EnvironmentError> {
+        unreachable!()
+    }
     async fn start(
         &self,
         _: EnvironmentActor,
@@ -320,7 +327,29 @@ impl Fixture {
             Arc::new(IdentityService::new(store.clone(), Arc::new(NoProvider))),
             &RuntimeConfig::from_values(|_| None).unwrap(),
         );
-        let router = agent_connections::router(auth.clone(), Some(service));
+        struct FixtureGuard(Arc<AgentConnectionService>);
+        #[async_trait::async_trait]
+        impl agent_connections::DisconnectGuard for FixtureGuard {
+            async fn acquire_login(
+                &self,
+                _: factory_core::environments::EnvironmentActor,
+            ) -> Result<Box<dyn Send>, factory_core::agent_connections::AgentConnectionError>
+            {
+                Ok(Box::new(()))
+            }
+            async fn logout(
+                &self,
+                actor: factory_core::environments::EnvironmentActor,
+            ) -> Result<
+                factory_core::agent_connections::ConnectionSnapshot,
+                factory_core::agent_connections::AgentConnectionError,
+            > {
+                self.0.logout(actor).await
+            }
+        }
+        let guard = Arc::new(FixtureGuard(service.clone()));
+        let router =
+            agent_connections::router_with_disconnect_guard(auth.clone(), Some(service), guard);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("{}", listener.local_addr().unwrap());
         let server_router = router.clone();

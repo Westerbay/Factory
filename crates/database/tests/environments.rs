@@ -28,7 +28,6 @@ async fn fixture() -> (IdentityDatabase, PgPool) {
         .password(target.password())
         .ssl_mode(sqlx::postgres::PgSslMode::Disable);
     let sql = PgPool::connect_with(options).await.unwrap();
-    db.migrate().await.unwrap();
     sqlx::query("TRUNCATE factory_identity.users, factory_identity.login_attempts CASCADE")
         .execute(&sql)
         .await
@@ -160,7 +159,7 @@ async fn persistent_requests_preserve_ownership_and_generation_without_capacity_
     store.start(one, request(installation)).await.unwrap();
     // Simulate returning the next day: old browser metadata and expired login sessions
     // cannot stop a persistent environment or change its generation.
-    sqlx::query("UPDATE factory_identity.environments SET lease_expires_at=clock_timestamp()-interval '1 day', next_reconcile_at=clock_timestamp()-interval '1 day' WHERE user_id=$1").bind(two.user_id).execute(&sql).await.unwrap();
+    sqlx::query("UPDATE factory_identity.environments SET next_reconcile_at=clock_timestamp()-interval '1 day' WHERE user_id=$1").bind(two.user_id).execute(&sql).await.unwrap();
     sqlx::query("UPDATE factory_identity.sessions SET expires_at=clock_timestamp()-interval '1 day' WHERE user_id=$1").bind(two.user_id).execute(&sql).await.unwrap();
     assert!(matches!(
         store.get(two).await,
@@ -175,6 +174,99 @@ async fn persistent_requests_preserve_ownership_and_generation_without_capacity_
         .unwrap();
     assert_eq!(persistent.desired_state, DesiredState::Running);
     assert_eq!(persistent.generation, second.generation);
+    db.close().await;
+    sql.close().await;
+}
+
+async fn wait_for_user_lock(sql: &PgPool) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let count: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FOR UPDATE OF u%'").fetch_one(sql).await.unwrap();
+            if count > 0 { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires the explicitly owned PostgreSQL integration fixture"]
+async fn initialize_serializes_first_creation_stop_and_session_revocation() {
+    let (db, sql) = fixture().await;
+    let store = db.environment_store();
+    let user = actor(&sql, 7, false).await;
+    let installation = Uuid::new_v4();
+    let (a, b) = tokio::join!(
+        store.initialize_if_absent(user, request(installation)),
+        store.initialize_if_absent(user, request(installation)),
+    );
+    let first = a.unwrap();
+    let second = b.unwrap();
+    assert_eq!(first.id, second.id);
+    assert_eq!(first.generation, second.generation);
+    let stopped = store.stop(user).await.unwrap().unwrap();
+    let mut changed = request(installation);
+    changed.policy_version = "new-policy".into();
+    let after = store.initialize_if_absent(user, changed).await.unwrap();
+    assert_eq!(after.id, stopped.id);
+    assert_eq!(after.generation, stopped.generation);
+    assert_eq!(after.desired_state, DesiredState::Stopped);
+    assert_eq!(after.policy_version, stopped.policy_version);
+
+    // Hold the user lock while committing a stop, so initialize must wait and
+    // observe the stopped intent rather than revive the prior running one.
+    let running = store.start(user, request(installation)).await.unwrap();
+    let waiting_store = db.environment_store();
+    let mut held = sql.begin().await.unwrap();
+    sqlx::query("SELECT id FROM factory_identity.users WHERE id=$1 FOR UPDATE")
+        .bind(user.user_id)
+        .execute(&mut *held)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE factory_identity.environments SET desired_state='stopped', generation=generation+1 WHERE user_id=$1")
+        .bind(user.user_id).execute(&mut *held).await.unwrap();
+    let task = tokio::spawn(async move {
+        waiting_store
+            .initialize_if_absent(user, request(installation))
+            .await
+    });
+    wait_for_user_lock(&sql).await;
+    held.commit().await.unwrap();
+    let after_stop = task.await.unwrap().unwrap();
+    assert_eq!(after_stop.desired_state, DesiredState::Stopped);
+    assert_eq!(after_stop.generation, running.generation + 1);
+
+    // A first initialization whose session is revoked while waiting must not insert.
+    let revoked = actor(&sql, 8, false).await;
+    let waiting_store = db.environment_store();
+    let mut held = sql.begin().await.unwrap();
+    sqlx::query("SELECT id FROM factory_identity.users WHERE id=$1 FOR UPDATE")
+        .bind(revoked.user_id)
+        .execute(&mut *held)
+        .await
+        .unwrap();
+    let task = tokio::spawn(async move {
+        waiting_store
+            .initialize_if_absent(revoked, request(installation))
+            .await
+    });
+    wait_for_user_lock(&sql).await;
+    sqlx::query("DELETE FROM factory_identity.sessions WHERE user_id=$1")
+        .bind(revoked.user_id)
+        .execute(&mut *held)
+        .await
+        .unwrap();
+    held.commit().await.unwrap();
+    assert!(matches!(
+        task.await.unwrap(),
+        Err(EnvironmentError::Unauthorized)
+    ));
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM factory_identity.environments WHERE user_id=$1")
+            .bind(revoked.user_id)
+            .fetch_one(&sql)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
     db.close().await;
     sql.close().await;
 }

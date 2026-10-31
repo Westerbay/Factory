@@ -31,8 +31,6 @@
     "execution:test": "pnpm --filter @workspace/application... build && pnpm --filter @workspace/contracts build && tsc --project packages/contracts/test/tsconfig.json && node --test packages/application/test/*.test.mjs packages/contracts/test/*.test.mjs",
     "db:build": "pnpm --filter @workspace/database... build",
     "db:setup": "pnpm db:build && node scripts/database/local.mjs setup",
-    "db:migrate": "pnpm db:build && node scripts/database/local.mjs migrate",
-    "db:migrate:identity": "node scripts/rust/run.mjs run --locked --package factory-api --bin migrate-identity",
     "db:status": "pnpm db:build && node scripts/database/local.mjs status",
     "db:stop": "pnpm db:build && node scripts/database/local.mjs stop",
     "database:test": "pnpm db:build && node --test packages/database/test/target.test.mjs scripts/test/database-docker.test.mjs scripts/test/target-parity.test.mjs",
@@ -49,7 +47,8 @@
     "rust:check": "node scripts/rust/run.mjs fmt --all -- --check && node scripts/rust/run.mjs clippy --locked --workspace --all-targets -- -D warnings && node scripts/rust/run.mjs test --locked --workspace",
     "rust:build": "node scripts/rust/run.mjs build --release --locked --workspace",
     "api:contract": "node scripts/api-contract.mjs --check",
-    "api:generate": "node scripts/api-contract.mjs"
+    "api:generate": "node scripts/api-contract.mjs",
+    "db:reset": "pnpm db:build && node scripts/database/local.mjs reset"
   },
   "devDependencies": {
     "dependency-cruiser": "18.6.0",

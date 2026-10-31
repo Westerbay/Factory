@@ -14,6 +14,13 @@ impl EnvironmentStore for MultipleEnvironments {
     async fn get(&self, _: EnvironmentActor) -> Result<Option<Environment>, EnvironmentError> {
         unreachable!()
     }
+    async fn initialize_if_absent(
+        &self,
+        _: EnvironmentActor,
+        _: EnvironmentStart,
+    ) -> Result<Environment, EnvironmentError> {
+        unreachable!()
+    }
     async fn start(
         &self,
         _: EnvironmentActor,

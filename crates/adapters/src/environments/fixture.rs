@@ -1,5 +1,5 @@
 //! Shared cleanup for explicitly enabled local Docker integration fixtures only.
-use super::{DockerEnvironmentRuntime, policy::verify_home_labels};
+use super::{DockerEnvironmentRuntime, policy::verify_labels};
 use crate::egress::EgressMetadata;
 use bollard::{errors::Error, query_parameters::*};
 use factory_core::environments::Environment;
@@ -69,7 +69,7 @@ pub(crate) async fn cleanup(runtime: &DockerEnvironmentRuntime, environments: &[
             Ok(container) => {
                 let value = serde_json::to_value(container).unwrap();
                 assert_eq!(value["Name"], format!("/{}", env.container_name));
-                verify_home_labels(env, &value["Config"]["Labels"]).unwrap();
+                verify_labels(env, &value["Config"]["Labels"]).unwrap();
                 remove_container(runtime, &value).await;
             }
         }
@@ -80,7 +80,7 @@ pub(crate) async fn cleanup(runtime: &DockerEnvironmentRuntime, environments: &[
                 let value = serde_json::to_value(volume).unwrap();
                 assert_eq!(value["Name"], env.volume_name);
                 assert_eq!(value["Driver"], "local");
-                verify_home_labels(env, &value["Labels"]).unwrap();
+                verify_labels(env, &value["Labels"]).unwrap();
                 runtime
                     .docker
                     .remove_volume(&env.volume_name, None::<RemoveVolumeOptions>)

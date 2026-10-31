@@ -392,7 +392,7 @@ async fn oauth_start_negotiates_browser_recovery_without_changing_api_errors() {
 }
 
 #[tokio::test]
-#[ignore = "requires the freshly migrated, explicitly owned PostgreSQL integration fixture"]
+#[ignore = "requires the freshly initialized, explicitly owned PostgreSQL integration fixture"]
 async fn owned_composition_preserves_identity_across_restart_and_revokes_access() {
     let target = target().await;
     let database = Arc::new(IdentityDatabase::connect(&target).await.unwrap());

@@ -53,7 +53,6 @@ pub(super) fn environment(row: &PgRow) -> Result<Environment, EnvironmentError> 
         error_code: error
             .map(|code| match code.as_str() {
                 "unauthorized" => Ok(EnvironmentError::Unauthorized),
-                "capacity_reached" => Ok(EnvironmentError::Conflict),
                 "conflict" => Ok(EnvironmentError::Conflict),
                 "unavailable" => Ok(EnvironmentError::Unavailable),
                 "invalid_configuration" => Ok(EnvironmentError::InvalidConfiguration),
