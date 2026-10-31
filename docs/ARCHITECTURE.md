@@ -157,14 +157,38 @@ policy. The adapter checks ownership before mutation and complete image/mount/is
 policy before start. Foreign resources are never adopted. See the
 [policy owner](../crates/adapters/src/environments/policy.rs) for enforced isolation and unlimited CPU/memory/process settings.
 
-The host retains an installation file lock and a dedicated PostgreSQL advisory-lock
-connection. It monitors the database guard every second and checks it around runtime
-calls. Lock loss makes environment operations unavailable until API restart; it does
-not silently reacquire ownership. Individual Docker errors remain observable and are
-retried after 15 seconds. The supervisor also repairs suspended-user intent independently of Docker work. The host serializes work per environment and runs
-up to 32 environment jobs concurrently, so a slow container does not block another
-user's stop when worker capacity is available. This is bounded supervision, not a
-real-time shutdown guarantee under saturation. API shutdown stops supervision while containers keep running; API restart resumes
+The [prepared host factory](../apps/api/src/bootstrap/environments.rs) retains the
+installation file lock and validated preparation metadata for the API lifetime. Each
+host owns a dedicated PostgreSQL advisory-lock connection, monitored every second and
+checked around runtime calls. A failed check permanently closes that host's admission
+and runtime mutation permissions; old requests and adapters never become usable again.
+
+The [recovery coordinator](../apps/api/src/bootstrap/recovery.rs) drains the failed
+host's reconciliation workers, then acquires a fresh database connection and advisory
+lock before replacing the complete host and router. Acquisition attempts are bounded
+and sequential, with exponential retry delays capped at 30 seconds. A competing
+advisory-lock holder keeps the workspace unavailable. Each HTTP request selects one
+coherent router, including requests on existing keep-alive connections; identity,
+session revocation and quotas retain their existing owner. The replacement host must
+complete its guarded sweep, and Running/Stopped observations must come from the new
+host before interactive work or stopped-run recovery is allowed. Recovery preserves
+persistent intent and model/run reservations; it does not replay interrupted turns or
+infer cleanup. Explicit shutdown gates all hosts. Worker panics and permanent
+configuration or resource-ownership errors stop automatic recovery for investigation.
+
+Runtime persistence operations also have a client deadline covering pooled connection
+acquisition and SQL, including transaction completion. Timed-out or cancelled operations
+discard their connection, and normal pool recycling is bounded. This prevents stalled
+session or chat queries from exhausting the pool needed by a replacement supervisor.
+An uncertain commit is never retried automatically; a confirmed result is preserved
+even if connection recycling fails. Docker work still settles before host replacement.
+
+Individual Docker errors remain observable and are retried after 15 seconds. The
+supervisor also repairs suspended-user intent independently of Docker work. The host
+serializes work per environment and runs up to 32 environment jobs concurrently, so a
+slow container does not block another user's stop when worker capacity is available.
+This is bounded supervision, not a real-time shutdown guarantee under saturation. API
+shutdown stops supervision while containers keep running; API restart resumes
 reconciliation. No independent environment supervisor runs outside the API.
 
 [Environment routes](../apps/api/src/environments/routes.rs) accept no target user ID or

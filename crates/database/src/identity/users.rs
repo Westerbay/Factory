@@ -2,12 +2,11 @@ use super::*;
 use uuid::Uuid;
 
 pub(super) async fn list(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     hash: CredentialHash,
     query: UserListQuery,
 ) -> Result<UserPage, IdentityError> {
-    query.validate()?;
-    let mut tx = pool.begin().await.map_err(unavailable)?;
+    let mut tx = connection.begin().await.map_err(unavailable)?;
     sessions::admin(&mut tx, hash).await?;
     let sql = format!(
         "SELECT {USER_COLUMNS} FROM factory_identity.users u JOIN factory_identity.external_identities e ON e.user_id=u.id WHERE u.status=$1 AND ($2::uuid IS NULL OR u.id>$2) ORDER BY u.id LIMIT $3"
@@ -31,11 +30,11 @@ pub(super) async fn list(
 }
 
 pub(super) async fn change(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     hash: CredentialHash,
     request: AccessRequest,
 ) -> Result<User, IdentityError> {
-    let mut tx = pool.begin().await.map_err(unavailable)?;
+    let mut tx = connection.begin().await.map_err(unavailable)?;
     let actor = sessions::admin(&mut tx, hash).await?;
     let sql = format!(
         "SELECT {USER_COLUMNS} FROM factory_identity.users u JOIN factory_identity.external_identities e ON e.user_id=u.id WHERE u.id=$1 FOR UPDATE OF u"

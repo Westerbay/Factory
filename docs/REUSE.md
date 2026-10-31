@@ -89,6 +89,11 @@ are public static resources; loading the interface does not require a remote fon
   connection/readiness/close and transactional identity persistence. Initialization uses the shared initial schema on a verified local target.
   Operator-only administrator setup shares identity locking/upsert with login but is
   deliberately excluded from the HTTP `IdentityStore` port.
+- [Bounded database operations](../crates/database/src/connection.rs) own runtime pool
+  acquisition, query deadlines and connection disposal for identity, environments,
+  conversations and readiness. Reuse this boundary so a silent socket cannot retain
+  pool capacity indefinitely. Preserve transaction ordering and confirmed results;
+  a timeout never establishes rollback and must not trigger automatic write replay.
 - [Rust target verification](../crates/database/src/local_target/mod.rs) and the retained
   [TypeScript verifier](../packages/database/src/target.ts) enforce equivalent ownership
   expectations. [Docker inspection](../scripts/database/owned.mjs) supplies the local
@@ -112,7 +117,11 @@ Connection patterns were checked against the official
   conversation execution consumes these contracts rather than creating another lifecycle.
 - [EnvironmentService and EnvironmentReconciler](../crates/application/src/environments/mod.rs)
   separate authenticated requests from serialized runtime effects. Generation checks
-  protect newer intent; ownership loss closes availability until host restart.
+  protect newer intent; ownership loss permanently closes that host's availability.
+  The [API recovery coordinator](../apps/api/src/bootstrap/recovery.rs) replaces the
+  complete host after old workers settle and a new database guard is acquired. Reuse
+  fresh host services together; never reopen an old availability latch or republish
+  observations made before the replacement host started.
 - [Environment persistence](../crates/database/src/environments/mod.rs) uses the verified
   IdentityDatabase and transactional user/session revalidation. Suspension and environment
   requests share user locking; browser presence and session expiry never change running

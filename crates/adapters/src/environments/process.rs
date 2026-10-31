@@ -172,6 +172,8 @@ impl DockerEnvironmentRuntime {
         .map_err(|_| ProcessStartError::PreSubmission(EnvironmentError::Timeout))?
         .map_err(ProcessStartError::PreSubmission)?;
 
+        self.require_mutation_permission()
+            .map_err(ProcessStartError::PreSubmission)?;
         tokio::time::timeout_at(deadline, async {
             let options = command.options();
             let tty = options.tty == Some(true);

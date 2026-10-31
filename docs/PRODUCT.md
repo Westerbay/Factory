@@ -56,7 +56,11 @@ reuses a running environment or attempts to start a stopped one. Only an explici
 account suspension records a stop request. Suspension immediately revokes access; actual
 container shutdown follows asynchronously while the API and Docker are available.
 API shutdown does not stop containers, and restarting the API resumes supervision.
-This does not guarantee task completion across host outages or process failures.
+Temporary PostgreSQL supervision failures pause workspace operations while the API
+reacquires exclusive ownership and verifies environment state automatically. A manual
+API restart is not required for that recovery. Interrupted turns are not replayed, and
+uncertain work retains its explicit recovery requirements. This does not guarantee
+task completion across host outages or process failures.
 
 Factory imposes no limit on the number of started environments, CPU, memory or process
 counts. They share available host resources; Docker Desktop and operating-system limits

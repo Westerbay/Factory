@@ -27,6 +27,9 @@ session. Environments keep running after the browser closes or login sessions ex
 Explicit stop or account suspension records stop intent; runtime shutdown follows while
 the API and Docker are available. Factory imposes no count, CPU, memory or process quota;
 host and Docker Desktop limits still apply. Named volumes have no portable disk quota.
+After a temporary PostgreSQL supervision failure, the API reacquires exclusive ownership
+and replaces the failed runtime without a process restart. Old operations remain fenced;
+fresh environment inspection is required, and interrupted turns are never replayed.
 
 Members can open a persistent xterm terminal through the Rust API and Docker exec.
 tmux owns the shell independently of browser and API connections. Explicit takeover

@@ -4,13 +4,17 @@ mod sessions;
 mod setup;
 mod users;
 
+#[cfg(test)]
+mod tests;
+
 use crate::{
+    connection::with_connection,
     local_target::VerifiedTarget,
     schema::{self, Readiness},
 };
 use factory_core::identity::*;
 use sqlx::{
-    PgPool, Row,
+    Connection, PgConnection, PgPool, Row,
     postgres::{PgConnectOptions, PgPoolOptions, PgRow},
 };
 use std::time::Duration;
@@ -69,7 +73,12 @@ impl IdentityDatabase {
         crate::environments::PgEnvironmentSupervisor::acquire(&self.options, installation).await
     }
     pub async fn ready(&self) -> Result<Readiness, IdentityError> {
-        schema::ready(&self.pool).await
+        with_connection(
+            &self.pool,
+            || IdentityError::Unavailable,
+            |connection| Box::pin(schema::ready(connection)),
+        )
+        .await
     }
     pub async fn close(&self) {
         self.pool.close().await;
@@ -152,44 +161,91 @@ pub(super) fn user(row: &PgRow) -> Result<User, IdentityError> {
 #[async_trait::async_trait]
 impl IdentityStore for PgIdentityStore {
     async fn create_login_attempt(&self, attempt: NewLoginAttempt) -> Result<(), IdentityError> {
-        attempts::create(&self.pool, attempt).await
+        if !(43..=128).contains(&attempt.pkce_verifier.len()) {
+            return Err(IdentityError::InvalidInput);
+        }
+        with_connection(
+            &self.pool,
+            || IdentityError::Unavailable,
+            |connection| Box::pin(attempts::create(connection, attempt)),
+        )
+        .await
     }
     async fn take_login_attempt(
         &self,
         state: CredentialHash,
         binding: CredentialHash,
     ) -> Result<LoginAttempt, IdentityError> {
-        attempts::take(&self.pool, state, binding).await
+        with_connection(
+            &self.pool,
+            || IdentityError::Unavailable,
+            |connection| Box::pin(attempts::take(connection, state, binding)),
+        )
+        .await
     }
     async fn admit(&self, admission: LoginAdmission) -> Result<AdmissionOutcome, IdentityError> {
-        admission::admit(&self.pool, admission).await
+        admission.identity.validate()?;
+        if !(32..=256).contains(&admission.session.csrf_token.len()) {
+            return Err(IdentityError::InvalidInput);
+        }
+        with_connection(
+            &self.pool,
+            || IdentityError::Unavailable,
+            |connection| Box::pin(admission::admit(connection, admission)),
+        )
+        .await
     }
     async fn active_session(
         &self,
         hash: CredentialHash,
     ) -> Result<Option<ActiveSession>, IdentityError> {
-        sessions::get(&self.pool, hash).await
+        with_connection(
+            &self.pool,
+            || IdentityError::Unavailable,
+            |connection| Box::pin(sessions::get(connection, hash)),
+        )
+        .await
     }
     async fn logout(&self, hash: CredentialHash) -> Result<(), IdentityError> {
-        sqlx::query("DELETE FROM factory_identity.sessions WHERE token_hash=$1")
-            .bind(hash.0.as_slice())
-            .execute(&self.pool)
-            .await
-            .map_err(unavailable)?;
-        Ok(())
+        with_connection(
+            &self.pool,
+            || IdentityError::Unavailable,
+            |connection| {
+                Box::pin(async move {
+                    sqlx::query("DELETE FROM factory_identity.sessions WHERE token_hash=$1")
+                        .bind(hash.0.as_slice())
+                        .execute(connection)
+                        .await
+                        .map_err(unavailable)?;
+                    Ok(())
+                })
+            },
+        )
+        .await
     }
     async fn list_users(
         &self,
         hash: CredentialHash,
         query: UserListQuery,
     ) -> Result<UserPage, IdentityError> {
-        users::list(&self.pool, hash, query).await
+        query.validate()?;
+        with_connection(
+            &self.pool,
+            || IdentityError::Unavailable,
+            |connection| Box::pin(users::list(connection, hash, query)),
+        )
+        .await
     }
     async fn change_access(
         &self,
         hash: CredentialHash,
         request: AccessRequest,
     ) -> Result<User, IdentityError> {
-        users::change(&self.pool, hash, request).await
+        with_connection(
+            &self.pool,
+            || IdentityError::Unavailable,
+            |connection| Box::pin(users::change(connection, hash, request)),
+        )
+        .await
     }
 }

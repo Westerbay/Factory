@@ -46,7 +46,8 @@ GitHub exchange. Runtime startup does not create infrastructure, initialize the 
 create configuration files. API startup reads `.env` from the working directory
 (the repository root for the pnpm commands). After correcting startup configuration,
 database ownership or a missing schema, restart the API so it can compose the
-identity runtime again.
+identity runtime again. This startup requirement is separate from recovery of an
+already composed environment supervisor after a temporary PostgreSQL failure.
 
 ### Explicit configuration
 
@@ -213,6 +214,11 @@ Fixtures use unique verified projects and isolated volumes, not the development 
 A synthetic provider is test-only; production has no fixture-provider switch.
 These regressions do not replace human acceptance or prove live OAuth behavior.
 
+For the PostgreSQL subset, run `pnpm db:build` followed by
+`node scripts/database/identity-integration.mjs`. Its disposable database covers
+supervisor connection loss and competing ownership, including recovery through the
+same HTTP router without restarting the API.
+
 ## Local PostgreSQL
 
 Database commands operate only on the verified local Docker target. They do not read or
@@ -315,10 +321,28 @@ not deleted by the database reset.
 
 Missing preparation leaves the workspace unavailable while otherwise-ready
 authentication and administration remain usable. Docker failures produce environment
-errors and retries; loss of supervisor ownership disables environment operations until
-restart. The API holds both a process file lock and a dedicated database guard, so run
-only one environment supervisor per installation. Do not remove lock files or change
-installation metadata to force a second instance.
+errors and retries. A PostgreSQL timeout or lost supervisor connection closes runtime
+admission while the API automatically replaces the failed supervisor. It retains the
+installation file lock, lets old reconciliation work settle, then retries acquisition
+of a fresh dedicated database connection and advisory lock. Attempts are sequential
+and bounded, with delays capped at 30 seconds. Once PostgreSQL responds and the lock is
+available, supervision resumes without restarting the API; environment state must be
+inspected again before interactive access resumes. Existing browser chat content stays
+in memory, while server history and other workspace operations may be unavailable.
+Interrupted turns and uncertain model/run reservations keep their existing explicit
+recovery requirements.
+
+Client deadlines also cover runtime queries and pool recycling. A nonresponding socket
+is discarded so identity, chat and supervision can obtain replacement connections;
+timed-out writes are not automatically replayed.
+
+The logs distinguish `api.environments.recovery_pending` from
+`api.environments.ownership_reacquired`. `api.environments.recovery_stopped` indicates a
+permanent configuration/resource-ownership error or worker failure: investigate it
+before restarting. Startup configuration and preparation are not reread by recovery.
+Run only one environment supervisor per installation. Do not remove lock files or
+change installation metadata to force a second instance; another advisory-lock holder
+must keep this instance unavailable.
 
 Browser presence is not a container lease. Closing the page, losing connectivity, signing
 out or allowing a login session to expire leaves the environment running. Polling resumes
