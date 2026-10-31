@@ -289,12 +289,13 @@ Each Docker CLI invocation uses its own temporary configuration directory. Clean
 removes that directory and generated Buildx metadata without following symbolic links;
 it does not use or remove the operator's Docker configuration.
 
-Restart the API after preparation or configuration changes. API startup, sign-in,
-account activation and status reads do not create user containers. The first workspace
-visit by an active member initializes an environment only if no record exists. Existing
-stopped environments require explicit Start. Stop retains `/home/factory` and its
-`Documents` working directory. There is no user-volume deletion/reset command. Investigate
-a missing recorded volume or uncertain provisioning state instead of creating a substitute.
+Restart the API after preparation or configuration changes. API startup, account
+activation and status reads do not create user containers. Verified workspace entry
+automatically initializes a missing environment or starts a stopped one after checking
+for recoverable work. A running environment is reused. Stop retains `/home/factory` and
+its `Documents` working directory. There is no user-volume deletion/reset command.
+Investigate a missing recorded volume or uncertain provisioning state instead of creating
+a substitute.
 
 Factory no longer configures a maximum number of environments or container CPU, memory
 or process ceilings. The old `FACTORY_ENV_MAX_RUNNING`, `FACTORY_ENV_IDLE_MINUTES`,
@@ -312,7 +313,7 @@ A prepared image with a different policy is not applied to existing containers. 
 local development, a fresh database creates new environments; existing Docker homes are
 not deleted by the database reset.
 
-Missing preparation leaves the environment card unavailable while otherwise-ready
+Missing preparation leaves the workspace unavailable while otherwise-ready
 authentication and administration remain usable. Docker failures produce environment
 errors and retries; loss of supervisor ownership disables environment operations until
 restart. The API holds both a process file lock and a dedicated database guard, so run
@@ -322,8 +323,13 @@ installation metadata to force a second instance.
 Browser presence is not a container lease. Closing the page, losing connectivity, signing
 out or allowing a login session to expire leaves the environment running. Polling resumes
 when an authenticated page returns; status polling itself does not mutate lifecycle state.
-The workspace may initialize only a never-created environment on entry. Explicit Stop
-and account suspension persist stopped intent; suspension also revokes access atomically.
+Automatic workspace entry is consumed once per open app session, even if the environment
+is already running. Focus checks, polling and route remounts cannot reverse a later Stop.
+A new tab or browser reload begins a new entry. Failed starts require contextual retry;
+outstanding recovery keeps the environment stopped. **Stop environment** in the profile
+menu requires confirmation, and **Return to workspace** explicitly resumes after shutdown
+and required recovery. Explicit Stop and account suspension persist stopped intent;
+suspension also revokes access atomically.
 Actual shutdown requires available API/Docker supervision. API shutdown leaves containers
 running and restart resumes supervision. Host shutdown, Docker shutdown or a process
 failure can still interrupt work. An uncertain conversation run requires an explicit
@@ -342,23 +348,27 @@ and verify ownership before cleanup; they never prune or remove user volumes.
 
 ## Terminal and Codex account
 
-Wait for the environment to be Running and connect Codex. **Open terminal** loads xterm
-and attaches to its zsh tmux shell in `/home/factory/Documents`. The current image
-provides a colored prompt without overwriting user dotfiles. **Disconnect display** detaches only
-that view; **Reconnect** or **Open terminal** returns to the shell. A second tab must
-choose **Take over terminal** before it can type. Closing the browser or restarting the
-API does not stop the shell; stopping the environment or Docker does. Files survive
+Wait for automatic workspace preparation and connect Codex. The header's terminal icon
+opens or folds the panel; opening loads xterm and attaches to its zsh tmux shell in
+`/home/factory/Documents`. Folding preserves the attached display and shell. Drag the
+separator to resize, or focus it and use arrow keys; Enter folds the terminal. Narrow
+screens switch between chat and terminal. The current image provides a colored prompt
+without overwriting user dotfiles. Transport failure offers **Reconnect**. A second tab
+must choose **Take over terminal** before it can type. Closing the browser or restarting
+the API does not stop the shell; stopping the environment or Docker does. Files survive
 Stop/start, but running processes do not. Unsent keystrokes are never replayed.
 
 Use Ctrl+Shift+M to leave terminal input and reach its controls. Screen reader mode is
-optional. The mobile toolbar provides Ctrl, Enter, Tab, Ctrl+C, Ctrl+D and Esc. Session
-checks on focus can remove the displayed terminal; reopen it after access is confirmed.
-The shell remains independent of this browser lifecycle.
+optional. The mobile toolbar provides Ctrl, Enter, Tab, Ctrl+C, Ctrl+D and Esc. The terminal
+header's maximize control fills the app viewport; restore or Escape returns to the
+previous layout. The workspace header toggles the chats sidebar. Neither action replaces
+the terminal instance. Session checks on focus run in the background while the verified
+session remains unexpired. The shell remains independent of this browser lifecycle.
 
-Choose **Connect Codex** to request a device code. Copy it and open the displayed official
+Choose **Codex** on the provider screen to request a device code. Copy it and open the displayed official
 OpenAI link in a separate tab, then authorize your personal ChatGPT/Codex account there.
 Do not paste a password, API key or credentials into Factory. Keep the code private and
-cancel it if it is no longer needed. The card polls pending authorization every two
+cancel it if it is no longer needed. The connection controller polls pending authorization every two
 seconds while visible and shows Connected only after provider confirmation and account
 verification. The reported plan does not guarantee access to a particular model.
 
@@ -366,11 +376,12 @@ Only the initiating Factory session can retrieve a pending code. Reloading that 
 recovers its current state without starting another login. Expiry, logout or suspension
 closes access and attempts to cancel pending authorization. After an API crash, an
 abandoned controller may keep the account lock until its watchdog exits, at most ten
-minutes; refresh after recovery rather than killing arbitrary container processes.
+minutes; use the contextual **Check again** action after recovery rather than killing
+arbitrary container processes.
 
 Codex stores credentials under `/home/factory/.codex` with private permissions. The API
 does not read host credentials or store provider tokens in PostgreSQL or browser storage.
-**Disconnect Codex** clears the saved sign-in through the account protocol and preserves
+In profile **Settings**, **Disconnect Codex** clears the saved sign-in through the account protocol and preserves
 the rest of the home. It is blocked for active or uncertain Factory runs. This does not
 prove already-running manual Codex requests stopped;
 use **Stop environment** when all processes must end. Factory sign-out leaves an already
@@ -378,7 +389,7 @@ connected Codex account saved in its owner's home.
 
 The initial proxy allows only `auth.openai.com`, `chatgpt.com` and `api.openai.com` over
 HTTPS CONNECT on port 443. Direct egress and private destinations are refused. If the
-proxy is down, the account card reports unavailable while local terminal work continues;
+proxy is down, provider settings report unavailable while local terminal work continues;
 local account cancellation/logout does not require the proxy. No HTTP endpoint can
 open an arbitrary Docker exec or target another user's container.
 
@@ -393,8 +404,8 @@ including account credentials. A displayed model is not proof of account entitle
 Provider calls may consume the user's model allowance.
 
 If stopping a run does not confirm cleanup, it remains uncertain and blocks further work.
-Use **Stop environment**, wait for a verified stopped state, then recover the run from
-the workspace before explicitly starting the environment again. Recovery also requires a
+Use **Stop environment** in the profile, wait for a verified stopped state, then recover
+the run from the workspace before choosing **Return to workspace**. Recovery also requires a
 conclusively settled launch request. If launch settlement remains unknown, recovery can
 fail and capacity remains reserved even after Stop. No verified operator recovery exists
 for this case. Recovery releases local
@@ -454,6 +465,9 @@ cleanup blocks further execution. No live inference is authorized by routine dia
 QA is accepted by a person. Agent-authored browser/acceptance scripts, screenshots and
 observations stay in ignored local scratch, never in the versioned suite. Meaningful
 unit/integration regressions protect implementation behavior separately.
+Keep intercepted HTTP/WebSocket checks in a separate headless browser session and close
+that session afterward. Do not hand a mocked or viewport-overridden browser to a person
+as the running application.
 
 With separately authorized OAuth configuration and two chosen GitHub accounts, verify:
 
@@ -463,13 +477,20 @@ With separately authorized OAuth configuration and two chosen GitHub accounts, v
    invoke its API. Check readable errors, keyboard navigation and narrow layouts.
 3. Suspension requires confirmation and revokes the member's sessions. Reactivation
    requires another fresh sign-in. Exercise conflict feedback with two admin tabs.
-4. Sign-out invalidates another tab. API loss or offline mode hides private data and
-   recovery rechecks the server instead of displaying a persisted session.
+4. Sign-out invalidates another tab. Transient API loss or offline mode preserves an
+   already verified chat in memory with a notice, only until its existing expiry.
+   Initial admission still needs the server; no persisted session is restored.
+5. Returning to a tab preserves the selected chat, unsent draft, pane layout and manual
+   scroll during background verification, without showing access/provider loaders or
+   recreating the terminal. An open private dialog stays usable. A different session,
+   expiry or authorization refusal immediately removes the private UI and dialog.
 
 After explicit image preparation and database setup, verify each account sees only
-its own environment. Check automatic first initialization, observed Running, Stop and
-explicit restart with retained
-data using owned fixtures; there is no file editor in the member UI. Start more than two
+its own environment. Check automatic first initialization, automatic stopped-environment
+entry, observed Running, profile Stop confirmation and explicit Return to workspace with
+retained data using owned fixtures. Confirm focus changes and route remounts do not undo
+Stop, and failed or pending recovery blocks automatic start. There is no file editor in
+the member UI. Start more than two
 environments and verify that closing the page or expiring a login session leaves them
 running. Check explicit stop and account suspension. Confirm polling pauses on
 hidden/offline pages and stops at logout, and inspect keyboard/narrow-screen
@@ -485,8 +506,14 @@ appears in CacheStorage. Record actual observations and limits locally.
 For terminal/account acceptance, use a deliberately chosen disposable directory in the
 user's home. Connect the personal account through the code flow, verify the reported
 account, then intentionally run a small harmless Codex request in the chat. This may
-consume model allowance. Check detached work and reconnection, cancellation of a second
-login, saved-account persistence after Stop/start and explicit account disconnect.
+consume model allowance. Check terminal folding, pointer/keyboard resizing, detached work
+and reconnection, cancellation of a second login, saved-account persistence after
+Stop/start and explicit account disconnect in Settings.
+Check sidebar collapse and terminal maximize/restore, Escape, keyboard focus, retained
+split width and terminal input, including reduced motion and narrow screens. Scrollbars
+should stay discreet while remaining usable by pointer and keyboard.
+Verify Markdown emphasis, links, lists, tables and fenced code in completed and streaming
+replies, including narrow screens; embedded HTML and images must stay inert.
 Verify model selection, streamed output, questions, cancellation and recovery where
 available, and confirm the full-access disclosure. Verify cross-user separation and the
 fresh environment on a disposable home before using it for important work. Synthetic

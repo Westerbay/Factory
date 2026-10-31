@@ -93,21 +93,20 @@ export class ConnectionFailure extends ApiFailure {
 }
 
 const problems: Record<string, string> = {
-  unavailable:
-    "Codex is unavailable. Check your environment and try refreshing.",
+  unavailable: "Codex is unavailable. Check again in a moment.",
   unsupported_method:
     "This environment uses an API key or another unsupported method. Connect your personal ChatGPT/Codex account instead.",
   login_failed:
-    "Codex did not confirm sign-in. Refresh the status before trying again.",
+    "Codex did not confirm sign-in. Check the status before trying again.",
   invalid_provider_response:
-    "The Codex response could not be verified. Refresh the status before trying again.",
+    "The Codex response could not be verified. Check the status before trying again.",
   cancelled: "Sign-in was cancelled.",
   expired:
-    "The sign-in code has expired. Refresh the status before starting again.",
+    "The sign-in code has expired. Check the status before starting again.",
   timeout:
-    "The operation timed out. Its result is unknown; refresh the status.",
+    "The operation timed out. Its result is unknown; check the status again.",
   cleanup_uncertain:
-    "The sign-in controller may still be closing. Refresh before retrying; recovery can take up to 10 minutes.",
+    "Sign-in may still be closing. Check again before retrying; recovery can take up to 10 minutes.",
 }
 export function connectionProblem(code?: string | null): string | undefined {
   return code && Object.hasOwn(problems, code) ? problems[code] : undefined
@@ -115,13 +114,13 @@ export function connectionProblem(code?: string | null): string | undefined {
 export function connectionErrorMessage(error: unknown): string {
   if (error instanceof ConnectionFailure) {
     if (error.status === 409)
-      return "Another sign-in may be active, or your environment changed. Refresh its status; no new sign-in was started automatically."
+      return "Another sign-in may be active, or your environment changed. Check its status; no new sign-in was started automatically."
     if (error.status === 429)
-      return "Too many requests. Wait a moment, then refresh."
+      return "Too many requests. Wait a moment, then check again."
     const problem = connectionProblem(error.code)
     if (problem) return problem
   }
-  return "The Codex account status could not be confirmed. Refresh to check again."
+  return "The Codex account status could not be confirmed. Check again to retry."
 }
 
 // The private client disables HTTP caching and handles session invalidation centrally.

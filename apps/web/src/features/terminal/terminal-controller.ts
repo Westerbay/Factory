@@ -1,4 +1,5 @@
 import { ApiFailure } from "../../lib/api/client"
+import type { Session } from "../../lib/auth/session-api"
 import type { SessionController } from "../../lib/auth/session-controller"
 import {
   type ClientMessage,
@@ -41,7 +42,7 @@ const encoder = new TextEncoder()
 export class TerminalController {
   private state: TerminalState = {
     status: "idle",
-    message: "Open your terminal to attach to its persistent shell.",
+    message: "",
   }
   private listeners = new Set<() => void>()
   private generation = 0
@@ -52,7 +53,7 @@ export class TerminalController {
   private openingTimer?: ReturnType<typeof setTimeout>
   private input = ""
   private pendingOutput = 0
-  private userId?: string
+  private session?: Session
   private size = { cols: 80, rows: 24 }
 
   constructor(private dependencies: Dependencies) {}
@@ -84,7 +85,12 @@ export class TerminalController {
   }
   private sessionChanged = () => {
     const state = this.dependencies.session.getSnapshot()
-    if (state.status !== "active" || state.session.user.id !== this.userId) {
+    if (
+      state.status !== "active" ||
+      state.session.user.id !== this.session?.user.id ||
+      state.session.csrfToken !== this.session.csrfToken ||
+      state.session.user.role !== this.session.user.role
+    ) {
       this.closeTransport()
       this.dependencies.display.reset()
       this.set({
@@ -104,7 +110,7 @@ export class TerminalController {
       this.sessionChanged()
       return
     }
-    this.userId = auth.session.user.id
+    this.session = auth.session
     const generation = this.generation
     this.dependencies.display.reset()
     this.set({ status: "opening", message: "Opening your terminal…" })
@@ -210,7 +216,7 @@ export class TerminalController {
       clearTimeout(this.openingTimer)
       this.set({
         status: "connected",
-        message: "Connected. Closing this view leaves your command running.",
+        message: "",
       })
       this.send({ type: "resize", ...this.size })
     } else if (message.type === "exit") {

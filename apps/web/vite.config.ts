@@ -19,7 +19,13 @@ export default defineConfig({
       registerType: "prompt",
       includeManifestIcons: false,
       injectManifest: {
-        globPatterns: ["assets/**/*.{js,css}", "icons/*.png", "offline.html"],
+        globPatterns: [
+          "assets/**/*.{js,css}",
+          "icons/*.png",
+          "fonts/**/*.woff2",
+          "brand/*.svg",
+          "offline.html",
+        ],
       },
       manifest: {
         id: "/",
@@ -29,8 +35,8 @@ export default defineConfig({
         start_url: "/app",
         scope: "/",
         display: "standalone",
-        background_color: "#f7f8fa",
-        theme_color: "#5340ac",
+        background_color: "#17181a",
+        theme_color: "#17181a",
         icons: [
           { src: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
           { src: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },

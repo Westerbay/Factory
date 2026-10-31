@@ -35,9 +35,11 @@ The CLI displays the selected profile and asks you to type its username to confi
 It stores the stable provider ID and refuses to replace an existing administrator.
 Environment preparation builds pinned workspace and egress-proxy images and records
 their immutable identities in `.factory/environments`; it does not create user containers.
-The first workspace visit by an active member initializes the user's container and
-persistent home volume. Existing stopped environments require explicit Start. Stop preserves files but ends running processes. Keep the preparation directory
-with its Docker resources. Docker Engine API 1.48+ and isolated bridge support are required;
+Workspace entry automatically initializes the user's container and persistent home or
+starts an existing stopped environment after checking recovery. Profile **Stop environment**
+requires confirmation, preserves saved files and ends running processes; it stays stopped
+until **Return to workspace** or a new browser entry. Keep the preparation directory with
+its Docker resources. Docker Engine API 1.48+ and isolated bridge support are required;
 the runtime refuses unsupported isolation instead of falling back.
 Then run these in separate terminals:
 
@@ -58,8 +60,11 @@ users, sessions and conversations. Existing Docker homes and containers are not 
 they are no longer associated with the new database. Set up the administrator again.
 Missing environment preparation leaves only environments unavailable when identity is otherwise ready.
 
-Once Running, choose **Connect Codex** and authorize your personal account. After the
-connection is confirmed, the workspace presents chat and a terminal. Full-access Codex
+After workspace preparation, choose **Codex** and authorize your personal account. A saved
+confirmed account opens chat directly. The terminal icon folds or opens the side panel;
+drag its separator to resize, or maximize it from its header. The chats sidebar can
+collapse independently. Returning to the tab checks the session in the background.
+Full-access Codex
 can read and modify the container user's files and credentials without per-action
 approval. Closing Factory leaves the shell running; reconnecting never replays unsent input. See the
 [terminal and account instructions](docs/DEVELOPMENT.md#terminal-and-codex-account).

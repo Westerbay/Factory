@@ -1,3 +1,9 @@
+.admin-shell {
+  min-height: 100dvh;
+}
+
+.admin-header,
+.admin-account-controls,
 .admin-toolbar,
 .admin-filters,
 .admin-actions,
@@ -7,28 +13,81 @@
   align-items: center;
   gap: 0.75rem;
 }
+
+.admin-header {
+  justify-content: space-between;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-sidebar);
+}
+
+.admin-account-controls {
+  justify-content: flex-end;
+}
+
+.admin-account-name {
+  max-width: 16rem;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.admin-content {
+  width: min(100%, 64rem);
+  margin-inline: auto;
+  padding: 3rem 1.5rem;
+}
+
+.admin-content h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: -0.04em;
+}
+
+.admin-content .eyebrow {
+  margin: 0 0 0.75rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.admin-content .introduction {
+  max-width: 65ch;
+  margin: 1rem 0 2rem;
+  color: var(--text-muted);
+  line-height: 1.75;
+}
+
 .admin-toolbar {
   justify-content: space-between;
   margin-bottom: 1.5rem;
 }
+
+.admin-filters {
+  gap: 0.5rem;
+}
+
 .admin-filters button[aria-pressed="true"] {
-  background: #5340ac;
-  color: #fff;
-  border-color: #5340ac;
+  border-color: var(--text-muted);
+  background: var(--surface-hover);
+  color: var(--text);
 }
 .admin-notice {
-  padding: 1rem;
-  border: 1px solid #d6d1e4;
-  border-radius: 0.5rem;
-  background: #fff;
   margin: 1rem 0;
-  line-height: 1.6;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  line-height: 1.65;
 }
 .admin-user-list {
-  list-style: none;
-  padding: 0;
   display: grid;
-  gap: 1rem;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 .admin-user-card {
   display: grid;
@@ -36,36 +95,40 @@
   align-items: center;
   gap: 1.25rem;
   padding: 1.25rem;
-  background: #fff;
-  border: 1px solid #dcdee5;
-  border-radius: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
 }
 .admin-identity {
   overflow-wrap: anywhere;
 }
 .admin-identity h2 {
-  font-weight: 650;
+  margin: 0 0 0.25rem;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+.admin-identity p {
+  margin: 0;
 }
 .admin-identity p,
 .admin-details,
 .admin-protected,
 .admin-pagination span {
-  color: #5d6069;
-  font-size: 0.875rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
 }
 .admin-details {
   display: flex;
   flex-wrap: wrap;
-  gap: 1rem;
+  gap: 1.25rem;
   margin: 0;
 }
 .admin-details dt {
-  font-size: 0.75rem;
   margin-bottom: 0.25rem;
 }
 .admin-details dd {
   margin: 0;
-  color: #242529;
+  color: var(--text);
   text-transform: capitalize;
 }
 .admin-user-card > .admin-actions {
@@ -77,38 +140,18 @@
 }
 .admin-empty {
   padding: 2rem 0;
-  color: #5d6069;
-}
-.suspend-dialog {
-  width: min(30rem, calc(100vw - 2rem));
-  margin: auto;
-  border: 1px solid #d6d1e4;
-  border-radius: 0.75rem;
-  padding: 1.5rem;
-  background: #fff;
-  color: #242529;
-}
-.suspend-dialog::backdrop {
-  background: #15111c80;
-}
-.suspend-dialog h2 {
-  font-size: 1.25rem;
-  overflow-wrap: anywhere;
-}
-.suspend-dialog p {
-  margin: 1rem 0 1.5rem;
-  line-height: 1.6;
-}
-.danger-action {
-  background: #a72e36;
-  border-color: #a72e36;
-  color: #fff;
-}
-.danger-action:hover:enabled {
-  background: #85242b;
+  color: var(--text-muted);
 }
 @media (max-width: 42rem) {
+  .admin-content {
+    padding: 2rem 1rem;
+  }
+
   .admin-user-card {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-account-name {
+    display: none;
   }
 }

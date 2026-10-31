@@ -1,0 +1,219 @@
+.ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 2.25rem;
+  padding: 0.5rem 0.875rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.4;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    opacity var(--motion-fast) var(--ease-out),
+    transform var(--motion-fast) var(--ease-out);
+}
+
+.ui-button:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.ui-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.ui-button:focus-visible,
+.ui-brand:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 3px;
+}
+
+.ui-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.ui-button-primary {
+  border-color: transparent;
+  background: var(--text);
+  color: var(--surface-sidebar);
+}
+
+.ui-button-primary:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--text) 85%, var(--surface-sidebar));
+}
+
+.ui-button-ghost {
+  border-color: transparent;
+  background: transparent;
+}
+
+.ui-button-danger {
+  border-color: transparent;
+  background: var(--negative);
+  color: var(--surface-sidebar);
+}
+
+.ui-button-danger:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--negative) 85%, var(--text));
+}
+
+.ui-button svg {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+}
+
+.ui-icon-button {
+  width: 2.25rem;
+  min-width: 2.25rem;
+  padding: 0.5rem;
+}
+
+.ui-brand {
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 1.125rem;
+  font-weight: 700;
+  letter-spacing: -0.05em;
+  text-decoration: none;
+}
+
+.ui-brand:hover {
+  color: var(--text);
+}
+
+.ui-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 2rem;
+  text-align: center;
+}
+
+.ui-loading-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 1rem;
+}
+
+.ui-spinner {
+  width: 1.25rem;
+  height: 1.25rem;
+  border: 2px solid var(--border);
+  border-top-color: var(--text);
+  border-radius: 50%;
+  animation: ui-spin 900ms linear infinite;
+}
+
+@keyframes ui-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+.ui-modal {
+  width: min(30rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  margin: auto;
+  padding: 1.75rem;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: 0 1rem 3rem
+    color-mix(in oklch, var(--surface-sidebar) 70%, transparent);
+  opacity: 0;
+  transform: translateY(0.375rem) scale(0.99);
+  transition:
+    opacity var(--motion-normal) var(--ease-out),
+    transform var(--motion-normal) var(--ease-out),
+    display var(--motion-normal) allow-discrete,
+    overlay var(--motion-normal) allow-discrete;
+}
+
+.ui-modal[open] {
+  opacity: 1;
+  transform: none;
+}
+
+.ui-modal::backdrop {
+  background: color-mix(in oklch, var(--surface-sidebar) 78%, transparent);
+  opacity: 0;
+  transition:
+    opacity var(--motion-normal) var(--ease-out),
+    display var(--motion-normal) allow-discrete,
+    overlay var(--motion-normal) allow-discrete;
+}
+
+.ui-modal[open]::backdrop {
+  opacity: 1;
+}
+
+.ui-modal h2 {
+  margin: 0 0 1rem;
+  font-size: 1.125rem;
+  font-weight: 700;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.ui-modal p {
+  margin: 0.75rem 0;
+  color: var(--text-muted);
+  line-height: 1.65;
+}
+
+.ui-modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1.5rem;
+}
+
+@starting-style {
+  .ui-modal[open] {
+    opacity: 0;
+    transform: translateY(0.375rem) scale(0.99);
+  }
+
+  .ui-modal[open]::backdrop {
+    opacity: 0;
+  }
+}
+
+@media (pointer: coarse) {
+  .ui-button {
+    min-height: 2.75rem;
+  }
+
+  .ui-icon-button {
+    min-width: 2.75rem;
+    width: 2.75rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-button,
+  .ui-modal,
+  .ui-modal::backdrop {
+    transition: none;
+  }
+
+  .ui-button:active:not(:disabled),
+  .ui-modal {
+    transform: none;
+  }
+
+  .ui-spinner {
+    animation: none;
+  }
+}

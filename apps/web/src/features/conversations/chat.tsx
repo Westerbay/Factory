@@ -5,14 +5,25 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react"
 
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { ArrowDown } from "lucide-react"
+
+import { Button } from "../../components/ui/button"
+import { LoadingState } from "../../components/ui/loading-state"
+import { ChatComposer } from "./chat-composer"
+import {
+  ConversationNavigation,
+  conversationLabel,
+} from "./conversation-navigation"
 
 import { ApiFailure } from "../../lib/api/client"
 import { useSession } from "../../lib/auth/session-context"
 import * as api from "./api"
-import { modelQueryOptions } from "./model-query"
+import { modelQueryKey, modelQueryOptions } from "./model-query"
+import { MessageMarkdown } from "./message-markdown"
 import {
   latestReader,
   runOutcome,
@@ -28,8 +39,23 @@ type PendingSend = {
   conversation: string
 }
 
-export function Chat({ available }: { available: boolean }) {
+type ChatLayout = {
+  navigation: ReactNode
+  conversation: ReactNode
+  title: string
+}
+
+export function Chat({
+  available,
+  resuming = false,
+  renderLayout,
+}: {
+  available: boolean
+  resuming?: boolean
+  renderLayout: (parts: ChatLayout) => ReactNode
+}) {
   const { state: session, controller: sessionController } = useSession()
+  const queryClient = useQueryClient()
   const [conversations, setConversations] = useState<api.Conversation[]>([])
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -38,6 +64,7 @@ export function Chat({ available }: { available: boolean }) {
   const selectedRef = useRef<string | undefined>(undefined)
   selectedRef.current = selected
   const [history, setHistory] = useState<api.History>()
+  const [verifiedHistory, setVerifiedHistory] = useState<string>()
   const [model, setModel] = useState("")
   const [input, setInput] = useState("")
   const [busy, setBusy] = useState(false)
@@ -50,6 +77,13 @@ export function Chat({ available }: { available: boolean }) {
   const following = useRef(true)
   const shownConversation = useRef<string | undefined>(undefined)
   const shownContent = useRef("")
+  const savedScroll = useRef<{ conversation: string | undefined; top: number }>(
+    {
+      conversation: undefined,
+      top: 0,
+    }
+  )
+  const restoreScroll = useRef(true)
   const [newMessages, setNewMessages] = useState(false)
   const pendingSend = useRef<PendingSend | null>(null)
   const pendingAnswers = useRef(
@@ -64,7 +98,13 @@ export function Chat({ available }: { available: boolean }) {
     enabled: available && Boolean(userId),
   })
   const models = modelQuery.data ?? []
-  const modelError = modelQuery.isError
+  // A refetch can retain the previous failure while recovering successfully.
+  const modelError = modelQuery.isError && modelQuery.fetchStatus === "idle"
+  useEffect(() => {
+    // Disabling a query alone does not stop a retry already in progress.
+    if (!available)
+      void queryClient.cancelQueries({ queryKey: modelQueryKey(userId) })
+  }, [available, queryClient, userId])
   const acceptHistory = useCallback((value: api.History) => {
     for (const [id, pending] of pendingAnswers.current) {
       if (pending.sent && !value.requests.some((request) => request.id === id))
@@ -74,7 +114,7 @@ export function Chat({ available }: { available: boolean }) {
   }, [])
 
   const report = useCallback(
-    (error: unknown) => {
+    (error: unknown, showMessage = true) => {
       if (
         error instanceof ApiFailure &&
         (error.status === 401 || error.status === 403)
@@ -82,10 +122,11 @@ export function Chat({ available }: { available: boolean }) {
         sessionController.authorizationFailed()
         return
       }
+      if (!showMessage) return
       setMessage(
         error instanceof ApiFailure && error.status === 409
-          ? "The conversation changed or is still starting. Refresh its status."
-          : "The conversation could not be updated. Check the connection and refresh."
+          ? "The conversation changed or is still starting. Check its status before trying again."
+          : "The conversation could not be updated. Check its status before trying again."
       )
     },
     [sessionController]
@@ -125,7 +166,7 @@ export function Chat({ available }: { available: boolean }) {
         if (controller.signal.aborted || generation !== listGeneration.current)
           return
         setListError(true)
-        report(error)
+        report(error, false)
       })
     return () => {
       controller.abort()
@@ -141,18 +182,19 @@ export function Chat({ available }: { available: boolean }) {
     )
   }, [modelQuery.data])
   useEffect(() => {
-    if (modelQuery.error) report(modelQuery.error)
+    if (modelQuery.error) report(modelQuery.error, false)
   }, [modelQuery.error, report])
   useEffect(() => {
     if (!selected || !available) return
     const controller = new AbortController()
-    setHistory(undefined)
-    setDelta("")
-    setAnswers({})
     void historyReader
       .read(selected, controller.signal)
       .then((value) => {
-        if (value) acceptHistory(value)
+        if (value) {
+          setDelta("")
+          acceptHistory(value)
+          setVerifiedHistory(selected)
+        }
       })
       .catch((error: unknown) => {
         if (!controller.signal.aborted) report(error)
@@ -160,13 +202,18 @@ export function Chat({ available }: { available: boolean }) {
     return () => {
       controller.abort()
       historyReader.invalidate()
+      setVerifiedHistory(undefined)
     }
   }, [selected, available, report, historyReader, acceptHistory])
-  const activeRun = history?.runs
+  const currentHistory =
+    history?.conversation.id === selected ? history : undefined
+  const activeRun = currentHistory?.runs
     .slice()
     .reverse()
     .find((run) => run.status === "active")
-  const activeId = activeRun?.id
+  // Reconcile the resumed snapshot before subscribing again. Otherwise its
+  // completion can erase deltas that arrived on the new stream in the meantime.
+  const activeId = verifiedHistory === selected ? activeRun?.id : undefined
   useEffect(() => {
     if (!selected || !activeId || !available) return
     const controller = new AbortController()
@@ -220,12 +267,29 @@ export function Chat({ available }: { available: boolean }) {
 
   async function reload(id = selected) {
     const signal = lifetime.current?.signal
-    if (!id || !signal || signal.aborted || !available) return
+    if (
+      !id ||
+      !signal ||
+      signal.aborted ||
+      !available ||
+      sessionController.getSnapshot().status !== "active"
+    )
+      return
     const value = await historyReader.read(id, signal)
-    if (value) acceptHistory(value)
+    if (value) {
+      if (verifiedHistory !== id) setDelta("")
+      acceptHistory(value)
+      setVerifiedHistory(id)
+    }
   }
   async function perform(action: () => Promise<void>) {
-    if (busy || !csrf || !lifetime.current) return
+    if (
+      busy ||
+      !csrf ||
+      !lifetime.current ||
+      sessionController.getSnapshot().status !== "active"
+    )
+      return
     const signal = lifetime.current.signal
     setBusy(true)
     setMessage("")
@@ -240,7 +304,14 @@ export function Chat({ available }: { available: boolean }) {
   async function loadOlder() {
     const signal = lifetime.current?.signal
     const cursor = nextCursor
-    if (!signal || signal.aborted || !cursor || loadingMore || !available)
+    if (
+      !signal ||
+      signal.aborted ||
+      !cursor ||
+      loadingMore ||
+      !available ||
+      sessionController.getSnapshot().status !== "active"
+    )
       return
     const generation = listGeneration.current
     setLoadingMore(true)
@@ -253,7 +324,7 @@ export function Chat({ available }: { available: boolean }) {
     } catch (error) {
       if (!signal.aborted && generation === listGeneration.current) {
         setListError(true)
-        report(error)
+        report(error, false)
       }
     } finally {
       if (!signal.aborted) setLoadingMore(false)
@@ -266,11 +337,23 @@ export function Chat({ available }: { available: boolean }) {
       setConversations((items) => [created, ...items])
       setSelected(created.id)
       setInput("")
+      setDelta("")
+      setAnswers({})
       pendingSend.current = null
     })
   }
   function send() {
-    if (!selected || !input.trim() || !model || activeRun || !available) return
+    if (
+      !selected ||
+      !currentHistory ||
+      verifiedHistory !== selected ||
+      !input.trim() ||
+      !model ||
+      activeRun ||
+      uncertain ||
+      !available
+    )
+      return
     const previous = pendingSend.current
     const operation =
       previous &&
@@ -323,7 +406,7 @@ export function Chat({ available }: { available: boolean }) {
     const previous = pendingAnswers.current.get(request.id)
     if (previous && previous.answer !== serialized) {
       setMessage(
-        "The previous answer may have been sent. Refresh its status before changing it."
+        "The previous answer may have been sent. Check its status before changing it."
       )
       return
     }
@@ -347,32 +430,78 @@ export function Chat({ available }: { available: boolean }) {
       await reload()
     })
   }
-  const latestMessage = history?.messages[history.messages.length - 1]
-  const contentVersion = `${history?.messages.length ?? 0}:${latestMessage?.id ?? ""}:${latestMessage?.content.length ?? 0}:${delta}`
-  useLayoutEffect(() => {
-    const element = messagesView.current
-    if (!element || !selected || history?.conversation.id !== selected) return
-    if (shownConversation.current !== selected) {
-      shownConversation.current = selected
-      shownContent.current = contentVersion
-      following.current = true
-      setNewMessages(false)
-      element.scrollTop = element.scrollHeight
+  const latestMessage =
+    currentHistory?.messages[currentHistory.messages.length - 1]
+  const requestVersion =
+    currentHistory?.requests
+      .map((request) => `${request.id}:${request.state}`)
+      .join(",") ?? ""
+  const contentVersion = `${currentHistory?.messages.length ?? 0}:${latestMessage?.id ?? ""}:${latestMessage?.content.length ?? 0}:${requestVersion}:${delta}`
+  const viewport = useRef({
+    selected,
+    historyId: history?.conversation.id,
+    contentVersion,
+  })
+  viewport.current = {
+    selected,
+    historyId: history?.conversation.id,
+    contentVersion,
+  }
+  const positionMessages = useCallback((element: HTMLDivElement) => {
+    const current = viewport.current
+    if (!current.selected || current.historyId !== current.selected) {
+      restoreScroll.current = true
       return
     }
-    if (shownContent.current === contentVersion) return
-    shownContent.current = contentVersion
+    // A hidden mobile pane has no usable geometry. Observe its reveal before
+    // marking content seen, without changing a reader's manual scroll choice.
+    if (!element.clientHeight) return
+    if (shownConversation.current !== current.selected) {
+      shownConversation.current = current.selected
+      following.current = true
+    }
     if (following.current) {
       element.scrollTop = element.scrollHeight
       setNewMessages(false)
     } else {
-      setNewMessages(true)
+      if (
+        restoreScroll.current &&
+        savedScroll.current.conversation === current.selected
+      )
+        element.scrollTop = savedScroll.current.top
+      if (shownContent.current !== current.contentVersion) setNewMessages(true)
     }
-  }, [selected, history?.conversation.id, contentVersion])
+    restoreScroll.current = false
+    shownContent.current = current.contentVersion
+  }, [])
+  const observeMessages = useCallback(
+    (element: HTMLDivElement | null) => {
+      messagesView.current = element
+      if (!element) return
+      restoreScroll.current = true
+      const observer = new ResizeObserver(() => positionMessages(element))
+      observer.observe(element)
+      positionMessages(element)
+      return () => {
+        if (element.clientHeight)
+          savedScroll.current = {
+            conversation: shownConversation.current,
+            top: element.scrollTop,
+          }
+        observer.disconnect()
+        messagesView.current = null
+      }
+    },
+    [positionMessages]
+  )
+  useLayoutEffect(() => {
+    if (messagesView.current) positionMessages(messagesView.current)
+  }, [selected, history?.conversation.id, contentVersion, positionMessages])
 
   function onMessageScroll() {
     const element = messagesView.current
-    if (!element) return
+    if (!element?.clientHeight || !currentHistory) return
+    savedScroll.current = { conversation: selected, top: element.scrollTop }
     following.current =
       element.scrollHeight - element.clientHeight - element.scrollTop <= 48
     if (following.current) setNewMessages(false)
@@ -384,302 +513,307 @@ export function Chat({ available }: { available: boolean }) {
     element.scrollTop = element.scrollHeight
     setNewMessages(false)
   }
-  const uncertain = history?.runs
+  const uncertain = currentHistory?.runs
     .slice()
     .reverse()
     .find(
       (run) =>
-        run.status === "uncertain" || (!available && run.status === "active")
+        run.status === "uncertain" ||
+        (!available && !resuming && run.status === "active")
     )
-  return (
-    <section className="chat" aria-labelledby="chat-title">
-      <div className="chat-heading">
-        <div>
-          <p className="chat-kicker">Workspace</p>
-          <h1 id="chat-title">Codex</h1>
-        </div>
-        <button
-          type="button"
-          onClick={newConversation}
-          disabled={!available || busy}
-        >
-          New chat
-        </button>
-      </div>
-      <p className="chat-access">
-        Full access: Codex can read, change or delete files and credentials
-        inside your environment without asking for each action.
-      </p>
-      <div className="chat-toolbar">
-        <label>
-          Conversation{" "}
-          <select
-            value={selected ?? ""}
-            onChange={(event) => {
-              pendingSend.current = null
-              setSelected(event.target.value || undefined)
-            }}
-            disabled={busy || !available}
-          >
-            <option value="">Select a conversation</option>
-            {conversations.map((item, index) => (
-              <option key={item.id} value={item.id}>
-                Chat {conversations.length - index} ·{" "}
-                {new Date(item.createdAt).toLocaleString()}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          type="button"
-          disabled={!selected || !available || busy}
-          onClick={() => {
-            void reload().catch(report)
-          }}
-        >
-          Refresh
-        </button>
-      </div>
-      {nextCursor && (
-        <button
-          type="button"
-          disabled={!available || loadingMore}
-          onClick={() => void loadOlder()}
-        >
-          {loadingMore
-            ? "Loading older conversations…"
-            : "Load older conversations"}
-        </button>
-      )}
-      {(listError || modelError) && (
-        <div className="chat-notice">
-          <p>
-            {listError && "Conversation list is unavailable. "}
-            {modelError &&
-              "Model list is unavailable; existing conversations remain accessible. Retry, or stop the environment and restore model access if the issue persists."}
-          </p>
-          <button
-            type="button"
-            disabled={!available}
-            onClick={() => {
-              setMessage("")
-              setResourceVersion((value) => value + 1)
-              if (modelError) void modelQuery.refetch()
-            }}
-          >
-            Retry workspace data
-          </button>
-        </div>
-      )}
-      <p role="status" aria-live="polite" className="chat-status">
-        {[runOutcome(history, available), message].filter(Boolean).join(" ")}
-      </p>
-      {uncertain && (
-        <div className="chat-notice">
-          <p>
-            The previous run has not been confirmed stopped. Stop the
-            environment and check Recovery in Environment and account before
-            starting another run. Some launches cannot be recovered
-            automatically.
-          </p>
-        </div>
-      )}
-      {history &&
-        (history.runsTruncated ||
-          history.messagesTruncated ||
-          history.requestsTruncated) && (
-          <p className="chat-notice" role="status">
-            Only recent conversation history is shown. Older{" "}
-            {[
-              history.runsTruncated && "runs",
-              history.messagesTruncated && "messages",
-              history.requestsTruncated && "requests",
-            ]
-              .filter(Boolean)
-              .join(", ")}{" "}
-            are not displayed.
-          </p>
-        )}
-      <div
-        className="chat-messages"
-        ref={messagesView}
-        role="region"
-        tabIndex={0}
-        aria-label="Conversation messages"
-        onScroll={onMessageScroll}
-      >
-        {!selected && (
-          <div className="chat-empty">
-            <h2>Start a conversation</h2>
-            <p>
-              Create a chat, choose a model and describe what you want to work
-              on.
-            </p>
-            <button
-              type="button"
-              disabled={!available || busy}
-              onClick={newConversation}
-            >
-              New chat
-            </button>
-          </div>
-        )}
-        {selected && history && history.messages.length === 0 && !delta && (
-          <div className="chat-empty">
-            <h2>Ready when you are</h2>
-            <p>Describe a task below to start working with Codex.</p>
-          </div>
-        )}
-        {history?.messages.map((item) => (
-          <article
-            className={`chat-message chat-message-${item.role}`}
-            key={item.id}
-          >
-            <strong>{item.role === "user" ? "You" : "Codex"}</strong>
-            <p>{item.content}</p>
-          </article>
-        ))}
-        {delta && (
-          <article className="chat-message">
-            <strong>Codex</strong>
-            <p>{delta}</p>
-          </article>
-        )}
-      </div>
-      {(Boolean(history?.messages.length) || Boolean(delta)) && (
-        <button
-          type="button"
-          className="chat-latest"
-          aria-live="polite"
-          onClick={showLatest}
-        >
-          {newMessages ? "New messages · Jump to latest" : "Jump to latest"}
-        </button>
-      )}
-      {history?.requests.map((request) => {
-        const receipt = questionReceipt(
-          request.state,
-          pendingAnswers.current.get(request.id)?.sent ?? false
-        )
-        return (
-          <form
-            className="chat-questions"
-            key={request.id}
-            onSubmit={(event) => {
-              event.preventDefault()
-              respond(request)
-            }}
-          >
-            <h2>Codex has a question</h2>
-            {receipt.message && <p role="status">{receipt.message}</p>}
-            {request.questions.map((q) => (
-              <fieldset
-                key={q.id}
-                disabled={receipt.disabled || busy || !available}
-              >
-                <legend>
-                  {q.header}: {q.question}
-                </legend>
-                {q.options.map((option) => (
-                  <label key={option.label}>
-                    <input
-                      type="radio"
-                      name={q.id}
-                      value={option.label}
-                      checked={answers[q.id] === option.label}
-                      onChange={() =>
-                        setAnswers((state) => ({
-                          ...state,
-                          [q.id]: option.label,
-                        }))
-                      }
-                    />
-                    {option.label} <span>{option.description}</span>
-                  </label>
-                ))}
-                {q.allowFreeText && (
-                  <label>
-                    Other answer{" "}
-                    <input
-                      value={
-                        q.options.some((o) => o.label === answers[q.id])
-                          ? ""
-                          : (answers[q.id] ?? "")
-                      }
-                      onChange={(event) =>
-                        setAnswers((state) => ({
-                          ...state,
-                          [q.id]: event.target.value,
-                        }))
-                      }
-                    />
-                  </label>
-                )}
-              </fieldset>
-            ))}
-            <button disabled={receipt.disabled || busy || !available}>
-              Send answers
-            </button>
-          </form>
-        )
-      })}
-      <div className="chat-composer">
-        <label htmlFor="chat-input">Message Codex</label>
-        <textarea
-          id="chat-input"
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          placeholder="Describe what you want to work on…"
-          disabled={!selected || !available || busy}
-          rows={3}
-        />
-        <div className="chat-composer-actions">
-          <label>
-            Model{" "}
-            <select
-              value={model}
-              onChange={(event) => setModel(event.target.value)}
-              disabled={!available || busy || !models.length}
-            >
-              {models.length === 0 && (
-                <option value="">No models available</option>
-              )}
-              {models.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            onClick={() => void modelQuery.refetch()}
-            disabled={!available || modelQuery.isFetching}
-          >
-            {modelQuery.isFetching ? "Refreshing models…" : "Refresh models"}
-          </button>
-          {activeRun ? (
-            <button type="button" onClick={stop} disabled={busy || !available}>
-              Stop
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={send}
-              disabled={
-                !selected ||
-                !model ||
-                !input.trim() ||
-                busy ||
-                !available ||
-                Boolean(uncertain)
-              }
-            >
-              Send
-            </button>
-          )}
-        </div>
-      </div>
-    </section>
+  const selectedConversation = conversations.find(
+    (item) => item.id === selected
   )
+  const title = selectedConversation
+    ? conversationLabel(selectedConversation)
+    : "New chat"
+  const outcome = resuming
+    ? "Checking workspace…"
+    : runOutcome(currentHistory, available)
+  const latestRun = currentHistory?.runs[currentHistory.runs.length - 1]
+  const historyReady = Boolean(currentHistory) && verifiedHistory === selected
+  const submitDisabled =
+    !selected ||
+    !historyReady ||
+    !model ||
+    !input.trim() ||
+    busy ||
+    !available ||
+    Boolean(uncertain)
+
+  function selectConversation(id: string) {
+    if (id === selected) return
+    pendingSend.current = null
+    setMessage("")
+    setDelta("")
+    setAnswers({})
+    setSelected(id)
+  }
+  function retryList() {
+    setResourceVersion((value) => value + 1)
+  }
+  function retryHistory() {
+    setMessage("")
+    void reload().catch(report)
+  }
+
+  return renderLayout({
+    title,
+    navigation: (
+      <ConversationNavigation
+        conversations={conversations}
+        selected={selected}
+        available={available}
+        busy={busy}
+        hasOlder={Boolean(nextCursor)}
+        loadingMore={loadingMore}
+        failed={listError}
+        onCreate={newConversation}
+        onSelect={selectConversation}
+        onLoadOlder={() => void loadOlder()}
+        onRetry={retryList}
+      />
+    ),
+    conversation: (
+      <section
+        className="chat"
+        aria-label="Codex conversation"
+        aria-busy={resuming}
+      >
+        <div
+          className="chat-messages"
+          ref={observeMessages}
+          role="region"
+          tabIndex={0}
+          aria-label="Conversation messages"
+          onScroll={onMessageScroll}
+        >
+          <div className="chat-transcript">
+            {!selected && (
+              <div className="chat-empty">
+                <h2>What are we building?</h2>
+                <Button
+                  variant="primary"
+                  onClick={newConversation}
+                  disabled={!available || busy}
+                >
+                  New chat
+                </Button>
+              </div>
+            )}
+            {selected && !currentHistory && !message && available && (
+              <LoadingState title="Loading chat…" />
+            )}
+            {selected && currentHistory?.messages.length === 0 && !delta && (
+              <div className="chat-empty">
+                <h2>What are we building?</h2>
+              </div>
+            )}
+            {currentHistory &&
+              (currentHistory.runsTruncated ||
+                currentHistory.messagesTruncated ||
+                currentHistory.requestsTruncated) && (
+                <p className="chat-history-note" role="status">
+                  Only recent history is shown. Older{" "}
+                  {[
+                    currentHistory.runsTruncated && "runs",
+                    currentHistory.messagesTruncated && "messages",
+                    currentHistory.requestsTruncated && "requests",
+                  ]
+                    .filter(Boolean)
+                    .join(", ")}{" "}
+                  are not displayed.
+                </p>
+              )}
+            {currentHistory?.messages.map((item) => (
+              <article
+                className={`chat-message chat-message-${item.role}`}
+                key={item.id}
+                aria-label={
+                  item.role === "user" ? "Your message" : "Codex message"
+                }
+              >
+                {item.role === "assistant" && <strong>Codex</strong>}
+                {item.role === "assistant" ? (
+                  <MessageMarkdown>{item.content}</MessageMarkdown>
+                ) : (
+                  <p>{item.content}</p>
+                )}
+              </article>
+            ))}
+            {delta && currentHistory && (
+              <article
+                className="chat-message chat-message-assistant"
+                aria-label="Codex response in progress"
+              >
+                <strong>Codex</strong>
+                <MessageMarkdown>{delta}</MessageMarkdown>
+              </article>
+            )}
+            {currentHistory?.requests.map((request) => {
+              const receipt = questionReceipt(
+                request.state,
+                pendingAnswers.current.get(request.id)?.sent ?? false
+              )
+              return (
+                <form
+                  className="chat-questions"
+                  key={request.id}
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    respond(request)
+                  }}
+                >
+                  <h2>Codex has a question</h2>
+                  {receipt.message && <p role="status">{receipt.message}</p>}
+                  {request.questions.map((question) => (
+                    <fieldset
+                      key={question.id}
+                      disabled={receipt.disabled || busy || !available}
+                    >
+                      <legend>
+                        {question.header}: {question.question}
+                      </legend>
+                      {question.options.map((option) => (
+                        <label
+                          className="chat-question-choice"
+                          key={option.label}
+                        >
+                          <input
+                            type="radio"
+                            name={question.id}
+                            value={option.label}
+                            checked={answers[question.id] === option.label}
+                            onChange={() =>
+                              setAnswers((state) => ({
+                                ...state,
+                                [question.id]: option.label,
+                              }))
+                            }
+                          />
+                          <span>
+                            {option.label}
+                            <small>{option.description}</small>
+                          </span>
+                        </label>
+                      ))}
+                      {question.allowFreeText && (
+                        <label className="chat-free-answer">
+                          Other answer
+                          <input
+                            value={
+                              question.options.some(
+                                (option) =>
+                                  option.label === answers[question.id]
+                              )
+                                ? ""
+                                : (answers[question.id] ?? "")
+                            }
+                            onChange={(event) =>
+                              setAnswers((state) => ({
+                                ...state,
+                                [question.id]: event.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                      )}
+                    </fieldset>
+                  ))}
+                  <Button
+                    type="submit"
+                    disabled={receipt.disabled || busy || !available}
+                  >
+                    Send answers
+                  </Button>
+                </form>
+              )
+            })}
+          </div>
+        </div>
+        {newMessages && (
+          <Button
+            variant="secondary"
+            className="chat-latest"
+            onClick={showLatest}
+          >
+            <ArrowDown aria-hidden="true" size={14} />
+            Jump to latest
+          </Button>
+        )}
+        <div className="chat-bottom">
+          {modelQuery.failureCount > 5 && !modelError && !models.length && (
+            <p className="chat-status" role="status">
+              Model discovery is still busy. Retrying automatically.
+            </p>
+          )}
+          {modelError && (
+            <div className="chat-notice" role="status">
+              <p>
+                {models.length
+                  ? "Models could not be updated. Your previous selection remains available."
+                  : "Models could not be loaded. Existing chats remain available."}
+              </p>
+              <Button
+                variant="ghost"
+                disabled={!available || modelQuery.isFetching}
+                onClick={() =>
+                  void modelQuery.refetch({ cancelRefetch: false })
+                }
+              >
+                Retry models
+              </Button>
+            </div>
+          )}
+          {message && (
+            <div className="chat-notice" role="status">
+              <p>{message}</p>
+              {selected && (
+                <Button
+                  variant="ghost"
+                  disabled={!available || busy}
+                  onClick={retryHistory}
+                >
+                  Check status
+                </Button>
+              )}
+            </div>
+          )}
+          {uncertain && (
+            <p className="chat-notice" role="status">
+              This run is not confirmed stopped. Use Stop environment in your
+              profile, then recover the run before continuing. Some launches
+              need administrator help.
+            </p>
+          )}
+          {outcome && !uncertain && (
+            <p
+              className={
+                resuming || latestRun?.status === "completed"
+                  ? "sr-only"
+                  : "chat-status"
+              }
+              role="status"
+              aria-live="polite"
+            >
+              {outcome}
+            </p>
+          )}
+          <ChatComposer
+            input={input}
+            model={model}
+            models={models}
+            disabled={!selected || !historyReady || !available || busy}
+            sendDisabled={submitDisabled}
+            running={Boolean(activeRun)}
+            stopDisabled={busy || !available}
+            onInput={setInput}
+            onModel={setModel}
+            onSend={send}
+            onStop={stop}
+          />
+        </div>
+      </section>
+    ),
+  })
 }

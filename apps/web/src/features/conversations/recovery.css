@@ -1,0 +1,68 @@
+.workspace-recovery {
+  width: min(100%, 40rem);
+  margin: 1.5rem auto 0;
+  text-align: left;
+}
+
+.workspace-recovery p {
+  margin: 0.75rem 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.workspace-recovery-tasks h2 {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.workspace-recovery-tasks ul {
+  display: grid;
+  gap: 1rem;
+  margin: 1rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workspace-recovery-status:empty {
+  display: none;
+}
+
+.workspace-recovery-options summary {
+  width: fit-content;
+  padding-block: 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.workspace-recovery-options summary:hover {
+  color: var(--text);
+}
+
+.workspace-recovery-options summary:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 3px;
+  border-radius: var(--radius-control);
+}
+
+.workspace-recovery-options-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding-block: 0.25rem 0.5rem;
+}
+
+.workspace-recovery-options-body p {
+  width: 100%;
+  margin-top: 0;
+}
+
+@media (pointer: coarse) {
+  .workspace-recovery-options summary {
+    display: list-item;
+    min-height: 2.75rem;
+    padding-block: 0.75rem;
+  }
+}

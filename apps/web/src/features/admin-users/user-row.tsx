@@ -1,6 +1,7 @@
 import { useRef, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 
+import { Button } from "../../components/ui/button"
 import { ApiFailure } from "../../lib/api/client"
 import { changeAccess, type AdminUser, type AccessAction } from "./api"
 import { SuspendDialog } from "./suspend-dialog"
@@ -69,17 +70,17 @@ export function UserRow({
         ) : (
           <>
             {user.status !== "active" && (
-              <button
+              <Button
                 type="button"
                 disabled={change.isPending}
                 onClick={() => change.mutate("active")}
                 aria-label={`Activate ${name}`}
               >
                 Activate
-              </button>
+              </Button>
             )}
             {user.status !== "suspended" && (
-              <button
+              <Button
                 ref={suspendButton}
                 type="button"
                 disabled={change.isPending}
@@ -87,7 +88,7 @@ export function UserRow({
                 aria-label={`Suspend ${name}`}
               >
                 Suspend
-              </button>
+              </Button>
             )}
           </>
         )}

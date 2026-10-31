@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 
+import { Button } from "../../components/ui/button"
 import { useSession } from "../../lib/auth/session-context"
 import type { Session } from "../../lib/auth/session-api"
 import { listUsers, type UserStatus } from "./api"
@@ -63,7 +64,7 @@ function AdminUsersList({
           aria-label="Filter users by access status"
         >
           {(["pending", "active", "suspended"] as const).map((filter) => (
-            <button
+            <Button
               key={filter}
               type="button"
               aria-pressed={status === filter}
@@ -73,16 +74,16 @@ function AdminUsersList({
               }}
             >
               {filter.charAt(0).toUpperCase() + filter.slice(1)}
-            </button>
+            </Button>
           ))}
         </div>
-        <button
+        <Button
           type="button"
           disabled={users.isFetching}
           onClick={() => void users.refetch()}
         >
           Refresh list
-        </button>
+        </Button>
       </div>
       {notice && (
         <p className="admin-notice" role="status" ref={noticeRef} tabIndex={-1}>
@@ -112,15 +113,15 @@ function AdminUsersList({
             <p className="admin-empty">No {status} users on this page.</p>
           )}
           <nav className="admin-pagination" aria-label="User list pages">
-            <button
+            <Button
               type="button"
               disabled={!cursor || users.isFetching}
               onClick={() => onPage()}
             >
               First page
-            </button>
+            </Button>
             <span>{users.data.items.length} shown · Up to 20 per page</span>
-            <button
+            <Button
               type="button"
               disabled={!users.data.nextCursor || users.isFetching}
               onClick={() => {
@@ -128,7 +129,7 @@ function AdminUsersList({
               }}
             >
               Next page
-            </button>
+            </Button>
           </nav>
         </>
       )}

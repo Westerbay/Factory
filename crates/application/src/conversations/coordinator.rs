@@ -1,4 +1,7 @@
-use super::ConversationService;
+use super::{
+    ConversationService,
+    model_probes::{ModelProbeResult, ModelProbes},
+};
 use crate::agent_connections::AgentConnectionService;
 use factory_core::{
     agent_connections::ConnectionStatus,
@@ -6,8 +9,8 @@ use factory_core::{
         ConversationError, PendingRequest, RequestKind, RequestState, ResponseState, Run,
         RunStatus,
         execution::{
-            ExecutionControl, ExecutionError, ExecutionEvent, ExecutionOutput, ExecutionQuestion,
-            ExecutionRuntime, QuestionAnswer, validate_answers,
+            ExecutionControl, ExecutionError, ExecutionEvent, ExecutionModel, ExecutionOutput,
+            ExecutionQuestion, ExecutionRuntime, QuestionAnswer, validate_answers,
         },
     },
     environments::{Environment, EnvironmentActor},
@@ -81,6 +84,7 @@ pub struct ConversationRuntime {
     accounts: Arc<AgentConnectionService>,
     active: Mutex<HashMap<Uuid, Arc<Active>>>,
     account_gates: AccountGates,
+    model_probes: ModelProbes,
     inflight: Mutex<HashMap<Uuid, Uuid>>,
 }
 impl ConversationRuntime {
@@ -99,22 +103,45 @@ impl ConversationRuntime {
             accounts,
             active: Mutex::new(HashMap::new()),
             account_gates: AccountGates::default(),
+            model_probes: ModelProbes::default(),
             inflight: Mutex::new(HashMap::new()),
         })
     }
     pub async fn models(
         &self,
         actor: EnvironmentActor,
-    ) -> Result<Vec<factory_core::conversations::execution::ExecutionModel>, ConversationError>
-    {
-        // Model processes and account changes share one user identity. Reject
-        // overlapping probes instead of queuing an unbounded per-user backlog.
+    ) -> Result<Vec<ExecutionModel>, ConversationError> {
+        // Every caller authorizes its own session before joining another request.
+        let env = self.service.current_environment(actor).await?;
+        let probe = self.model_probes.for_environment(&env)?;
+        let result = probe
+            .result
+            .get_or_init(|| async {
+                ModelProbeResult {
+                    initiator: actor.session_hash,
+                    models: self.discover_models(actor, &env).await,
+                }
+            })
+            .await;
+        // Waiting must not make an old environment or revoked session usable.
+        self.service.same_environment(actor, &env).await?;
+        // Another session can initiate the shared probe and expire while it runs.
+        // This caller has just authorized itself, so that failure is retryable here.
+        result.for_session(actor.session_hash)
+    }
+
+    async fn discover_models(
+        &self,
+        actor: EnvironmentActor,
+        env: &Environment,
+    ) -> Result<Vec<ExecutionModel>, ConversationError> {
+        // Concurrent readers share this operation. Account changes still exclude
+        // discovery rather than creating an unbounded queue of provider processes.
         let _gate = self
             .account_gates
             .for_user(actor.user_id)?
             .try_lock_owned()
             .map_err(|_| ConversationError::Conflict)?;
-        let env = self.service.current_environment(actor).await?;
         if self
             .accounts
             .read(actor)
@@ -128,13 +155,13 @@ impl ConversationRuntime {
         // Persist the lease before any provider side effect. A crash or lost
         // session leaves it reserved until confirmed cleanup or stopped recovery.
         let lease = Uuid::new_v4();
-        self.service.reserve_model_probe(actor, &env, lease).await?;
-        let result = self.runtime.models(&env).await;
+        self.service.reserve_model_probe(actor, env, lease).await?;
+        let result = self.runtime.models(env).await;
         if matches!(result, Err(ExecutionError::LaunchUncertain)) {
             // The daemon may still receive an old start request; stop alone is not proof.
             return Err(ConversationError::Unavailable);
         }
-        self.service.settle_model_probe_launch(lease, &env).await?;
+        self.service.settle_model_probe_launch(lease, env).await?;
         if !matches!(result, Err(ExecutionError::CleanupUncertain)) {
             self.service.release_model_probe(actor, lease).await?;
         }

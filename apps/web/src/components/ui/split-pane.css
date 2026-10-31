@@ -1,0 +1,110 @@
+.split-pane {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  transition: grid-template-columns var(--motion-normal) var(--ease-out);
+}
+
+.split-pane-primary,
+.split-pane-secondary {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.split-pane-secondary[hidden] {
+  display: none;
+}
+
+.split-pane-primary {
+  grid-column: 1;
+  grid-row: 1;
+  transition:
+    opacity var(--motion-fast) var(--ease-out),
+    visibility 0s;
+}
+
+.split-pane-primary[data-collapsed] {
+  visibility: hidden;
+  opacity: 0;
+  transition:
+    opacity var(--motion-fast) var(--ease-out),
+    visibility 0s var(--motion-fast);
+}
+
+.split-pane-secondary {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.split-pane-separator {
+  position: relative;
+  grid-column: 2;
+  grid-row: 1;
+  z-index: 2;
+  min-width: 0;
+  background: var(--border);
+  cursor: col-resize;
+  touch-action: none;
+  transition: background-color var(--motion-fast) var(--ease-out);
+}
+
+.split-pane-separator::before {
+  position: absolute;
+  inset-block: 0;
+  left: 50%;
+  width: 24px;
+  content: "";
+  transform: translateX(-50%);
+}
+
+.split-pane-separator:hover,
+.split-pane-separator:focus-visible,
+.split-pane[data-resizing] .split-pane-separator {
+  background: var(--text-muted);
+}
+
+.split-pane-separator:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+}
+
+.split-pane[data-resizing] {
+  cursor: col-resize;
+  user-select: none;
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .split-pane,
+  .split-pane-primary,
+  .split-pane-primary[data-collapsed],
+  .split-pane-separator {
+    transition: none;
+  }
+}
+
+.split-pane-secondary:not([hidden]) {
+  animation: split-pane-reveal var(--motion-normal) var(--ease-out);
+}
+@keyframes split-pane-reveal {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .split-pane-secondary {
+    animation: none;
+  }
+}

@@ -32,10 +32,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     function refresh() {
+      // Routine checks preserve the verified session until its fixed expiry.
       void controller.refresh()
-    }
-    function offline() {
-      controller.invalidate("offline")
     }
     function changed(event: MessageEvent) {
       if (event.data !== "invalidate") return
@@ -50,13 +48,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     )
     window.addEventListener("focus", refresh)
     window.addEventListener("online", refresh)
-    window.addEventListener("offline", offline)
+    window.addEventListener("offline", refresh)
     refresh()
     return () => {
       unsubscribe()
       window.removeEventListener("focus", refresh)
       window.removeEventListener("online", refresh)
-      window.removeEventListener("offline", offline)
+      window.removeEventListener("offline", refresh)
       channel.current?.close()
       channel.current = null
       controller.dispose()

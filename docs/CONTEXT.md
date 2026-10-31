@@ -11,25 +11,34 @@ suspended users and changes member access with version checks. Sessions persist 
 PostgreSQL until fixed expiry or revocation; suspension revokes all of a member's
 sessions. Missing configuration or storage leaves access unavailable.
 
-The PWA caches public static assets and a public offline page. It does not offer offline
-access to private screens or cache API/OAuth responses. Updates are detected in the
-background, with an explicit reload action for each open tab.
+The PWA caches public static assets and a public offline page, never API/OAuth responses.
+It cannot restore a private workspace offline. An already verified tab keeps its current
+chat in memory through a temporary connection loss, only until its fixed session expiry.
+Routine focus checks run in the background without replacing the workspace. Updates are
+detected in the background, with an explicit reload action for each open tab.
 
-An active member entering the workspace automatically requests an environment only when
-no environment record exists. Creating or activating a user alone creates no container.
-The first initialization creates a private persistent home volume; existing stopped
-environments require an explicit start. The operator explicitly prepares a common
-image first. Environments keep running after the browser closes or login sessions expire.
-Only an explicit stop or account suspension requests a stop, while the API and Docker
-are available. Factory imposes no count, CPU, memory or process quota; host and Docker
-Desktop limits still apply. Named volumes have no portable disk quota.
+An active member entering the workspace automatically initializes a missing environment
+or starts a stopped one after checking for recoverable work. Creating or activating a
+user alone creates no container. The first initialization creates a private persistent
+home volume; the operator explicitly prepares a common image first. Entry makes one
+automatic start attempt, with explicit retry or recovery after failure. Stop in the
+profile menu requires confirmation and suppresses automatic restart for that open app
+session. Environments keep running after the browser closes or login sessions expire.
+Explicit stop or account suspension records stop intent; runtime shutdown follows while
+the API and Docker are available. Factory imposes no count, CPU, memory or process quota;
+host and Docker Desktop limits still apply. Named volumes have no portable disk quota.
 
 Members can open a persistent xterm terminal through the Rust API and Docker exec.
 tmux owns the shell independently of browser and API connections. Explicit takeover
 allows only one attached writer. Codex device authorization connects the member's
 personal ChatGPT/Codex account inside that same home. Once connected, members can use
-a web conversation with streamed Codex output, model selection, questions and a terminal
-side panel. Conversations and completed messages are private to their owner. Codex runs
+a web conversation with Markdown-rendered streamed Codex output, model selection, questions and a terminal
+side panel. The graphite interface uses self-hosted Space Mono, a conversation sidebar
+and a bottom-left GitHub profile menu. The chats sidebar can collapse. A terminal icon
+toggles the panel; its separator resizes it by pointer or keyboard and its header can
+maximize it across the app without reattaching. Setup and account details appear only when needed,
+with provider settings available from the profile. Conversations and completed messages
+are private to their owner. Codex runs
 in full-access mode inside the user's container; commands can access that user's home
 and credentials without per-action approval. Repository selection and global skills
 remain future work. Claude and multiple accounts per provider are not implemented;

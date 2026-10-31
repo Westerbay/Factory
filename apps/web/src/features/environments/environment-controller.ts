@@ -9,7 +9,7 @@ import {
 } from "./api"
 
 type RequestKind = EnvironmentAction | "read"
-export function canStartEnvironment(environment: Environment | null): boolean {
+function canStartEnvironment(environment: Environment | null): boolean {
   return (
     environment?.status === "not_created" || environment?.status === "stopped"
   )
@@ -36,6 +36,7 @@ type Dependencies = {
   online: () => boolean
   read: typeof readEnvironment
   change: typeof changeEnvironment
+  hasRecoverableRuns: (signal: AbortSignal) => Promise<boolean>
 }
 
 export class EnvironmentController {
@@ -51,8 +52,10 @@ export class EnvironmentController {
   private request?: AbortController
   private poll?: ReturnType<typeof setInterval>
   private unsubscribe?: () => void
-  private initializedFor?: string
-  private initializationFailed = false
+  private startupSession?: { userId: string; csrfToken: string }
+  private startupConsumed = false
+  private retryInitialization = false
+  private startupMessage: string | null = null
 
   constructor(private dependencies: Dependencies) {}
 
@@ -78,23 +81,55 @@ export class EnvironmentController {
   // invalidation, so cancellation does not wait for a React effect cleanup.
   synchronize = () => {
     const auth = this.dependencies.session.getSnapshot()
+    if (auth.status === "anonymous") this.startupSession = undefined
     const session =
-      auth.status === "active" &&
-      this.dependencies.visible() &&
-      this.dependencies.online()
+      auth.status === "active" && this.dependencies.online()
         ? auth.session
         : undefined
-    if (session === this.session) return
+    const sameSession =
+      session !== undefined &&
+      session.user.id === this.session?.user.id &&
+      session.csrfToken === this.session.csrfToken &&
+      session.user.role === this.session.user.role
+    const paused = !session || !this.dependencies.visible()
+    if (
+      (sameSession || (!session && !this.session)) &&
+      paused === this.state.paused
+    ) {
+      this.session = session
+      return
+    }
+    // Pausing observation must not make a running workspace disappear. A write
+    // with an unknown outcome still needs a fresh read before it can be trusted.
+    const retainObservation =
+      sameSession && (!this.state.pending || this.state.pending === "read")
     this.cancel()
     clearInterval(this.poll)
+    if (
+      session &&
+      (session.user.id !== this.startupSession?.userId ||
+        session.csrfToken !== this.startupSession?.csrfToken)
+    ) {
+      this.startupSession = {
+        userId: session.user.id,
+        csrfToken: session.csrfToken,
+      }
+      this.startupConsumed = false
+      this.retryInitialization = false
+      this.startupMessage = null
+    }
     this.session = session
     this.setState({
-      environment: null,
+      environment: retainObservation ? this.state.environment : null,
       pending: null,
-      message: null,
-      paused: !session,
+      message: retainObservation
+        ? this.state.message
+        : session
+          ? this.startupMessage
+          : null,
+      paused,
     })
-    if (!session) return
+    if (paused) return
     void this.run("read")
     this.poll = setInterval(() => {
       if (!this.state.pending) void this.run("read")
@@ -102,37 +137,64 @@ export class EnvironmentController {
   }
 
   private cancel() {
-    // Initialize is idempotent on the server. If visibility or session changes
-    // before its result, allow the next authoritative read to retry safely.
-    if (this.state.pending === "initialize") this.initializedFor = undefined
+    // Initialization cannot restart an existing environment. Retry only when a
+    // later read still proves absence, never a subsequently stopped environment.
+    if (this.state.pending === "initialize") this.retryInitialization = true
     this.generation++
     this.request?.abort()
     this.request = undefined
   }
 
-  refresh = async () => {
+  retry = async () => {
     if (this.state.pending && this.state.pending !== "read") return
-    await this.run("read", true)
+    const reading = this.run("read", true)
+    const generation = this.generation
+    await reading
+    if (
+      generation !== this.generation ||
+      this.state.message ||
+      this.state.paused
+    )
+      return
+    await this.start()
   }
 
   start = async () => {
     if (!canStartEnvironment(this.state.environment)) return
-    await this.act("start")
-  }
-
-  initialize = async () => {
     if (this.state.pending && this.state.pending !== "read") return
-    await this.run("initialize", true)
+    this.startupConsumed = true
+    await this.run(
+      this.state.environment?.status === "not_created" ? "initialize" : "start",
+      true
+    )
   }
 
   stop = async () => {
     if (!canStopEnvironment(this.state.environment)) return
-    await this.act("stop")
+    if (this.state.pending && this.state.pending !== "read") return
+    this.startupConsumed = true
+    this.retryInitialization = false
+    await this.run("stop", true)
   }
 
-  private async act(action: "start" | "stop") {
-    if (this.state.pending && this.state.pending !== "read") return
-    await this.run(action, true)
+  private async checkRecoveryBeforeStart(
+    signal: AbortSignal,
+    generation: number
+  ) {
+    let message: string | null = null
+    try {
+      if (await this.dependencies.hasRecoverableRuns(signal))
+        message =
+          "A previous task needs recovery before your workspace can start."
+    } catch {
+      message =
+        "Recovery status could not be confirmed. Try again before starting your workspace."
+    }
+    if (generation !== this.generation) return false
+    if (!message) return true
+    this.startupMessage = message
+    this.setState({ ...this.state, pending: null, message })
+    return false
   }
 
   private async run(kind: RequestKind, clearMessage = false) {
@@ -148,8 +210,9 @@ export class EnvironmentController {
     }
     const session = this.session
     if (!session) return
-    if (kind === "initialize") this.initializationFailed = false
+    if (clearMessage) this.startupMessage = null
     this.cancel()
+    if (kind === "initialize") this.retryInitialization = false
     const generation = this.generation
     const request = new AbortController()
     this.request = request
@@ -158,6 +221,13 @@ export class EnvironmentController {
       pending: kind,
       message: clearMessage ? null : this.state.message,
     })
+    // A stopped observation is required for recovery. Do not restart until the
+    // existing recovery API confirms there are no outstanding runs to resolve.
+    if (
+      kind === "start" &&
+      !(await this.checkRecoveryBeforeStart(request.signal, generation))
+    )
+      return
     try {
       const environment =
         kind === "read"
@@ -168,33 +238,40 @@ export class EnvironmentController {
               request.signal
             )
       if (generation !== this.generation) return
+      if (environment.status === "running") this.startupMessage = null
       this.setState({
         ...this.state,
         environment,
         pending: null,
-        message:
-          kind === "read" && this.initializationFailed
-            ? this.state.message
-            : null,
+        message: kind === "read" ? this.startupMessage : null,
       })
-      if (
-        kind === "read" &&
-        environment.status === "not_created" &&
-        this.initializedFor !== session.user.id
-      ) {
-        this.initializedFor = session.user.id
-        await this.run("initialize")
+      if (kind === "read") {
+        const firstEntry = !this.startupConsumed
+        // Also consume entry when already running/stopping: polling must not
+        // reverse a stop requested from another tab or a later runtime failure.
+        this.startupConsumed = true
+        if (environment.status !== "not_created")
+          this.retryInitialization = false
+        if (
+          environment.status === "not_created" &&
+          (firstEntry || this.retryInitialization)
+        )
+          await this.run("initialize")
+        else if (firstEntry && environment.status === "stopped")
+          await this.run("start")
       }
     } catch (error) {
       if (generation !== this.generation) return
-      if (kind === "initialize") this.initializationFailed = true
+      const message = environmentErrorMessage(error)
+      if (kind === "initialize" || kind === "start")
+        this.startupMessage = message
       // Even a failed write may have reached the server. Never retain a Running
       // badge until a fresh response confirms the state.
       this.setState({
         environment: null,
         pending: null,
         paused: false,
-        message: environmentErrorMessage(error),
+        message,
       })
     }
   }

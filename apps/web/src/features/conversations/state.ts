@@ -22,39 +22,11 @@ export function latestReader<T>(
   }
 }
 
-/** Each result can update its part of the UI even when the other request fails. */
-export function loadWorkspaceResources<T, U>(options: {
-  signal: AbortSignal
-  list: (signal: AbortSignal) => Promise<T>
-  models: (signal: AbortSignal) => Promise<U>
-  onList: (value: T) => void
-  onModels: (value: U) => void
-  onListError: (error: unknown) => void
-  onModelsError: (error: unknown) => void
-}) {
-  const load = async <V>(
-    request: (signal: AbortSignal) => Promise<V>,
-    onSuccess: (value: V) => void,
-    onError: (error: unknown) => void
-  ) => {
-    try {
-      const value = await request(options.signal)
-      if (!options.signal.aborted) onSuccess(value)
-    } catch (error) {
-      if (!options.signal.aborted) onError(error)
-    }
-  }
-  return Promise.all([
-    load(options.list, options.onList, options.onListError),
-    load(options.models, options.onModels, options.onModelsError),
-  ])
-}
-
 export function runOutcome(
   history: History | undefined,
   available: boolean
 ): string {
-  if (!available) return "Environment stopped. Start it to continue."
+  if (!available) return "Environment unavailable."
   const run = history?.runs[history.runs.length - 1]
   switch (run?.status) {
     case "active":
@@ -66,7 +38,7 @@ export function runOutcome(
     case "interrupted":
       return "The run was interrupted. You can start another message."
     case "uncertain":
-      return "The run may still be active. Stop the environment and check Recovery before continuing."
+      return "The run may still be active. Stop the environment from your profile and recover the run before continuing."
     default:
       return ""
   }
@@ -91,7 +63,7 @@ export function questionReceipt(
   return { disabled: false, message: "" }
 }
 
-/** Preserve selection and avoid duplicate options if new chats arrive between pages. */
+/** Preserve selection and avoid duplicate entries if new chats arrive between pages. */
 export function mergeOlderConversations(
   existing: Conversation[],
   older: Conversation[]

@@ -53,12 +53,12 @@ export class ConnectionController {
     this.state = state
     for (const listener of this.listeners) listener()
   }
-  private cancelRequest() {
+  private cancelRequest(clearExpiry = true) {
     this.generation++
     this.request?.abort()
     this.request = undefined
     clearTimeout(this.poll)
-    clearTimeout(this.expiry)
+    if (clearExpiry) clearTimeout(this.expiry)
   }
   connect() {
     this.unsubscribe ??= this.dependencies.session.subscribe(this.synchronize)
@@ -68,21 +68,36 @@ export class ConnectionController {
     const auth = this.dependencies.session.getSnapshot()
     const session =
       auth.status === "active" &&
-      this.dependencies.visible() &&
       this.dependencies.online() &&
       this.dependencies.available()
         ? auth.session
         : undefined
-    if (session === this.session) return
-    this.cancelRequest()
+    const sameSession =
+      session !== undefined &&
+      session.user.id === this.session?.user.id &&
+      session.csrfToken === this.session.csrfToken &&
+      session.user.role === this.session.user.role
+    const paused = !session || !this.dependencies.visible()
+    if (
+      (sameSession || (!session && !this.session)) &&
+      paused === this.state.paused
+    ) {
+      this.session = session
+      return
+    }
+    const retainObservation =
+      sameSession && (!this.state.pending || this.state.pending === "read")
+    // Stop polling in a hidden tab without dropping a confirmed account or
+    // extending the lifetime of a displayed device challenge.
+    this.cancelRequest(!retainObservation || !paused)
     this.session = session
     this.set({
-      connection: null,
+      connection: retainObservation ? this.state.connection : null,
       pending: null,
-      message: null,
-      paused: !session,
+      message: retainObservation ? this.state.message : null,
+      paused,
     })
-    if (session) void this.run("read")
+    if (!paused) void this.run("read")
   }
   refresh = async () => {
     if (this.state.pending && this.state.pending !== "read") return
@@ -111,7 +126,7 @@ export class ConnectionController {
       connection: { provider: "codex", status: "error", errorCode: "expired" },
       pending: null,
       message: null,
-      paused: false,
+      paused: !this.dependencies.visible(),
     })
   }
   private observe(connection: Connection) {

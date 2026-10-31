@@ -15,29 +15,44 @@ Another verified account becomes pending without a member session. The administr
 can activate that account, after which the member must begin a new sign-in. Handles and
 display names identify people visually but never determine authorization.
 
-The member workspace shows the user's environment and Codex account. Once connected,
-it offers Codex conversations and a terminal alongside them. Repository selection,
-cloning and global skills are not available.
+After GitHub sign-in, workspace preparation starts automatically. An unconnected member
+sees Codex as the sole provider choice; a confirmed saved account opens the workspace
+directly. The workspace has conversation history on the left, chat in the center and a
+collapsible terminal on the right. The GitHub profile at the bottom left exposes Settings,
+Stop environment and Sign out, plus User access for administrators. Provider account
+details and Disconnect Codex belong in Settings. Repository selection, cloning and global
+skills are not available. The shared graphite interface uses Space Mono and concise
+contextual status instead of an environment dashboard or permanent refresh controls.
 GitHub sign-in does not request repository permissions or save a provider access token.
 
 ## Private local environments
 
-Creating or activating an account creates no Docker resources. On first entry to the
-workspace, an active member automatically requests an environment if no record exists;
-that creates a private home volume. An existing stopped environment requires an explicit
-Start. Files under `/home/factory`, including
-the working directory `/home/factory/Documents`, survive stop/start, sign-out and
-suspension. There is no volume deletion or reset action. A missing previously recorded
-volume produces an error rather than an empty replacement.
+Creating or activating an account creates no Docker resources. On entry to the workspace,
+an active member automatically initializes a missing environment or starts a stopped one.
+An existing running environment is reused. Before starting a stopped environment,
+Factory checks for recoverable runs; a failed check or outstanding recovery keeps it
+stopped with an explicit recovery path. Initialization creates a private home volume.
+Files under `/home/factory`, including the working directory `/home/factory/Documents`,
+survive stop/start, sign-out and suspension. There is no volume deletion or reset action.
+A missing previously recorded volume produces an error rather than an empty replacement.
 
-Start and stop requests are asynchronous. Running and Stopped reflect successful runtime
-inspection, with the last observation shown; the status API alone never starts an
-environment. The workspace initializes only a never-created environment. Users cannot target another user's environment. The administrator's
-access controls do not provide environment browsing or lifecycle controls for others.
+Start and stop requests are asynchronous. A loading screen covers startup; failures stay
+visible with contextual retry. Running and Stopped require successful runtime inspection;
+request acceptance alone proves neither. The status API never starts an environment.
+Automatic entry is consumed once per open app session, including when the environment is
+already running. Focus changes, route remounts and polling cannot reverse a subsequent
+Stop. Reloading or opening a new tab is a new entry. **Return to workspace** explicitly
+resumes a stopped workspace after required recovery. Users cannot target another user's
+environment. Administrator access controls do not provide lifecycle controls for others.
+
+Stop environment is in the profile menu and opens a confirmation explaining that running
+tasks and terminal processes end while saved files and completed chat messages remain. Only
+confirmation submits the stop request. Settings and Sign out remain reachable while the
+environment is stopped.
 
 Environments run independently of browser presence. Closing the page, going offline,
 signing out or reaching session expiry does not stop them. Opening Factory the next day
-reads their current state without renewing or recreating them. Only an explicit stop or
+reuses a running environment or attempts to start a stopped one. Only an explicit stop or
 account suspension records a stop request. Suspension immediately revokes access; actual
 container shutdown follows asynchronously while the API and Docker are available.
 API shutdown does not stop containers, and restarting the API resumes supervision.
@@ -64,10 +79,15 @@ at a time, and another view must explicitly take over. Reconnection never replay
 keystrokes. A slow display is detached while the shell continues to consume output.
 Keyboard escape, screen-reader mode and mobile modifier keys are available.
 
-Factory rechecks session access when returning to the page. This can close the displayed
-terminal; use Open terminal again after verification to reattach. Offline or revoked
-sessions hide private terminal and account data immediately in the browser. The server
-checks input authorization and periodically closes passive revoked streams.
+The header's terminal icon opens or folds the panel without ending its shell. A draggable,
+keyboard-operable separator changes its width; there is no separate width control.
+Opening the panel attaches automatically, and transport failures offer contextual
+reconnection. Narrow screens show chat or terminal while preserving their state.
+The terminal can maximize across the application and restore the previous layout without
+reattaching. The chats sidebar can collapse independently. Factory rechecks session access
+in the background when returning to the page; a successful same-session check leaves
+the chat and terminal in place. Revocation or expiry removes private content immediately.
+The server checks input authorization and periodically closes passive revoked streams.
 
 Connect Codex displays a short-lived authorization code and a validated official OpenAI
 link. The member authorizes their personal ChatGPT/Codex account on that site; Factory
@@ -96,7 +116,22 @@ cancellation. Completed messages and run states are retained for that user; read
 history does not replay a message or start tools. The conversation list loads older
 pages on request. Each conversation shows a bounded recent history and indicates when older runs, messages or requests are omitted. A submitted
 question answer can remain pending or uncertain until its receipt is confirmed; it is
-not automatically resent. The model list is cached in browser memory for five minutes per user, with an explicit refresh; account and session changes clear it. A listed model is not a guarantee that the account can use it. Provider failures and interrupted or uncertain work remain visible.
+not automatically resent. The last successful model list stays in browser memory for the
+current session and is refreshed when stale after five minutes; account and session
+changes clear it. Concurrent discovery requests share one provider operation. Temporary
+model conflicts recover in the background with progressively slower retries, retaining
+the current model selection. A prolonged conflict without a loaded list shows a small
+status message and continues checking while the workspace is available and visible.
+Models and conversations have no permanent refresh buttons; other failures offer
+contextual retry. A listed model is not a guarantee that
+the account can use it. Provider failures and interrupted or uncertain work remain visible.
+
+Enter sends a message, Shift+Enter inserts a line, and IME composition does not send.
+Streaming follows the newest output only while the reader is at the bottom; Jump to latest
+appears when needed. User messages use quiet bubbles and agent output remains unboxed.
+Assistant replies render Markdown during streaming and after completion, including
+links, lists, tables and code blocks. Raw HTML cannot execute and embedded images do
+not load remote resources automatically. User messages remain plain text.
 
 Codex runs with full access inside the member's container: commands and file changes do
 not ask for per-action approval, and the agent can read, change or delete any files
@@ -130,8 +165,13 @@ restores an old session and requires a new OAuth attempt started after activatio
 Signing out revokes the current session. Sessions survive API restarts until their fixed
 expiry, provided storage is available; activity does not silently extend their lifetime.
 
-The server rechecks authorization for protected operations. The browser hides private
-content during session verification, on connection failure and while offline. Sign-out
+The server rechecks authorization for protected operations. Initial admission requires a
+verified session. Routine checks keep an already verified, unexpired workspace visible,
+preserving the selected chat, draft, pane layout and scroll position without restarting
+provider setup or resending input. Transient network failure/offline state keeps the
+current chat visible with a connection notice until the existing fixed expiry; it does
+not grant new access or enable offline execution. Expiry, authorization refusal,
+invalidation or a different session discard that private UI state immediately. Sign-out
 and account changes invalidate other open tabs. Private query data and provider credentials
 are not persisted in localStorage, sessionStorage or IndexedDB. If sign-out cannot be
 confirmed, private content stays hidden and the user can explicitly retry it.
@@ -139,8 +179,9 @@ confirmed, private content stays hidden and the user can explicitly retry it.
 ## Installation and updates
 
 The built frontend is installable in supported browsers. Its offline fallback is a public
-page explaining that a connection is needed; installation does not make private work
-available offline. Service-worker updates are checked on focus, reconnection and
+page explaining that a connection is needed; installation does not restore private work
+from storage while offline. An already open tab can retain its current chat in memory
+until session expiry. Service-worker updates are checked on focus, reconnection and
 periodically. A user chooses when to apply the available update and reload the current
 tab; another tab's choice does not automatically reload it.
 
