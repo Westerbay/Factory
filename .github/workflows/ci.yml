@@ -2,17 +2,53 @@ name: Foundation checks
 
 on:
   push:
+    branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: foundation-${{ github.workflow }}-${{ github.ref }}
+  group: foundation-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  check:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      integration: ${{ steps.scope.outputs.integration }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Determine integration scope
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          integration=true
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            git diff --no-renames --name-only -z "$BASE_SHA" HEAD > "$RUNNER_TEMP/changed-files"
+            if [[ -s "$RUNNER_TEMP/changed-files" ]]; then
+              integration=false
+              while IFS= read -r -d '' path; do
+                case "$path" in
+                  apps/web/*|docs/*|README.md) ;;
+                  *) integration=true; break ;;
+                esac
+              done < "$RUNNER_TEMP/changed-files"
+            fi
+          fi
+          echo "integration=$integration" >> "$GITHUB_OUTPUT"
+          echo "Full integration required: $integration"
+
+  javascript:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,5 +60,136 @@ jobs:
           node-version-file: .node-version
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm check
-      - run: pnpm test:integration
+      - name: Formatting and lint
+        run: pnpm format:check && pnpm lint
+      - name: TypeScript types
+        run: pnpm exec turbo typecheck --filter='!@workspace/api'
+      - name: Behavioral tests
+        run: pnpm test
+      - name: Boundaries and documentation
+        run: pnpm boundaries:check && pnpm docs:check
+      - name: Build TypeScript packages and web
+        run: pnpm exec turbo build --filter='!@workspace/api'
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.11.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - run: pnpm install --frozen-lockfile
+      - name: Rust formatting, Clippy and tests
+        run: pnpm rust:check
+      - name: Generated API contract
+        run: pnpm api:contract
+
+  database-integration:
+    needs: changes
+    if: needs.changes.outputs.integration == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.11.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - run: pnpm install --frozen-lockfile
+      - name: Fetch locked Rust dependencies for offline integration tests
+        run: cargo fetch --locked
+      - name: Build database integration dependencies
+        run: pnpm --filter @workspace/database... --filter @workspace/application... build
+      - name: Execution persistence integration
+        run: node scripts/database/integration.mjs
+      - name: API and database integration
+        run: node scripts/database/identity-integration.mjs
+
+  docker-integration:
+    needs: changes
+    if: needs.changes.outputs.integration == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: Environment integration and image preparation
+        run: node scripts/environments/integration.mjs
+      - name: Egress integration
+        run: node scripts/egress/integration.mjs
+
+  release-build:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: Build release binaries
+        run: cargo build --release --locked --workspace
+
+  check:
+    if: always()
+    needs:
+      [
+        changes,
+        javascript,
+        rust,
+        database-integration,
+        docker-integration,
+        release-build,
+      ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require applicable checks to pass
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          JAVASCRIPT: ${{ needs.javascript.result }}
+          RUST: ${{ needs.rust.result }}
+          INTEGRATION_REQUIRED: ${{ needs.changes.outputs.integration }}
+          DATABASE: ${{ needs.database-integration.result }}
+          DOCKER: ${{ needs.docker-integration.result }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE: ${{ needs.release-build.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$CHANGES" != success || "$JAVASCRIPT" != success || "$RUST" != success ]]; then
+            echo "A required quality job did not succeed" >&2
+            exit 1
+          fi
+          if [[ "$INTEGRATION_REQUIRED" == true ]]; then
+            if [[ "$DATABASE" != success || "$DOCKER" != success ]]; then
+              echo "A required integration job did not succeed" >&2
+              exit 1
+            fi
+          elif [[ "$INTEGRATION_REQUIRED" != false || "$DATABASE" != skipped || "$DOCKER" != skipped ]]; then
+            echo "Integration jobs did not match the expected scope" >&2
+            exit 1
+          fi
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            if [[ "$RELEASE" != skipped ]]; then
+              echo "Release build was not skipped for the pull request" >&2
+              exit 1
+            fi
+          elif [[ "$RELEASE" != success ]]; then
+            echo "Release build did not succeed" >&2
+            exit 1
+          fi

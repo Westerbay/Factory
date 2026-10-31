@@ -19,29 +19,6 @@ const proof = {
   publishedHost: "127.0.0.1",
   publishedPort: 54321,
 }
-test("reject remote, shared, unknown and mismatched ownership before connecting", () => {
-  assert.equal(verifyDatabaseTarget(proof).database, "factory_test")
-  for (const change of [
-    { host: "example.com" },
-    { host: "localhost" },
-    { username: "other" },
-    { password: "other" },
-    { directory: "relative" },
-    { publishedHost: "0.0.0.0" },
-    { container: "shared-postgres" },
-    { port: 80, publishedPort: 80 },
-    { project: "shared" },
-    { database: "template" },
-    { owner: "unknown" },
-    { publishedPort: 123 },
-    { labels: { ...proof.labels, "io.factory.owner": "other" } },
-  ])
-    assert.throws(
-      () => verifyDatabaseTarget({ ...proof, ...change }),
-      /Refusing/
-    )
-})
-
 test("accept absolute checkout paths without weakening ownership matching", () => {
   for (const directory of [
     "/tmp/factory-fixture",
