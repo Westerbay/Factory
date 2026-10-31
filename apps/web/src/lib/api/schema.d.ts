@@ -144,6 +144,166 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  "/api/conversations": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get: operations["listConversations"]
+    put?: never
+    post: operations["createConversation"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/conversations/model-probe/recover": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post: operations["recoverModelProbe"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/conversations/models": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get: operations["listConversationModels"]
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/conversations/recoverable": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get: operations["listRecoverableRuns"]
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/conversations/{id}": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get: operations["getConversation"]
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/conversations/{id}/runs": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post: operations["startConversationRun"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/conversations/{id}/runs/{run}/cancel": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post: operations["cancelConversationRun"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/conversations/{id}/runs/{run}/events": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get: operations["streamConversationRun"]
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/conversations/{id}/runs/{run}/questions/{request}": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post: operations["answerConversationQuestion"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/conversations/{id}/runs/{run}/recover": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post: operations["recoverConversationRun"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   "/api/environment": {
     parameters: {
       query?: never
@@ -155,6 +315,23 @@ export interface paths {
     get: operations["getEnvironment"]
     put?: never
     post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/environment/initialize": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** @description Create a running intent only if the current user has no environment; existing intent is never changed. */
+    post: operations["initializeEnvironment"]
     delete?: never
     options?: never
     head?: never
@@ -330,6 +507,16 @@ export interface components {
     }
     /** @enum {string} */
     AgentProvider: "codex"
+    AnswerBody: {
+      answers: components["schemas"]["AnswerView"][]
+      /** Format: uuid */
+      operationId: string
+    }
+    AnswerView: {
+      /** Format: uuid */
+      id: string
+      value: string
+    }
     ApiError: {
       code: string
       message: string
@@ -348,14 +535,22 @@ export interface components {
       /** Format: uuid */
       operationId: string
     }
+    ConversationPageView: {
+      items: components["schemas"]["ConversationView"][]
+      /** Format: uuid */
+      nextCursor?: string | null
+    }
+    ConversationView: {
+      createdAt: string
+      /** Format: uuid */
+      id: string
+    }
     EnvironmentResponse: {
       /** @description Bounded public error code; never includes provider responses or resource names. */
       errorCode?: string | null
       /** Format: date-time */
       observedAt?: string | null
       status: components["schemas"]["EnvironmentStatus"]
-      /** @description Explicit administrator upgrade required before starting or interactive work. */
-      upgradeRequired: boolean
     }
     /** @enum {string} */
     EnvironmentStatus:
@@ -366,12 +561,81 @@ export interface components {
       | "stopped"
       | "error"
       | "unavailable"
+    EventView: {
+      kind: string
+      /** Format: uuid */
+      runId: string
+      text?: string | null
+    }
+    HistoryView: {
+      conversation: components["schemas"]["ConversationView"]
+      messages: components["schemas"]["MessageView"][]
+      messagesTruncated: boolean
+      requests: components["schemas"]["RequestView"][]
+      requestsTruncated: boolean
+      runs: components["schemas"]["RunView"][]
+      runsTruncated: boolean
+    }
     Live: {
       /** @enum {string} */
       status: "ok"
     }
+    MessageView: {
+      content: string
+      createdAt: string
+      /** Format: uuid */
+      id: string
+      role: string
+      /** Format: uuid */
+      runId: string
+    }
+    ModelView: {
+      id: string
+      name: string
+    }
+    QuestionOptionView: {
+      description: string
+      label: string
+    }
+    QuestionView: {
+      allowFreeText: boolean
+      header: string
+      /** Format: uuid */
+      id: string
+      options: components["schemas"]["QuestionOptionView"][]
+      question: string
+    }
     Ready: {
       code: string
+      status: string
+    }
+    /** @description Minimal stopped-state recovery identifier; never includes conversation contents. */
+    RecoverableRunView: {
+      /** Format: uuid */
+      conversationId: string
+      launchSettled: boolean
+      /** Format: uuid */
+      runId: string
+    }
+    /** @enum {string} */
+    RequestStateView: "pending" | "claimed" | "uncertain"
+    RequestView: {
+      /** Format: uuid */
+      id: string
+      kind: string
+      questions: components["schemas"]["QuestionView"][]
+      /** Format: uuid */
+      runId: string
+      state: components["schemas"]["RequestStateView"]
+    }
+    RunView: {
+      /** Format: uuid */
+      conversationId: string
+      /** Format: uuid */
+      id: string
+      model: string
+      /** Format: uuid */
+      operationId: string
       status: string
     }
     SessionResponse: {
@@ -386,6 +650,12 @@ export interface components {
       /** Format: uuid */
       id: string
       role: components["schemas"]["UserRole"]
+    }
+    StartBody: {
+      input: string
+      model: string
+      /** Format: uuid */
+      operationId: string
     }
     /** @description UTF-8 JSON inputs for factory.terminal.v1. Output data uses binary frames. */
     TerminalClientMessage:
@@ -1143,6 +1413,826 @@ export interface operations {
       }
     }
   }
+  listConversations: {
+    parameters: {
+      query?: {
+        before?: string
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ConversationPageView"]
+        }
+      }
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  createConversation: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Exact configured frontend Origin required */
+        Origin: string
+        /** @description Session CSRF token required */
+        "X-CSRF-Token": string
+      }
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ConversationView"]
+        }
+      }
+      /** @description Invalid path or body */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Active session required */
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Exact Origin or CSRF rejected */
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Request rate limit */
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Service unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  recoverModelProbe: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Exact configured frontend Origin required */
+        Origin: string
+        /** @description Session CSRF token required */
+        "X-CSRF-Token": string
+      }
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      204: {
+        headers: {
+          [name: string]: unknown
+        }
+        content?: never
+      }
+      /** @description Invalid path or body */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Active session required */
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Exact Origin or CSRF rejected */
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Request rate limit */
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Service unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  listConversationModels: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ModelView"][]
+        }
+      }
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  listRecoverableRuns: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["RecoverableRunView"][]
+        }
+      }
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  getConversation: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        id: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["HistoryView"]
+        }
+      }
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  startConversationRun: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Exact configured frontend Origin required */
+        Origin: string
+        /** @description Session CSRF token required */
+        "X-CSRF-Token": string
+      }
+      path: {
+        id: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["StartBody"]
+      }
+    }
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["RunView"]
+        }
+      }
+      /** @description Invalid path or body */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Active session required */
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Exact Origin or CSRF rejected */
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Request rate limit */
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Service unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  cancelConversationRun: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Exact configured frontend Origin required */
+        Origin: string
+        /** @description Session CSRF token required */
+        "X-CSRF-Token": string
+      }
+      path: {
+        id: string
+        run: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      204: {
+        headers: {
+          [name: string]: unknown
+        }
+        content?: never
+      }
+      /** @description Invalid path or body */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Active session required */
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Exact Origin or CSRF rejected */
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Request rate limit */
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Service unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  streamConversationRun: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Exact configured frontend Origin required */
+        Origin: string
+      }
+      path: {
+        id: string
+        run: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Authorized bounded event stream */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "text/event-stream": unknown
+        }
+      }
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  answerConversationQuestion: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Exact configured frontend Origin required */
+        Origin: string
+        /** @description Session CSRF token required */
+        "X-CSRF-Token": string
+      }
+      path: {
+        id: string
+        run: string
+        request: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AnswerBody"]
+      }
+    }
+    responses: {
+      204: {
+        headers: {
+          [name: string]: unknown
+        }
+        content?: never
+      }
+      /** @description Invalid path or body */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Active session required */
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Exact Origin or CSRF rejected */
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Request rate limit */
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Service unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  recoverConversationRun: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Exact configured frontend Origin required */
+        Origin: string
+        /** @description Session CSRF token required */
+        "X-CSRF-Token": string
+      }
+      path: {
+        id: string
+        run: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      204: {
+        headers: {
+          [name: string]: unknown
+        }
+        content?: never
+      }
+      /** @description Invalid path or body */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Active session required */
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Exact Origin or CSRF rejected */
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Request rate limit */
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Service unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
   getEnvironment: {
     parameters: {
       query?: never
@@ -1180,6 +2270,74 @@ export interface operations {
         }
       }
       /** @description Identity or persistence unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  initializeEnvironment: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Session CSRF token. Exact frontend Origin and an empty body are required. */
+        "X-CSRF-Token": string
+      }
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Current environment intent */
+      202: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["EnvironmentResponse"]
+        }
+      }
+      /** @description Body must be empty */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Active session required */
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Origin or CSRF rejected */
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Rate limit */
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Environment service unavailable */
       503: {
         headers: {
           [name: string]: unknown

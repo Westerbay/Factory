@@ -1,5 +1,5 @@
 use axum::{Json, extract::State, http::StatusCode};
-use factory_database::{identity::IdentityDatabase, migrations::Readiness};
+use factory_database::{identity::IdentityDatabase, schema::Readiness};
 use serde::Serialize;
 use std::sync::Arc;
 use utoipa::ToSchema;
@@ -60,7 +60,7 @@ pub async fn ready(
                     }),
                 );
             }
-            Ok(Readiness::Missing | Readiness::Pending) => "identity-migration-required",
+            Ok(Readiness::Missing) => "identity-schema-required",
             Ok(Readiness::Invalid) => "identity-schema-invalid",
             Err(_) => "identity-storage-unavailable",
         },

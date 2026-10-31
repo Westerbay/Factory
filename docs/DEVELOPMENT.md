@@ -38,14 +38,14 @@ The API binds to `127.0.0.1:3001` but is addressed by the browser as
 same-site cookies depend on consistent host configuration. Rust serves HTTP API routes,
 not frontend files. The browser app is static; no SSR server is used.
 
-Without identity configuration, owned PostgreSQL and applied identity migrations, the
+Without identity configuration, owned PostgreSQL and an initialized schema, the
 application remains accessible but sign-in is unavailable. `/health/live` means the
 process responds; `/health/ready` reflects configured identity/storage readiness.
 A successful liveness response does not establish usable authentication or a live
-GitHub exchange. Runtime startup does not create infrastructure, apply migrations or
+GitHub exchange. Runtime startup does not create infrastructure, initialize the database or
 create configuration files. API startup reads `.env` from the working directory
 (the repository root for the pnpm commands). After correcting startup configuration,
-database ownership or missing migrations, restart the API so it can compose the
+database ownership or a missing schema, restart the API so it can compose the
 identity runtime again.
 
 ### Explicit configuration
@@ -97,7 +97,7 @@ scope. Repository access and GitHub App installations are not implemented yet.
 3. Register the application. Copy its **Client ID** into `FACTORY_GITHUB_CLIENT_ID`.
    Generate a **client secret** and put it only in `FACTORY_GITHUB_CLIENT_SECRET`
    in the local `.env`.
-4. With Docker running, execute `pnpm db:setup` and `pnpm db:migrate:identity`
+4. With Docker running, execute `pnpm db:setup`
    from the repository root. These explicit commands prepare only the owned local database.
 5. Configure the initial administrator:
 
@@ -105,7 +105,7 @@ scope. Repository access and GitHub App installations are not implemented yet.
    pnpm factory admin setup --provider github --username YOUR_GITHUB_USERNAME
    ```
 
-   The CLI verifies the owned database and migrated schema, resolves the public GitHub
+   The CLI verifies the owned database and initialized schema, resolves the public GitHub
    account, and displays its canonical username, numeric ID and profile URL. Type the
    displayed username to confirm; Enter, EOF or a different answer cancels without writes.
    It stores the stable account ID, not the username or email, and requires no GitHub token.
@@ -115,7 +115,7 @@ scope. Repository access and GitHub App installations are not implemented yet.
 6. Start or restart the API and frontend with `pnpm dev`. Open
    `http://localhost:3000/sign-in` and sign in with the selected GitHub account.
 
-Setup never migrates the database or creates a browser session. It refuses to replace
+Administrator setup never initializes the database or creates a browser session. It refuses to replace
 any existing administrator (`ADMIN_ALREADY_CONFIGURED`), including when the same command
 is repeated. Concurrent setup is serialized in the database. GitHub lookup failures,
 non-user accounts and absent confirmation do not create an administrator. Only GitHub is
@@ -129,7 +129,7 @@ run yet, OAuth sign-in is available but every new account stays pending.
 See GitHub's [OAuth application registration guide](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app).
 If `/health/ready` returns `identity-unavailable`, inspect the API startup warning
 code: it distinguishes missing OAuth configuration, an unavailable owned database
-and required identity migrations. Do not share the credential values when diagnosing it.
+and required database schema. Do not share the credential values when diagnosing it.
 
 ### Built frontend and PWA
 
@@ -196,47 +196,35 @@ provider credentials or connect to PostgreSQL. Inspect both generated files afte
 contract changes; do not hand-edit them.
 
 `pnpm test:integration` explicitly requires Docker and exercises retained execution
-persistence, SQLx identity/environment/upgrade persistence, API composition with synthetic
-identities, real Docker terminal/account/upgrade behavior and isolated egress/DNS fixtures.
+persistence, SQLx identity/environment persistence, API composition with synthetic
+identities, real Docker terminal/account behavior and isolated egress/DNS fixtures.
 Fixtures use unique verified projects and isolated volumes, not the development target.
 A synthetic provider is test-only; production has no fixture-provider switch.
 These regressions do not replace human acceptance or prove live OAuth behavior.
 
 ## Local PostgreSQL
 
-Database setup and migrations are explicit operations. Use only the guarded commands;
-do not supply a shared database or reuse template resources. No command below reads,
-creates or changes a real `.env` file.
+Database commands operate only on the verified local Docker target. They do not read or
+change `.env` files.
 
 ```bash
-pnpm db:setup             # provision/start owned local PostgreSQL and migrate legacy execution
-pnpm db:migrate:identity  # explicitly apply SQLx identity migrations to the verified local target
-pnpm db:status            # read-only legacy-store readiness
-pnpm db:migrate           # explicitly apply legacy execution migrations
-pnpm db:stop              # stop the owned service; retain volume and marker
+pnpm db:setup   # start the local PostgreSQL service and initialize an empty schema
+pnpm db:status  # inspect database readiness
+pnpm db:reset   # delete local database contents and recreate the initial schema
+pnpm db:stop    # stop PostgreSQL and retain its data
 ```
 
-`db:status` checks the retained execution store; use API readiness for the configured
-identity runtime. Applying legacy migrations alone does not initialize identity.
-The runtime never performs either migration on startup. Identity objects and the SQLx
-ledger live in `factory_identity`; execution tables and the Drizzle ledger remain intact.
-No legacy run is assigned to a web user.
-The additive environment migration is part of `db:migrate:identity`. An existing database
-without it reports Pending: sign-in and backoffice remain unavailable until the operator
-explicitly applies it and restarts the API. Development and integration checks do not
-apply it to the real development database.
+Stop the API before `db:reset`. Reset permanently removes local users, sessions,
+conversations and other database records. Existing Docker containers and home volumes are
+not removed; they become unassociated with the new database. Configure the administrator
+again after reset. No old-database upgrade or data migration is provided.
 
 Development uses project `factory-local`, database `factory_local`, user `factory`,
 port `127.0.0.1:55432` and volume `factory-local_postgres_data`. The password
-`local-fixture-only` is deliberately public synthetic local configuration, not a
-production credential. The ignored `.factory/database-owner` contains a non-secret UUID
-ownership marker. Keep it with the checkout while its volume exists.
-
-Setup rejects unknown preexisting resources rather than adopting them. A missing marker
-with existing resources, conflicting port, Docker permission error or failed health
-check requires resolving that exact condition. Do not reset or prune volumes to bypass
-it. Repeated setup retains data and applies pending legacy migrations idempotently.
-Keep the marker after stopping; no development reset/delete command is provided.
+`local-fixture-only` is public synthetic local configuration. The ignored
+`.factory/database-owner` holds the ownership marker. Unknown resources are never adopted.
+Repeated setup preserves an initialized database; an incompatible database requires an
+explicit reset.
 
 Every target is checked against Docker project, owner and checkout labels, container,
 database identity, credentials, volume and exact loopback port before SQL. Docker is
@@ -260,16 +248,12 @@ then removes only that fixture's exact container, volume and network. Developmen
 resources are not deleted. If cleanup is interrupted, retain the reported failure
 and inspect that exact project before any manual removal.
 
-For retained execution schema changes, use `pnpm --filter @workspace/database generate`
-and inspect SQL/snapshots. Preserve the annotated manual
-`DEFERRABLE INITIALLY DEFERRED` root-ownership foreign key that Drizzle's schema DSL
-cannot express. Identity migrations live under `crates/database/migrations` and use
-the separate SQLx ledger. Run the appropriate integration checks after schema changes;
-temporary fixture content never belongs in migrations.
+The single initial schema is [schema.sql](../crates/database/schema.sql). Change it
+directly during development and run integration checks against an isolated fixture.
 
 ## Local environments
 
-After preparing and migrating the owned database, stop the API before explicitly
+After preparing the owned database, stop the API before explicitly
 preparing the shared images so it cannot create resources from an older manifest:
 
 ```bash
@@ -278,14 +262,14 @@ pnpm environments:prepare
 
 This operator command builds the pinned [workspace image](../infra/environments/Dockerfile)
 and [egress proxy](../infra/egress/Dockerfile), so initial preparation requires network
-access and may take several minutes. The workspace contains tmux and native Codex
+access and may take several minutes. The workspace contains zsh with Oh My Zsh, tmux and native Codex
 0.160.0; no host Codex installation or credentials are imported. Preparation
 stores the stable installation UUID in `.factory/environments/installation.json` and
 the immutable workspace image ID/policy in `prepared.json` and the proxy metadata in
 `egress.json`. Preserve this ignored directory while
 its resources exist; do not regenerate its identity or delete `supervisor.lock` to bypass
 a conflict. Repeated preparation retains the installation identity. Existing environments
-keep their recorded image and policy; preparation does not migrate or replace them.
+keep their recorded image and policy; preparation does not replace them.
 If an existing proxy differs from the proposed image or host-address configuration,
 preparation preserves the previous manifest and refuses publication. Follow the
 [explicit proxy maintenance procedure](../infra/egress/README.md) before retrying;
@@ -294,9 +278,10 @@ Each Docker CLI invocation uses its own temporary configuration directory. Clean
 removes that directory and generated Buildx metadata without following symbolic links;
 it does not use or remove the operator's Docker configuration.
 
-Restart the API after preparation or configuration changes. Neither API startup, sign-in,
-account activation nor status reads create user containers. The member's first explicit
-Start creates a container and named home volume; Stop retains `/home/factory` and its
+Restart the API after preparation or configuration changes. API startup, sign-in,
+account activation and status reads do not create user containers. The first workspace
+visit by an active member initializes an environment only if no record exists. Existing
+stopped environments require explicit Start. Stop retains `/home/factory` and its
 `Documents` working directory. There is no user-volume deletion/reset command. Investigate
 a missing recorded volume or uncertain provisioning state instead of creating a substitute.
 
@@ -312,38 +297,9 @@ portable disk quota. Only the approved Codex HTTPS destinations pass through the
 proxy; direct Internet, host/LAN and other-user access remain blocked. Package downloads,
 GitHub cloning and development-server publishing are not enabled in this increment.
 
-Run `pnpm db:migrate:identity` explicitly before restarting an upgraded API. Migration 3
-retains the persistent environment semantics; migration 4 adds durable container-upgrade
-reservations without deleting records or storage identities. Stop old API versions before
-migrating. Do not rewrite already-applied migrations or reset the database.
-Prepare the images for policy version 3. Existing environments display **Upgrade required**
-when their image or policy differs. They are never silently deleted or replaced.
-
-### Upgrade an existing environment
-
-1. Ask the member to finish their work and use **Stop environment**. Stop ends running
-   processes; it preserves the home. The upgrade refuses a running container.
-2. Stop the API process, then apply pending identity migrations and prepare current images
-   using the explicit commands above. The upgrade needs the same installation and database
-   supervisor locks; it does not stop the API automatically.
-3. Before stopping the API, identify the member's **Factory user UUID** in the `id`
-   field of the authenticated backoffice's `/api/admin/users` response (browser Network
-   panel). This is not the GitHub numeric ID. Then run:
-
-   ```bash
-   pnpm factory environment upgrade --user-id FACTORY_USER_UUID
-   ```
-
-4. Review the old container ID, home, current/target image and policy. Confirm by typing
-   the exact UUID shown. The CLI removes only that owned stopped container and leaves
-   the home and Stopped intent intact.
-5. Restart the API. The member's next explicit Start creates the new container on the
-   retained home. Verify their files before resuming work.
-
-If interrupted, rerun the same command and review the pending intent. Missing volumes,
-foreign resources, changed IDs/names and conflicting generations remain errors. Never
-delete volumes, reservations or lock files to force an upgrade. This development workflow
-does not execute upgrades or migrations against real user data automatically.
+A prepared image with a different policy is not applied to existing containers. During
+local development, a fresh database creates new environments; existing Docker homes are
+not deleted by the database reset.
 
 Missing preparation leaves the environment card unavailable while otherwise-ready
 authentication and administration remain usable. Docker failures produce environment
@@ -354,11 +310,14 @@ installation metadata to force a second instance.
 
 Browser presence is not a container lease. Closing the page, losing connectivity, signing
 out or allowing a login session to expire leaves the environment running. Polling resumes
-when an authenticated page returns; it does not mutate lifecycle state. Explicit Stop
+when an authenticated page returns; status polling itself does not mutate lifecycle state.
+The workspace may initialize only a never-created environment on entry. Explicit Stop
 and account suspension persist stopped intent; suspension also revokes access atomically.
 Actual shutdown requires available API/Docker supervision. API shutdown leaves containers
 running and restart resumes supervision. Host shutdown, Docker shutdown or a process
-failure can still interrupt work; this increment provides no agent job recovery.
+failure can still interrupt work. An uncertain conversation run requires an explicit
+recovery after a fresh stopped observation and a settled launch; it is never replayed
+automatically. An unsettled launch remains fenced even after Stop.
 
 The runtime uses Bollard against the local Linux socket or Windows Docker named pipe,
 independently of `DOCKER_HOST` or stored contexts. CI runs real environment integration on
@@ -372,8 +331,9 @@ and verify ownership before cleanup; they never prune or remove user volumes.
 
 ## Terminal and Codex account
 
-Start the environment and wait for Running. **Open terminal** loads xterm and attaches
-to its tmux shell in `/home/factory/Documents`. **Disconnect display** detaches only
+Wait for the environment to be Running and connect Codex. **Open terminal** loads xterm
+and attaches to its zsh tmux shell in `/home/factory/Documents`. The current image
+provides a colored prompt without overwriting user dotfiles. **Disconnect display** detaches only
 that view; **Reconnect** or **Open terminal** returns to the shell. A second tab must
 choose **Take over terminal** before it can type. Closing the browser or restarting the
 API does not stop the shell; stopping the environment or Docker does. Files survive
@@ -400,7 +360,8 @@ minutes; refresh after recovery rather than killing arbitrary container processe
 Codex stores credentials under `/home/factory/.codex` with private permissions. The API
 does not read host credentials or store provider tokens in PostgreSQL or browser storage.
 **Disconnect Codex** clears the saved sign-in through the account protocol and preserves
-the rest of the home. This does not prove already-running manual Codex requests stopped;
+the rest of the home. It is blocked for active or uncertain Factory runs. This does not
+prove already-running manual Codex requests stopped;
 use **Stop environment** when all processes must end. Factory sign-out leaves an already
 connected Codex account saved in its owner's home.
 
@@ -410,11 +371,34 @@ proxy is down, the account card reports unavailable while local terminal work co
 local account cancellation/logout does not require the proxy. No HTTP endpoint can
 open an arbitrary Docker exec or target another user's container.
 
+After connection, create a conversation, select a model and send a message. Responses
+stream into the chat; completed messages and run state are retained. The visible history
+is bounded and indicates when older entries are omitted; the conversation list can load
+older pages. Questions need an explicit
+reply; a submitted answer can remain claimed or uncertain until provider confirmation
+and is not automatically resent. Codex runs with full access inside the user's container and does not
+request per-action approval: its commands can read, modify or delete the user's home,
+including account credentials. A displayed model is not proof of account entitlement.
+Provider calls may consume the user's model allowance.
+
+If stopping a run does not confirm cleanup, it remains uncertain and blocks further work.
+Use **Stop environment**, wait for a verified stopped state, then recover the run from
+the workspace before explicitly starting the environment again. Recovery also requires a
+conclusively settled launch request. If launch settlement remains unknown, recovery can
+fail and capacity remains reserved even after Stop. No verified operator recovery exists
+for this case. Recovery releases local
+ownership and cannot undo external effects. A reloaded page can list recoverable runs
+without exposing their contents while the environment is stopped. A fresh, error-free
+stopped observation at a later generation releases a settled uncertain model-probe
+reservation automatically, even for a suspended user, without changing environment intent
+or session state. An unsettled probe remains reserved after Stop. If model access remains unavailable after retrying, **Restore model access** checks
+the same stopped-state proof before restarting.
+
 The integration commands exercise real PTYs, reattachment after adapter restart, a
 detached 4-MiB output producer, account-controller cleanup with synthetic cache data,
-stopped-container upgrade, and controlled DNS/private-address refusals. They neither
+controlled DNS/private-address refusals. They neither
 authorize a real account nor consume model allowance. A successful real login and a
-small intentional Codex command remain human acceptance.
+small intentional Codex chat turn remain human acceptance.
 
 ## Execution reference and Codex diagnostics
 
@@ -471,8 +455,9 @@ With separately authorized OAuth configuration and two chosen GitHub accounts, v
 4. Sign-out invalidates another tab. API loss or offline mode hides private data and
    recovery rechecks the server instead of displaying a persisted session.
 
-After explicit image preparation and database migration, verify each account sees only
-its own environment. Check first start, observed Running, Stop and restart with retained
+After explicit image preparation and database setup, verify each account sees only
+its own environment. Check automatic first initialization, observed Running, Stop and
+explicit restart with retained
 data using owned fixtures; there is no file editor in the member UI. Start more than two
 environments and verify that closing the page or expiring a login session leaves them
 running. Check explicit stop and account suspension. Confirm polling pauses on
@@ -488,9 +473,11 @@ appears in CacheStorage. Record actual observations and limits locally.
 
 For terminal/account acceptance, use a deliberately chosen disposable directory in the
 user's home. Connect the personal account through the code flow, verify the reported
-account, then intentionally run a small harmless Codex request in the terminal. This may
+account, then intentionally run a small harmless Codex request in the chat. This may
 consume model allowance. Check detached work and reconnection, cancellation of a second
 login, saved-account persistence after Stop/start and explicit account disconnect.
-Verify cross-user separation and the upgrade path on a disposable legacy home before
-using it for important work. Synthetic fixtures and UI projections cannot establish
-live model access, provider delegation or cleanup of manually launched agents.
+Verify model selection, streamed output, questions, cancellation and recovery where
+available, and confirm the full-access disclosure. Verify cross-user separation and the
+fresh environment on a disposable home before using it for important work. Synthetic
+fixtures and UI projections cannot establish live model access or cleanup of manually
+launched agents.

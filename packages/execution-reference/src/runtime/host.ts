@@ -147,7 +147,7 @@ export class DesktopHost {
     if (!readiness.available)
       throw new ExecutionError(
         "persistence",
-        "Owned database unavailable or pending migrations"
+        "Owned database unavailable or uninitialized schema"
       )
     await this.database.recover()
     this.initialized = true

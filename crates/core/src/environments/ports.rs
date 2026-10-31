@@ -6,6 +6,12 @@ use uuid::Uuid;
 pub trait EnvironmentStore: Send + Sync {
     /// Revalidate user/session in the transaction; reads never create records.
     async fn get(&self, actor: EnvironmentActor) -> Result<Option<Environment>, EnvironmentError>;
+    /// Atomically create a running intent only when no record exists; never change an existing intent.
+    async fn initialize_if_absent(
+        &self,
+        actor: EnvironmentActor,
+        request: EnvironmentStart,
+    ) -> Result<Environment, EnvironmentError>;
     async fn start(
         &self,
         actor: EnvironmentActor,

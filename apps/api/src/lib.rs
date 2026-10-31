@@ -7,6 +7,7 @@ pub mod auth;
 pub mod bootstrap;
 pub mod config;
 pub mod contracts;
+pub mod conversations;
 pub mod environments;
 mod health;
 mod http;

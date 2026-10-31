@@ -4,3 +4,5 @@ pub mod agent_connections;
 pub mod environments;
 pub mod identity;
 pub mod terminals;
+
+pub mod conversations;

@@ -240,22 +240,6 @@ pub(super) fn verify_labels(env: &Environment, actual: &Value) -> Result<(), Env
     Ok(())
 }
 
-pub(super) fn verify_home_labels(
-    env: &Environment,
-    actual: &Value,
-) -> Result<(), EnvironmentError> {
-    for (key, value) in [
-        ("io.factory.installation", env.installation_id),
-        ("io.factory.environment", env.id),
-        ("io.factory.user", env.user_id),
-    ] {
-        if actual[key] != value.to_string() {
-            return Err(EnvironmentError::OwnershipConflict);
-        }
-    }
-    Ok(())
-}
-
 pub(super) fn require_current_policy(env: &Environment) -> Result<(), EnvironmentError> {
     if env.policy_version == POLICY_VERSION {
         Ok(())

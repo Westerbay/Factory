@@ -22,22 +22,35 @@ RUN set -eu; \
     test -s /tmp/schema/v2/CancelLoginAccountParams.json; \
     test -s /tmp/schema/v2/LogoutAccountResponse.json
 
+# Pin and verify the upstream Oh My Zsh source independently of the mutable branch.
+RUN curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+      https://codeload.github.com/ohmyzsh/ohmyzsh/tar.gz/17a2b4c3a5855524ad4772a17ada0dc474e2fdf3 -o /tmp/oh-my-zsh.tar.gz \
+    && echo 'eb6f2788316ff75f9be60c00372da0da97d4bcab202d64a9229e1f6365166932  /tmp/oh-my-zsh.tar.gz' | sha256sum --check --strict \
+    && mkdir /opt/oh-my-zsh \
+    && tar -xzf /tmp/oh-my-zsh.tar.gz --strip-components=1 -C /opt/oh-my-zsh \
+    && chmod -R go-w /opt/oh-my-zsh
+
 FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
-LABEL io.factory.environment.image="3"
+LABEL io.factory.environment.image="5"
 LABEL io.factory.codex.version="0.160.0"
 RUN printf '%s\n' 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261027T000000Z bookworm main' \
       'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20261027T000000Z bookworm-security main' > /etc/apt/sources.list \
     && rm /etc/apt/sources.list.d/debian.sources \
-    && apt-get update && apt-get install -y --no-install-recommends bash tmux ca-certificates util-linux \
+    && apt-get update && apt-get install -y --no-install-recommends bash zsh tmux git ca-certificates util-linux \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 10000 factory \
-    && useradd -u 10000 -g factory -d /home/factory -s /bin/bash factory \
+    && useradd -u 10000 -g factory -d /home/factory -s /bin/zsh factory \
     && mkdir -p /home/factory/Documents \
     && chown -R 10000:10000 /home/factory
 COPY --from=codex /opt/codex /opt/codex
+COPY --from=codex /opt/oh-my-zsh /opt/oh-my-zsh
 COPY tmux.conf /etc/factory/tmux.conf
+COPY zshrc /etc/factory/zshrc
 COPY auth-controller.sh /usr/local/bin/factory-auth-controller
+# Avoid an interactive first-run wizard when the persistent home has no zsh files.
 RUN chmod 0555 /usr/local/bin/factory-auth-controller \
+    && printf '\nsource /etc/factory/zshrc\n' >> /etc/zsh/zshrc \
+    && : > "/usr/share/zsh/$(zsh -fc 'print -r -- $ZSH_VERSION')/scripts/newuser" \
     && ln -s /opt/codex/bin/codex /usr/local/bin/codex
 ENV HOME=/home/factory
 USER 10000:10000

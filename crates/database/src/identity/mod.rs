@@ -6,7 +6,7 @@ mod users;
 
 use crate::{
     local_target::VerifiedTarget,
-    migrations::{self, Readiness},
+    schema::{self, Readiness},
 };
 use factory_core::identity::*;
 use sqlx::{
@@ -46,6 +46,11 @@ impl IdentityDatabase {
             pool: self.pool.clone(),
         }
     }
+    pub fn conversation_store(&self) -> crate::conversations::PgConversationStore {
+        crate::conversations::PgConversationStore {
+            pool: self.pool.clone(),
+        }
+    }
     pub fn environment_store(&self) -> crate::environments::PgEnvironmentStore {
         crate::environments::PgEnvironmentStore {
             pool: self.pool.clone(),
@@ -64,13 +69,7 @@ impl IdentityDatabase {
         crate::environments::PgEnvironmentSupervisor::acquire(&self.options, installation).await
     }
     pub async fn ready(&self) -> Result<Readiness, IdentityError> {
-        migrations::ready(&self.pool).await
-    }
-    pub async fn migrate(&self) -> Result<(), IdentityError> {
-        if self.pool.is_closed() {
-            return Err(IdentityError::Unavailable);
-        }
-        migrations::migrate(&self.options).await
+        schema::ready(&self.pool).await
     }
     pub async fn close(&self) {
         self.pool.close().await;

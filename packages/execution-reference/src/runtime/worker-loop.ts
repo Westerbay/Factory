@@ -53,7 +53,7 @@ export function serveWorker(
       }
       status(
         "unavailable",
-        "Runtime startup failed. Run pnpm db:status; provision or migrate explicitly, then restart Factory."
+        "Runtime startup failed. Run pnpm db:status; initialize explicitly, then restart Factory."
       )
     })
   status(

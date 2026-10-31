@@ -12,8 +12,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit",
-    "generate": "drizzle-kit generate"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@workspace/core": "workspace:*",
@@ -23,7 +22,6 @@
   "devDependencies": {
     "@types/node": "24.5.2",
     "@workspace/config": "workspace:*",
-    "drizzle-kit": "0.31.11",
     "typescript": "5.9.3"
   }
 }

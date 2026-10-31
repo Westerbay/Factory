@@ -14,8 +14,8 @@ export function TerminalPanel({
     <section aria-labelledby="terminal-heading">
       <h2 id="terminal-heading">Terminal</h2>
       <p>
-        Your shell opens in ~/Documents. Start your environment above before
-        connecting.
+        Your shell opens in ~/Documents.
+        {!available && " Start your environment before connecting."}
       </p>
       {opened && available ? (
         <Suspense fallback={<p role="status">Loading the terminal…</p>}>

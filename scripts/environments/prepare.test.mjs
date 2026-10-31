@@ -63,6 +63,7 @@ test("Docker cleans buildx metadata on success and command failure without follo
 test("repeated preparation preserves installation and changes only the prepared image", async () => {
   const directory = await mkdtemp(join(tmpdir(), "factory-prepare-test-"))
   let image = "a"
+  let policy = "5"
   let proxyFailure = false
   const commands = []
   const docker = (args) => {
@@ -94,7 +95,7 @@ test("repeated preparation preserves installation and changes only the prepared 
         Config: {
           User: "10000:10000",
           Labels: {
-            "io.factory.environment.image": "3",
+            "io.factory.environment.image": policy,
             "io.factory.codex.version": "0.160.0",
           },
         },
@@ -136,6 +137,13 @@ test("repeated preparation preserves installation and changes only the prepared 
       second
     )
     image = "invalid"
+    await assert.rejects(prepare(directory, docker), /does not satisfy/)
+    assert.deepEqual(
+      JSON.parse(await readFile(join(directory, "prepared.json"), "utf8")),
+      second
+    )
+    image = "a"
+    policy = "3"
     await assert.rejects(prepare(directory, docker), /does not satisfy/)
     assert.deepEqual(
       JSON.parse(await readFile(join(directory, "prepared.json"), "utf8")),

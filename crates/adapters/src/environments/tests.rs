@@ -236,6 +236,30 @@ async fn foreign_volume_is_never_adopted_or_mutated() {
 }
 
 #[tokio::test]
+async fn volume_with_mismatched_image_or_policy_is_never_adopted() {
+    for label in ["io.factory.image", "io.factory.policy"] {
+        let metadata = metadata();
+        let env = environment(&metadata);
+        let mut foreign = volume(&env);
+        foreign["Labels"][label] = json!("different");
+        let fixture = fixture(
+            metadata,
+            vec![
+                version(),
+                reply("GET", format!("/volumes/{}", env.volume_name), 200, foreign),
+            ],
+            Duration::from_secs(2),
+        )
+        .await;
+        assert_eq!(
+            fixture.runtime.create_volume(&env).await,
+            Err(EnvironmentError::OwnershipConflict)
+        );
+        assert!(fixture.replies.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
 async fn foreign_container_cannot_be_stopped() {
     let metadata = metadata();
     let env = environment(&metadata);
@@ -263,12 +287,9 @@ async fn foreign_container_cannot_be_stopped() {
 }
 
 #[tokio::test]
-async fn home_identity_survives_image_policy_changes_but_container_network_id_must_match() {
+async fn container_network_id_must_match() {
     let metadata = metadata();
     let env = environment(&metadata);
-    let mut legacy_home = volume(&env);
-    legacy_home["Labels"]["io.factory.image"] = json!(format!("sha256:{}", "0".repeat(64)));
-    legacy_home["Labels"]["io.factory.policy"] = json!("2");
     let mut wrong_network = container(&env);
     wrong_network["NetworkSettings"]["Networks"][user_network_name(env.installation_id, env.id)]
         ["NetworkID"] = json!("0".repeat(64));
@@ -280,7 +301,7 @@ async fn home_identity_survives_image_policy_changes_but_container_network_id_mu
                 "GET",
                 format!("/volumes/{}", env.volume_name),
                 200,
-                legacy_home,
+                volume(&env),
             ),
             reply(
                 "GET",
@@ -298,7 +319,7 @@ async fn home_identity_survives_image_policy_changes_but_container_network_id_mu
     );
     assert!(
         fixture.replies.lock().unwrap().is_empty(),
-        "legacy home accepted before rejecting mismatched actual network"
+        "mismatched network must be rejected"
     );
 }
 
@@ -789,4 +810,274 @@ fn fixture_exec(
         .into());
     }
     Ok(())
+}
+
+#[tokio::test]
+async fn process_start_preflight_refusals_never_submit_an_exec() {
+    use super::process::{FixedProcess, ProcessStartError};
+    let metadata = metadata();
+    let mut env = environment(&metadata);
+    let fixture = fixture(metadata.clone(), vec![], Duration::from_millis(300)).await;
+    env.desired_state = DesiredState::Stopped;
+    assert!(matches!(
+        fixture
+            .runtime
+            .start_process_checked(&env, FixedProcess::CodexExecution)
+            .await,
+        Err(ProcessStartError::PreSubmission(EnvironmentError::Conflict))
+    ));
+    env.desired_state = DesiredState::Running;
+    env.policy_version = "old".into();
+    assert!(matches!(
+        fixture
+            .runtime
+            .start_process_checked(&env, FixedProcess::CodexExecution)
+            .await,
+        Err(ProcessStartError::PreSubmission(
+            EnvironmentError::PolicyMismatch
+        ))
+    ));
+    assert_eq!(fixture.requests.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn process_start_missing_volume_and_failed_reads_are_pre_submission() {
+    use super::process::{FixedProcess, ProcessStartError};
+    for (status, expected) in [
+        (404, EnvironmentError::VolumeMissing),
+        (500, EnvironmentError::Unavailable),
+    ] {
+        let metadata = metadata();
+        let env = environment(&metadata);
+        let fixture = fixture(
+            metadata,
+            vec![reply(
+                "GET",
+                format!("/volumes/{}", env.volume_name),
+                status,
+                json!({"message":"fixture"}),
+            )],
+            Duration::from_secs(1),
+        )
+        .await;
+        assert!(
+            matches!(fixture.runtime.start_process_checked(&env, FixedProcess::CodexExecution).await,
+            Err(ProcessStartError::PreSubmission(actual)) if actual == expected)
+        );
+        assert_eq!(fixture.requests.load(Ordering::SeqCst), 1);
+        assert!(fixture.replies.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn process_start_stopped_container_is_pre_submission() {
+    use super::process::{FixedProcess, ProcessStartError};
+    let metadata = metadata();
+    let env = environment(&metadata);
+    let mut stopped = container(&env);
+    stopped["State"] = json!({"Status":"exited","Running":false});
+    let fixture = fixture(
+        metadata,
+        vec![
+            reply(
+                "GET",
+                format!("/volumes/{}", env.volume_name),
+                200,
+                volume(&env),
+            ),
+            reply(
+                "GET",
+                format!("/containers/{}/json", env.container_name),
+                200,
+                stopped,
+            ),
+        ],
+        Duration::from_secs(1),
+    )
+    .await;
+    assert!(matches!(
+        fixture
+            .runtime
+            .start_process_checked(&env, FixedProcess::CodexExecution)
+            .await,
+        Err(ProcessStartError::PreSubmission(
+            EnvironmentError::Unavailable
+        ))
+    ));
+    assert_eq!(fixture.requests.load(Ordering::SeqCst), 2);
+    assert!(fixture.replies.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn process_start_timeouts_and_transport_errors_keep_the_correct_phase() {
+    use super::process::{FixedProcess, ProcessStartError};
+    // Timeout while inspecting the volume cannot create or start an exec.
+    let metadata = self::metadata();
+    let env = environment(&metadata);
+    let mut slow = reply(
+        "GET",
+        format!("/volumes/{}", env.volume_name),
+        200,
+        volume(&env),
+    );
+    slow.4 = Duration::from_millis(200);
+    let fixture = self::fixture(metadata, vec![slow], Duration::from_millis(30)).await;
+    assert!(matches!(
+        fixture
+            .runtime
+            .start_process_checked(&env, FixedProcess::CodexExecution)
+            .await,
+        Err(ProcessStartError::PreSubmission(EnvironmentError::Timeout))
+    ));
+    assert_eq!(fixture.requests.load(Ordering::SeqCst), 1);
+
+    // Docker has received create_exec: any transport error remains uncertain.
+    let metadata = self::metadata();
+    let env = environment(&metadata);
+    let fixture = self::fixture(
+        metadata,
+        vec![
+            reply(
+                "GET",
+                format!("/volumes/{}", env.volume_name),
+                200,
+                volume(&env),
+            ),
+            reply(
+                "GET",
+                format!("/containers/{}/json", env.container_name),
+                200,
+                container(&env),
+            ),
+            reply(
+                "POST",
+                format!("/containers/{}/exec", "b".repeat(64)),
+                500,
+                json!({"message":"fixture"}),
+            ),
+        ],
+        Duration::from_secs(1),
+    )
+    .await;
+    assert!(matches!(
+        fixture
+            .runtime
+            .start_process_checked(&env, FixedProcess::CodexExecution)
+            .await,
+        Err(ProcessStartError::Submitted(EnvironmentError::Unavailable))
+    ));
+    assert_eq!(fixture.requests.load(Ordering::SeqCst), 3);
+    assert!(fixture.replies.lock().unwrap().is_empty());
+
+    // Docker has received start_exec but delays its reply past the timeout.
+    let metadata = self::metadata();
+    let env = environment(&metadata);
+    let mut slow_start = reply("POST", "/exec/fixture-exec/start".into(), 200, json!({}));
+    slow_start.4 = Duration::from_millis(200);
+    let fixture = self::fixture(
+        metadata,
+        vec![
+            reply(
+                "GET",
+                format!("/volumes/{}", env.volume_name),
+                200,
+                volume(&env),
+            ),
+            reply(
+                "GET",
+                format!("/containers/{}/json", env.container_name),
+                200,
+                container(&env),
+            ),
+            reply(
+                "POST",
+                format!("/containers/{}/exec", "b".repeat(64)),
+                200,
+                json!({"Id":"fixture-exec"}),
+            ),
+            slow_start,
+        ],
+        Duration::from_millis(100),
+    )
+    .await;
+    assert!(matches!(
+        fixture
+            .runtime
+            .start_process_checked(&env, FixedProcess::CodexExecution)
+            .await,
+        Err(ProcessStartError::Submitted(EnvironmentError::Timeout))
+    ));
+    assert_eq!(fixture.requests.load(Ordering::SeqCst), 4);
+    assert!(fixture.replies.lock().unwrap().is_empty());
+}
+
+fn cloned_runtime(fixture: &Fixture) -> Arc<DockerEnvironmentRuntime> {
+    Arc::new(DockerEnvironmentRuntime {
+        docker: fixture.runtime.docker.clone(),
+        metadata: fixture.runtime.metadata.clone(),
+        policy: policy(),
+        timeout: fixture.runtime.timeout,
+        mutation_permitted: fixture.runtime.mutation_permitted.clone(),
+        egress: fixture.runtime.egress.clone(),
+    })
+}
+
+#[tokio::test]
+async fn codex_maps_process_phase_to_recoverable_or_uncertain_execution() {
+    use crate::codex_execution::CodexExecutionAdapter;
+    use factory_core::conversations::execution::{ExecutionError, ExecutionRuntime};
+
+    let metadata = metadata();
+    let env = environment(&metadata);
+    let fixture = self::fixture(
+        metadata,
+        vec![reply(
+            "GET",
+            format!("/volumes/{}", env.volume_name),
+            404,
+            json!({"message":"missing"}),
+        )],
+        Duration::from_secs(2),
+    )
+    .await;
+    let adapter = CodexExecutionAdapter::new(cloned_runtime(&fixture));
+    assert!(matches!(
+        adapter.models(&env).await,
+        Err(ExecutionError::PreflightUnavailable)
+    ));
+    assert_eq!(fixture.requests.load(Ordering::SeqCst), 1);
+
+    let metadata = self::metadata();
+    let env = environment(&metadata);
+    let fixture = self::fixture(
+        metadata,
+        vec![
+            reply(
+                "GET",
+                format!("/volumes/{}", env.volume_name),
+                200,
+                volume(&env),
+            ),
+            reply(
+                "GET",
+                format!("/containers/{}/json", env.container_name),
+                200,
+                container(&env),
+            ),
+            reply(
+                "POST",
+                format!("/containers/{}/exec", "b".repeat(64)),
+                500,
+                json!({"message":"fixture"}),
+            ),
+        ],
+        Duration::from_secs(2),
+    )
+    .await;
+    let adapter = CodexExecutionAdapter::new(cloned_runtime(&fixture));
+    assert!(matches!(
+        adapter.open(&env, None, "fixture-model", "hello").await,
+        Err(ExecutionError::LaunchUncertain)
+    ));
+    assert_eq!(fixture.requests.load(Ordering::SeqCst), 3);
 }

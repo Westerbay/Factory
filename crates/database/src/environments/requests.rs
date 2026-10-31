@@ -49,6 +49,47 @@ pub(super) async fn get(
     Ok(record)
 }
 
+/// Serialize with start/stop and suspension on the user row, and do not change an
+/// existing record even if it is stopped or uses a different policy.
+pub(super) async fn initialize_if_absent(
+    pool: &PgPool,
+    actor: EnvironmentActor,
+    request: EnvironmentStart,
+) -> Result<Environment, EnvironmentError> {
+    request.validate()?;
+    let mut tx = pool.begin().await.map_err(unavailable)?;
+    authorize(&mut tx, actor).await?;
+    let existing = current(&mut tx, actor.user_id).await?;
+    let record = if let Some(existing) = existing {
+        existing
+    } else {
+        insert(&mut tx, actor.user_id, request).await?;
+        current(&mut tx, actor.user_id)
+            .await?
+            .ok_or(EnvironmentError::Unavailable)?
+    };
+    tx.commit().await.map_err(unavailable)?;
+    Ok(record)
+}
+
+async fn insert(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    request: EnvironmentStart,
+) -> Result<(), EnvironmentError> {
+    let id = Uuid::new_v4();
+    let name = format!(
+        "factory-{}-{}",
+        request.installation_id.simple(),
+        id.simple()
+    );
+    sqlx::query("INSERT INTO factory_identity.environments(id,user_id,installation_id,desired_state,observed_state,volume_name,container_name,image_id,policy_version) VALUES($1,$2,$3,'running','not_created',$4,$5,$6,$7)")
+        .bind(id).bind(user_id).bind(request.installation_id).bind(format!("{name}-home")).bind(name)
+        .bind(request.image_id).bind(request.policy_version)
+        .execute(&mut **tx).await.map_err(unavailable)?;
+    Ok(())
+}
+
 pub(super) async fn start(
     pool: &PgPool,
     actor: EnvironmentActor,
@@ -58,11 +99,6 @@ pub(super) async fn start(
     let mut tx = pool.begin().await.map_err(unavailable)?;
     authorize(&mut tx, actor).await?;
     let existing = current(&mut tx, actor.user_id).await?;
-    let upgrading: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM factory_identity.environment_upgrades u JOIN factory_identity.environments e ON e.id=u.environment_id WHERE e.user_id=$1)")
-        .bind(actor.user_id).fetch_one(&mut *tx).await.map_err(unavailable)?;
-    if upgrading {
-        return Err(EnvironmentError::Conflict);
-    }
     if existing
         .as_ref()
         .is_some_and(|e| e.installation_id != request.installation_id)
@@ -78,16 +114,7 @@ pub(super) async fn start(
         return Err(EnvironmentError::PolicyMismatch);
     }
     if existing.is_none() {
-        let id = Uuid::new_v4();
-        let name = format!(
-            "factory-{}-{}",
-            request.installation_id.simple(),
-            id.simple()
-        );
-        sqlx::query("INSERT INTO factory_identity.environments(id,user_id,installation_id,desired_state,observed_state,volume_name,container_name,image_id,policy_version) VALUES($1,$2,$3,'running','not_created',$4,$5,$6,$7)")
-            .bind(id).bind(actor.user_id).bind(request.installation_id).bind(format!("{name}-home")).bind(name)
-            .bind(request.image_id).bind(request.policy_version)
-            .execute(&mut *tx).await.map_err(unavailable)?;
+        insert(&mut tx, actor.user_id, request).await?;
     } else {
         sqlx::query("UPDATE factory_identity.environments SET generation=generation+CASE WHEN desired_state='running' THEN 0 ELSE 1 END,desired_state='running',next_reconcile_at=clock_timestamp(),updated_at=clock_timestamp() WHERE user_id=$1")
             .bind(actor.user_id).execute(&mut *tx).await.map_err(unavailable)?;

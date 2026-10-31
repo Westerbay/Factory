@@ -95,10 +95,10 @@ try {
   database = createDatabase(proof)
   assert.deepEqual(await database.ready(), {
     available: false,
-    reason: "pending-migrations",
+    reason: "uninitialized",
   })
-  await database.migrate()
-  await database.migrate()
+  await database.initialize()
+  await assert.rejects(database.initialize())
   assert.deepEqual(await database.ready(), { available: true })
   await verifyApplicationLifecycle(database.store)
   second = createDatabase(proof)
@@ -288,8 +288,11 @@ try {
   inspectTarget(target)
   assert.deepEqual(await database.ready(), { available: true })
   assert.equal((await database.store.get("fresh")).id, "fresh")
+  await database.reset()
+  assert.deepEqual(await database.ready(), { available: true })
+  assert.equal(await database.store.get("fresh"), undefined)
   console.log(
-    "PostgreSQL integration passed: migrations, ownership rollback, concurrency, history, reconnect, recovery, unavailable and close"
+    "PostgreSQL integration passed: initialization, reset, ownership rollback, concurrency, history, reconnect, recovery, unavailable and close"
   )
 } finally {
   await second?.close()

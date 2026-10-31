@@ -1,11 +1,9 @@
 // Client lifecycle adapted from WebApp Template; see docs/REUSE.md and LICENSE.
 import { drizzle } from "drizzle-orm/postgres-js"
-import { migrate } from "drizzle-orm/postgres-js/migrator"
-import { readMigrationFiles } from "drizzle-orm/migrator"
 import { sql } from "drizzle-orm"
 import postgres from "postgres"
 import { isDeepStrictEqual } from "node:util"
-import { fileURLToPath } from "node:url"
+import { readFile } from "node:fs/promises"
 import { ExecutionError, reduceEvent, isTerminal } from "@workspace/core"
 import type { Run, RunEvent, RunStore } from "@workspace/core"
 import {
@@ -19,8 +17,10 @@ import {
 import { eq, and, asc, desc, gt } from "drizzle-orm"
 import { verifyDatabaseTarget } from "./target.js"
 import type { DatabaseTarget } from "./target.js"
-const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url))
-// dist and src sit at the same depth under packages/database.
+const schemaFile = new URL(
+  "../../../crates/database/schema.sql",
+  import.meta.url
+)
 export function createDatabase(proof: DatabaseTarget) {
   const target = verifyDatabaseTarget(proof)
   const client = postgres({
@@ -252,33 +252,50 @@ export function createDatabase(proof: DatabaseTarget) {
     store,
     ready: async (): Promise<{
       available: boolean
-      reason?: "unavailable" | "pending-migrations" | "closed"
+      reason?: "unavailable" | "uninitialized" | "closed"
     }> => {
       if (closed) return { available: false, reason: "closed" }
       try {
-        const migrations = readMigrationFiles({ migrationsFolder })
-        const rows = await client<
-          { hash: string }[]
-        >`select hash from drizzle.__drizzle_migrations order by created_at`
-        if (
-          rows.length !== migrations.length ||
-          rows.some((r, i) => r.hash !== migrations[i]?.hash)
-        )
-          return { available: false, reason: "pending-migrations" }
-        return { available: true }
-      } catch (error) {
-        if (
-          typeof error === "object" &&
-          error !== null &&
-          "code" in error &&
-          (error.code === "42P01" || error.code === "3F000")
-        )
-          return { available: false, reason: "pending-migrations" }
+        const [row] = await client<
+          { ready: boolean }[]
+        >`select to_regclass('factory_identity.schema_info') is not null and to_regclass('public.runs') is not null as ready`
+        return row?.ready
+          ? { available: true }
+          : { available: false, reason: "uninitialized" }
+      } catch {
         return { available: false, reason: "unavailable" }
       }
     },
-    migrate: () => safe(() => migrate(db, { migrationsFolder })),
-    /** Explicit host startup step after migrations, before accepting starts. No tools are replayed. */
+    initialize: () =>
+      safe(async () => {
+        const schema = await readFile(schemaFile, "utf8")
+        await client.begin(async (tx) => {
+          await tx`select pg_advisory_xact_lock(19742380583174472)`
+          const [row] = await tx<
+            { exists: boolean }[]
+          >`select to_regnamespace('factory_identity') is not null as exists`
+          if (row?.exists)
+            throw new Error(
+              "Schema already exists; use the explicit reset command"
+            )
+          await tx.unsafe(schema)
+        })
+      }),
+    reset: () =>
+      safe(async () => {
+        const schema = await readFile(schemaFile, "utf8")
+        await client.begin(async (tx) => {
+          await tx`select pg_advisory_xact_lock(19742380583174472)`
+          const schemas = await tx<
+            { name: string }[]
+          >`select nspname as name from pg_namespace where nspname <> 'information_schema' and left(nspname, 3) <> 'pg_'`
+          for (const { name } of schemas)
+            await tx`drop schema ${tx(name)} cascade`
+          await tx`create schema public`
+          await tx.unsafe(schema)
+        })
+      }),
+    /** Explicit host startup step after initialization, before accepting starts. No tools are replayed. */
     recover: () =>
       safe(async () => {
         return db.transaction(async (tx) => {

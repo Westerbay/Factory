@@ -133,7 +133,6 @@ async fn lock_user(sql: &PgPool, id: Uuid) -> sqlx::Transaction<'_, sqlx::Postgr
 async fn operator_setup_is_atomic_preserves_sessions_on_failure_and_serializes_different_accounts()
 {
     let (_, db, sql) = fixture().await;
-    db.migrate().await.unwrap();
     sqlx::query("TRUNCATE factory_identity.users, factory_identity.login_attempts CASCADE")
         .execute(&sql)
         .await
@@ -198,7 +197,6 @@ async fn operator_setup_is_atomic_preserves_sessions_on_failure_and_serializes_d
 #[ignore = "requires the explicitly owned PostgreSQL integration fixture"]
 async fn owned_identity_transactions_cover_admission_revocation_and_races() {
     let (target, db, sql) = fixture().await;
-    db.migrate().await.unwrap();
     sqlx::query("TRUNCATE factory_identity.users, factory_identity.login_attempts CASCADE")
         .execute(&sql)
         .await

@@ -48,24 +48,7 @@ async function freePort() {
   })
 }
 
-function legacySnapshot(target) {
-  inspectTarget(target)
-  // Synthetic fixture data only. Preserve all legacy DDL, rows and Drizzle history.
-  return docker([
-    "exec",
-    target.container,
-    "pg_dump",
-    "--no-owner",
-    "--no-privileges",
-    "--schema=public",
-    "--schema=drizzle",
-    "-U",
-    "factory",
-    target.database,
-  ]).replace(/^\\(?:un)?restrict .*$/gm, "")
-}
-
-async function runFixture(populated) {
+async function runFixture() {
   const project = `factory-test-${randomUUID().replaceAll("-", "")}`
   const target = {
     project,
@@ -113,41 +96,16 @@ async function runFixture(populated) {
     created = true
     compose(target, ["up", "-d", "--wait", "postgres"])
     const proof = inspectTarget(target)
-    if (populated) {
-      database = createDatabase(proof)
-      await database.migrate()
-      const run = {
-        id: "legacy-preservation",
-        rootAgentId: "root",
-        workspacePath: "/fixture",
-        providerId: "test",
-        task: "Preserved legacy execution",
-        status: "created",
-        version: 1,
-        createdAt: "2026-10-28T00:00:00.000Z",
-        updatedAt: "2026-10-28T00:00:00.000Z",
-        agents: [{ id: "root", status: "created" }],
-        questions: [],
-        permissions: [],
-        messages: [],
-      }
-      await database.store.create(run, {
-        id: "legacy-created",
-        runId: run.id,
-        type: "run-created",
-        at: run.createdAt,
-      })
-      await database.close()
-      database = undefined
-    }
-    const before = legacySnapshot(target)
+    database = createDatabase(proof)
+    await database.initialize()
+    await database.close()
+    database = undefined
     await writeFile(targetPath, `${JSON.stringify(target)}\n`, { flag: "wx" })
     for (const [packageName, suite] of [
-      ["factory-database", "migrations"],
       ["factory-api", "composition"],
       ["factory-database", "identity"],
       ["factory-database", "environments"],
-      ["factory-database", "environment_upgrades"],
+      ["factory-database", "conversations"],
     ]) {
       const result = runCargo(
         [
@@ -167,14 +125,7 @@ async function runFixture(populated) {
       if (result.error || result.status !== 0)
         throw new Error(`Identity ${suite} integration failed`)
     }
-    assert.equal(
-      legacySnapshot(target),
-      before,
-      "legacy tables, rows, constraints and Drizzle ledger must remain unchanged"
-    )
-    console.log(
-      `Identity integration passed with ${populated ? "populated legacy" : "fresh"} database`
-    )
+    console.log("Identity integration passed with a fresh database")
   } finally {
     await database?.close()
     if (created) cleanupFixture(target)
@@ -185,5 +136,4 @@ async function runFixture(populated) {
   }
 }
 
-await runFixture(false)
-await runFixture(true)
+await runFixture()

@@ -126,6 +126,31 @@ impl EnvironmentStore for Store {
         self.authorize(actor)?;
         Ok(self.rows.lock().unwrap().get(&actor.user_id).cloned())
     }
+    async fn initialize_if_absent(
+        &self,
+        actor: EnvironmentActor,
+        config: EnvironmentStart,
+    ) -> Result<Environment, EnvironmentError> {
+        self.authorize(actor)?;
+        let mut rows = self.rows.lock().unwrap();
+        let row = rows.entry(actor.user_id).or_insert_with(|| Environment {
+            id: Uuid::new_v4(),
+            user_id: actor.user_id,
+            installation_id: config.installation_id,
+            desired_state: DesiredState::Running,
+            observed_state: ObservedState::NotCreated,
+            generation: 1,
+            provisioning_state: ProvisioningState::Unprovisioned,
+            volume_name: "private-volume-name".into(),
+            container_name: "private-container-name".into(),
+            image_id: config.image_id,
+            policy_version: config.policy_version,
+            observed_at: None,
+            error_code: None,
+            next_reconcile_at: Utc::now(),
+        });
+        Ok(row.clone())
+    }
     async fn start(
         &self,
         actor: EnvironmentActor,
@@ -310,8 +335,7 @@ async fn reads_are_actor_scoped_and_never_create_or_expose_internal_identifiers(
     assert_eq!(response.status(), 202);
     let body = json(response).await;
     assert_eq!(body["status"], "starting");
-    assert_eq!(body.as_object().unwrap().len(), 4);
-    assert_eq!(body["upgradeRequired"], false);
+    assert_eq!(body.as_object().unwrap().len(), 3);
     assert!(!body.to_string().contains("private-"));
     assert_eq!(
         json(f.call(Method::GET, "/api/environment", 1, "").await).await["status"],
@@ -326,6 +350,7 @@ async fn every_route_requires_a_live_active_session_and_store_rechecks_mutations
     for (method, path) in [
         (Method::GET, "/api/environment"),
         (Method::POST, "/api/environment/start"),
+        (Method::POST, "/api/environment/initialize"),
         (Method::POST, "/api/environment/stop"),
     ] {
         let response = f
@@ -365,7 +390,11 @@ async fn every_route_requires_a_live_active_session_and_store_rechecks_mutations
 #[tokio::test]
 async fn mutations_reject_csrf_origin_and_all_nonempty_bodies_before_store_calls() {
     let f = Fixture::new().await;
-    for path in ["/api/environment/start", "/api/environment/stop"] {
+    for path in [
+        "/api/environment/start",
+        "/api/environment/initialize",
+        "/api/environment/stop",
+    ] {
         for (origin, csrf) in [
             ("https://evil.example", CSRF),
             (ORIGIN, "wrong"),
@@ -397,6 +426,36 @@ async fn mutations_reject_csrf_origin_and_all_nonempty_bodies_before_store_calls
         }
     }
     assert_eq!(f.store.requests.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn initialize_only_creates_absent_intent_and_preserves_explicit_stop() {
+    let f = Fixture::new().await;
+    let response = f
+        .call(Method::POST, "/api/environment/initialize", 0, "")
+        .await;
+    assert_eq!(response.status(), 202);
+    assert_eq!(json(response).await["status"], "starting");
+    let id = f.store.rows.lock().unwrap()[&f.users[0]].id;
+    f.call(Method::POST, "/api/environment/stop", 0, "").await;
+    let stopped = f.store.rows.lock().unwrap()[&f.users[0]].clone();
+    let response = f
+        .call(Method::POST, "/api/environment/initialize", 0, "")
+        .await;
+    assert_eq!(response.status(), 202);
+    assert_eq!(json(response).await["status"], "stopped");
+    let row = f.store.rows.lock().unwrap()[&f.users[0]].clone();
+    assert_eq!(row.id, id);
+    assert_eq!(row.desired_state, DesiredState::Stopped);
+    assert_eq!(row.generation, stopped.generation);
+    f.store.revoke_at_transaction.store(true, Ordering::SeqCst);
+    assert_eq!(
+        f.call(Method::POST, "/api/environment/initialize", 1, "")
+            .await
+            .status(),
+        401
+    );
+    assert!(!f.store.rows.lock().unwrap().contains_key(&f.users[1]));
 }
 
 #[tokio::test]
@@ -479,7 +538,7 @@ async fn unprepared_or_lost_supervisor_is_honest_and_preserves_last_observation(
 }
 
 #[tokio::test]
-async fn image_or_policy_upgrade_is_explicit_start_is_refused_and_stop_preserves_home() {
+async fn image_or_policy_mismatch_refuses_start_and_stop_preserves_home() {
     for image_changed in [false, true] {
         let f = Fixture::new().await;
         f.call(Method::POST, "/api/environment/start", 0, "").await;
@@ -496,8 +555,7 @@ async fn image_or_policy_upgrade_is_explicit_start_is_refused_and_stop_preserves
             row.clone()
         };
         let read = json(f.call(Method::GET, "/api/environment", 0, "").await).await;
-        assert_eq!(read["status"], "running");
-        assert_eq!(read["upgradeRequired"], true);
+        assert_eq!(read["status"], "unavailable");
         assert!(!read.to_string().contains("previous-"));
         let start = f.call(Method::POST, "/api/environment/start", 0, "").await;
         assert_eq!(start.status(), 503);
@@ -508,7 +566,6 @@ async fn image_or_policy_upgrade_is_explicit_start_is_refused_and_stop_preserves
         );
         let stop = f.call(Method::POST, "/api/environment/stop", 0, "").await;
         assert_eq!(stop.status(), 202);
-        assert_eq!(json(stop).await["upgradeRequired"], true);
         let rows = f.store.rows.lock().unwrap();
         let stopped = &rows[&f.users[0]];
         assert_eq!(stopped.desired_state, DesiredState::Stopped);

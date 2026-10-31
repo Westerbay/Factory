@@ -1,8 +1,4 @@
-import {
-  environmentProblem,
-  environmentUpgradeMessage,
-  type Environment,
-} from "./api"
+import { environmentProblem, type Environment } from "./api"
 import {
   canStopEnvironment,
   canStartEnvironment,
@@ -51,9 +47,11 @@ export function EnvironmentCard({
   controller: EnvironmentController
 }) {
   const status = state.environment?.status
-  const busy = state.pending === "start" || state.pending === "stop"
+  const busy =
+    state.pending === "start" ||
+    state.pending === "stop" ||
+    state.pending === "initialize"
   const canStart = canStartEnvironment(state.environment)
-  const upgradeRequired = state.environment?.upgradeRequired
   const canStop = canStopEnvironment(state.environment)
   const label = status
     ? statusLabels[status]
@@ -78,16 +76,17 @@ export function EnvironmentCard({
             aria-live="polite"
             aria-atomic="true"
           >
-            {upgradeRequired ? `Upgrade required — ${label}` : label}
+            {label}
+            {state.pending === "initialize"
+              ? " — Preparing your environment"
+              : ""}
             {state.pending === "start" ? " — Requesting start" : ""}
             {state.pending === "stop" ? " — Requesting stop" : ""}
           </p>
           <p>
-            {upgradeRequired
-              ? environmentUpgradeMessage
-              : status
-                ? statusHelp[status]
-                : "Waiting for a confirmed environment status."}
+            {status
+              ? statusHelp[status]
+              : "Waiting for a confirmed environment status."}
           </p>
         </div>
         <dl className="environment-dates">
@@ -109,6 +108,15 @@ export function EnvironmentCard({
               : "")}
         </p>
         <div className="environment-actions" aria-label="Environment actions">
+          {state.message && (!status || status === "not_created") && (
+            <button
+              type="button"
+              disabled={busy || state.paused}
+              onClick={controller.initialize}
+            >
+              Retry setup
+            </button>
+          )}
           <button
             type="button"
             onClick={controller.start}

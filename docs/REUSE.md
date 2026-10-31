@@ -47,8 +47,7 @@ is required. Shadcn primitives remain deferred until an actual interaction needs
 ## Persistence and ownership
 
 - [IdentityDatabase and PgIdentityStore](../crates/database/src/identity/mod.rs) own SQLx
-  connection/readiness/close and transactional identity persistence. Explicit migrations
-  use the isolated identity schema and ledger, preserving existing execution data.
+  connection/readiness/close and transactional identity persistence. Initialization uses the shared initial schema on a verified local target.
   Operator-only administrator setup shares identity locking/upsert with login but is
   deliberately excluded from the HTTP `IdentityStore` port.
 - [Rust target verification](../crates/database/src/local_target/mod.rs) and the retained
@@ -58,9 +57,9 @@ is required. Shadcn primitives remain deferred until an actual interaction needs
   proof of ownership.
 - [createDatabase](../packages/database/src/client.ts) retains the template's
   Drizzle/postgres-js connection, readiness and close pattern for the execution RunStore.
-  Its migration and recovery operations remain explicit and separate from readiness.
+  Its initialization and recovery operations remain explicit and separate from readiness.
 
-The Factory schemas, migrations and synthetic fixtures are original. PostgreSQL 17.11
+The Factory schema and synthetic fixtures are original. PostgreSQL 17.11
 Bookworm is pinned by image digest; existing template tables, credentials and volumes
 are not adopted. Windows checkout labels and Docker named-pipe handling are preserved.
 Connection patterns were checked against the official
@@ -71,7 +70,7 @@ Connection patterns were checked against the official
 
 - [Environment types and ports](../crates/core/src/environments/mod.rs) own durable
   persistent intent, observations and provisioning semantics. Terminal, account and
-  future execution work consume these contracts rather than create another lifecycle.
+  conversation execution consumes these contracts rather than creating another lifecycle.
 - [EnvironmentService and EnvironmentReconciler](../crates/application/src/environments/mod.rs)
   separate authenticated requests from serialized runtime effects. Generation checks
   protect newer intent; ownership loss closes availability until host restart.
@@ -86,7 +85,7 @@ Connection patterns were checked against the official
   Docker IDs or mutable policy parameters to browser features.
 - [useEnvironment](../apps/web/src/features/environments/use-environment.ts) owns one
   browser lifecycle subscription shared by the environment card and its dependent panels.
-  Consumers use confirmed state and the explicit upgrade flag rather than starting a
+  Consumers use confirmed state rather than starting a
   second polling loop or inferring availability from an earlier successful operation.
 
 ## Interactive processes and account connections
@@ -119,11 +118,34 @@ Connection patterns were checked against the official
   features must not infer permission to access arbitrary destinations from a running
   container or a healthy proxy.
 
+## Conversation execution
+
+- [Conversation contracts](../crates/core/src/conversations/mod.rs) and the
+  [application service](../crates/application/src/conversations/mod.rs) own user and
+  environment-bound conversation, run, question and recovery behavior. Use their
+  validated operations instead of reading another user's persistence directly.
+- [ExecutionRuntime](../crates/core/src/conversations/execution.rs) separates provider
+  control from bounded events. The [Codex adapter](../crates/adapters/src/codex_execution/mod.rs)
+  implements the current full-access provider; provider identifiers remain private.
+- [Conversation coordinator](../crates/application/src/conversations/coordinator.rs)
+  owns durable claims, provider lifecycle and session checks. The
+  [API routes](../apps/api/src/conversations/mod.rs) and
+  [host facilities](../apps/api/src/conversations/runtime.rs) own HTTP, event transport,
+  task execution and encoding. Uncertain cleanup requires explicit recovery after a
+  verified environment stop and a conclusively settled launch; reconnecting must not
+  replay a turn. A stopped observation alone cannot release an unsettled launch. Consumers must honor
+  conversation-page cursors, history truncation and claimed/uncertain question receipt
+  states. Model discovery reserves a durable lease before starting a provider process;
+  confirmed cleanup or a fresh later-generation stopped observation releases it only
+  after the launch request has settled. The
+  supervisor can release the lease for suspended users without changing environment
+  intent or session state; the explicit stopped-state recovery route remains available.
+
 ## Execution porting reference
 
 The temporary `packages/execution-reference` package preserves the former host and
 presentation behavior for regression tests only. It is not a reusable product
-dependency: port the relevant behavior to Rust before adding web execution. Native
+dependency: use the Rust conversation runtime for web execution. Native
 window and process-launch mechanisms are retired rather than exposed to the browser.
 
 - [Core model and reducer](../packages/core/src/index.ts) define provider-neutral run,

@@ -51,7 +51,7 @@ async fn marker(
         Err(format!("Missing fixture marker: {expected}").into())
     })
     .await
-    .map_err(|_| format!("Timed out waiting for fixture marker: {expected}"))?
+    .map_err(|_| format!("Timed out waiting for fixture marker: {expected}; output: {text:?}"))?
 }
 
 async fn exercise(
@@ -60,6 +60,26 @@ async fn exercise(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let terminal = DockerTerminalRuntime::new(runtime.clone());
     let mut first = terminal.attach(environment).await?;
+    first
+        .input
+        .write(b"printf 'shell-%s\\n' \"${ZSH_VERSION:+zsh}\"\r")
+        .await?;
+    marker(first.output.as_mut(), "shell-zsh").await?;
+    first
+        .input
+        .write(b"[[ $ZSH = /opt/oh-my-zsh && $ZSH_THEME = robbyrussell && -n ${functions[git_prompt_info]} ]] && printf 'framework-%s\\n' ready\r")
+        .await?;
+    marker(first.output.as_mut(), "framework-ready").await?;
+    first
+        .input
+        .write(b"printf 'typeset -g FACTORY_CUSTOM_RC=retained\\n' > ~/.zshrc\r")
+        .await?;
+    first
+        .input
+        .write(b"print -P '%F{green}color-ready%f'\r")
+        .await?;
+    // Unlike an echoed command, this escape is emitted only by the PTY output.
+    marker(first.output.as_mut(), "\x1b[32mcolor-ready").await?;
     first
         .input
         .write(b"printf 'attached-%s\\n' ready\r")
@@ -101,6 +121,11 @@ async fn exercise(
         .write(b"printf '%s-restart\\n' \"$(cat ~/Documents/terminal-witness)\"\r")
         .await?;
     marker(fresh.output.as_mut(), "preserved-restart").await?;
+    fresh
+        .input
+        .write(b"printf 'custom-%s\\n' \"$FACTORY_CUSTOM_RC\"\r")
+        .await?;
+    marker(fresh.output.as_mut(), "custom-retained").await?;
     let handle = fresh.handle.clone();
     drop(fresh);
     restarted.detach(environment, &handle).await?;

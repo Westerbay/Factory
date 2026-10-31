@@ -16,12 +16,20 @@ action; an unconfirmed sign-out keeps private content hidden and offers retry. S
 messages use text and accessible live regions, not color alone.
 
 The workspace shares one environment status controller across the environment card,
-terminal and Codex account card. Terminal and account actions require a confirmed running
-environment on the current policy. An explicit upgrade requirement disables Start and new
-connections, explains that administrator action is needed, and keeps Stop available for
-a running or uncertain environment. The interface never upgrades a container implicitly.
+terminal, conversations and Codex account card. The first workspace entry initializes
+only an absent environment and shows a status message and recovery action on failure;
+an existing stopped environment remains stopped until explicit Start. Terminal and account actions require a confirmed running
+environment. Stop remains available for a running or uncertain environment.
 
-The terminal loads on explicit Open, reconnects only on request and requires an explicit
+After confirmed Codex connection, the desktop workspace places chat beside a resizable
+terminal; narrow screens switch between them without discarding the mounted pane. Chat
+discloses full access, shows model, streaming, questions, interruption and recovery states,
+keeps agent output inert, supports loading older conversation pages and indicates when
+a conversation history is truncated. Streaming follows the latest message only while the
+reader is at the bottom; otherwise a control offers the latest output without moving the
+reader's position. Stopped-state recovery exposes run recovery and
+model-access restoration without revealing private conversation contents. The terminal
+loads on explicit Open, reconnects only on request and requires an explicit
 takeover when another tab owns input. Its accessible xterm area has an exit-focus action,
 responsive sizing and mobile Enter, Tab and Ctrl controls. A transport interruption does
 not replay queued input. Closing the view detaches from the persistent shell; Stop ends
@@ -35,7 +43,8 @@ polling does not steal focus. Polling runs only during sign-in on an active page
 to the page reads the existing operation and never starts another sign-in automatically.
 Code and account data stay in memory and disappear on session invalidation, account change
 or unavailable environment. Expired codes disappear even when a request is stalled.
-Disconnect explains that manually launched Codex processes may still require Stop.
+Disconnect is blocked for active or uncertain Factory runs and explains that manually
+launched Codex processes may still require Stop.
 
 The access backoffice uses readable user cards with provider, role and status. Filters
 and pagination remain in the URL. Pending mutations disable only the affected row;
@@ -57,6 +66,8 @@ API responses, terminal output and account data are excluded from the service-wo
 
 Keep English UI text close to its owning component until an actual localization runtime
 is needed. Reuse shadcn primitives when an implemented interaction benefits from them;
-do not copy an unused catalog. Future agent output must remain inert until a deliberate
-rich-content policy is implemented, and questions and permissions must retain separate,
-explicit actions.
+do not copy an unused catalog. Agent output remains inert until a deliberate rich-content
+policy is implemented; questions remain explicit actions. Full-access execution does not
+present per-action approval as an available protection.
+
+The model selector offers an explicit refresh and reuses a short-lived, user-scoped in-memory query cache. Account changes and session invalidation clear private cached models.
