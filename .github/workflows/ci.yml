@@ -134,28 +134,9 @@ jobs:
       - name: Egress integration
         run: node scripts/egress/integration.mjs
 
-  release-build:
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-      - name: Build release binaries
-        run: cargo build --release --locked --workspace
-
   check:
     if: always()
-    needs:
-      [
-        changes,
-        javascript,
-        rust,
-        database-integration,
-        docker-integration,
-        release-build,
-      ]
+    needs: [changes, javascript, rust, database-integration, docker-integration]
     runs-on: ubuntu-latest
     steps:
       - name: Require applicable checks to pass
@@ -166,8 +147,6 @@ jobs:
           INTEGRATION_REQUIRED: ${{ needs.changes.outputs.integration }}
           DATABASE: ${{ needs.database-integration.result }}
           DOCKER: ${{ needs.docker-integration.result }}
-          EVENT_NAME: ${{ github.event_name }}
-          RELEASE: ${{ needs.release-build.result }}
         shell: bash
         run: |
           set -euo pipefail
@@ -182,14 +161,5 @@ jobs:
             fi
           elif [[ "$INTEGRATION_REQUIRED" != false || "$DATABASE" != skipped || "$DOCKER" != skipped ]]; then
             echo "Integration jobs did not match the expected scope" >&2
-            exit 1
-          fi
-          if [[ "$EVENT_NAME" == pull_request ]]; then
-            if [[ "$RELEASE" != skipped ]]; then
-              echo "Release build was not skipped for the pull request" >&2
-              exit 1
-            fi
-          elif [[ "$RELEASE" != success ]]; then
-            echo "Release build did not succeed" >&2
             exit 1
           fi
