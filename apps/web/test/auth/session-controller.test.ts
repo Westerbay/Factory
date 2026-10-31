@@ -16,7 +16,9 @@ afterEach(() => {
 })
 
 function setup(
-  read = vi.fn<() => Promise<Session>>().mockResolvedValue(session())
+  read = vi
+    .fn<(signal: AbortSignal) => Promise<Session>>()
+    .mockResolvedValue(session())
 ) {
   const dependencies = {
     read,
@@ -33,6 +35,160 @@ function setup(
 }
 
 describe("private session state", () => {
+  it("shares the initial verification requested by multiple consumers", async () => {
+    let complete!: (value: Session) => void
+    const read = vi.fn<() => Promise<Session>>().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve
+        })
+    )
+    const { controller } = setup(read)
+    const first = controller.refresh()
+    const second = controller.refresh()
+    expect(read).toHaveBeenCalledOnce()
+    expect(controller.getSnapshot()).toEqual({ status: "checking" })
+    complete(session())
+    await Promise.all([first, second])
+    expect(controller.getSnapshot().status).toBe("active")
+  })
+
+  it("coalesces routine checks without changing a verified snapshot or restarting consumers", async () => {
+    const { controller, dependencies } = setup()
+    expect(controller.getScope()).toBeUndefined()
+    await controller.refresh()
+    const previous = controller.getSnapshot()
+    if (previous.status !== "active") throw new Error("Expected active session")
+    const scope = controller.getScope()
+    dependencies.clearPrivateData.mockClear()
+    const listener = vi.fn()
+    controller.subscribe(listener)
+    let complete!: (value: Session) => void
+    dependencies.read.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve
+        })
+    )
+    const recheck = controller.refresh()
+    const repeated = controller.refresh()
+    expect(controller.getSnapshot()).toBe(previous)
+    expect(dependencies.read).toHaveBeenCalledTimes(2)
+    complete({ ...previous.session, user: { ...previous.session.user } })
+    await Promise.all([recheck, repeated])
+    expect(controller.getSnapshot()).toBe(previous)
+    expect(controller.getScope()).toBe(scope)
+    expect(dependencies.clearPrivateData).not.toHaveBeenCalled()
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it.each(["user", "token", "role"] as const)(
+    "replaces the presentation scope and private cache when the verified %s changes",
+    async (change) => {
+      const { controller, dependencies } = setup()
+      await controller.refresh()
+      const scope = controller.getScope()
+      dependencies.clearPrivateData.mockClear()
+      const next = session()
+      if (change === "user")
+        next.user.id = "a3d81ae5-5ee6-4a75-bb54-126bfe991643"
+      if (change === "token") next.csrfToken = "new-synthetic-csrf"
+      if (change === "role") next.user.role = "admin"
+      dependencies.read.mockResolvedValueOnce(next)
+      await controller.refresh()
+      expect(controller.getScope()).not.toBe(scope)
+      expect(dependencies.clearPrivateData).toHaveBeenCalledOnce()
+    }
+  )
+
+  it.each(["handle", "displayName", "expiresAt"] as const)(
+    "updates verified %s without replacing the private scope",
+    async (field) => {
+      const { controller, dependencies } = setup()
+      await controller.refresh()
+      const previous = controller.getSnapshot()
+      if (previous.status !== "active")
+        throw new Error("Expected active session")
+      const scope = controller.getScope()
+      dependencies.clearPrivateData.mockClear()
+      const next = { ...previous.session, user: { ...previous.session.user } }
+      if (field === "expiresAt")
+        next.expiresAt = new Date(
+          Date.parse(next.expiresAt) - 1000
+        ).toISOString()
+      else next.user[field] = "Updated member"
+      dependencies.read.mockResolvedValueOnce(next)
+      await controller.refresh()
+      expect(controller.getSnapshot()).toEqual({
+        status: "active",
+        session: next,
+      })
+      expect(controller.getScope()).toBe(scope)
+      expect(dependencies.clearPrivateData).not.toHaveBeenCalled()
+    }
+  )
+
+  it("drops the active scope immediately on remote invalidation", async () => {
+    const { controller, dependencies } = setup()
+    await controller.refresh()
+    const previousScope = controller.getScope()
+    let completeOld!: (value: Session) => void
+    let completeNew!: (value: Session) => void
+    dependencies.read
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            completeOld = resolve
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            completeNew = resolve
+          })
+      )
+    const pending = controller.refresh()
+    expect(controller.getSnapshot().status).toBe("active")
+    const remote = controller.invalidateRemote()
+    expect(controller.getSnapshot()).toEqual({ status: "checking" })
+    expect(controller.getScope()).toBeUndefined()
+    completeOld(session())
+    await pending
+    expect(controller.getScope()).toBeUndefined()
+    const repeated = controller.refresh()
+    expect(dependencies.read).toHaveBeenCalledTimes(3)
+    completeNew(session())
+    await Promise.all([remote, repeated])
+    expect(controller.getScope()).not.toBe(previousScope)
+  })
+
+  it("keeps the original expiry deadline while repeated focus checks are pending", async () => {
+    vi.useFakeTimers()
+    const { controller, dependencies } = setup()
+    await controller.refresh()
+    let complete!: (value: Session) => void
+    dependencies.read.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve
+        })
+    )
+    await vi.advanceTimersByTimeAsync(30_000)
+    const pending = controller.refresh()
+    expect(controller.getSnapshot().status).toBe("active")
+    await vi.advanceTimersByTimeAsync(20_000)
+    const later = controller.refresh()
+    expect(controller.getSnapshot().status).toBe("active")
+    expect(dependencies.read).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(10_001)
+    expect(controller.getSnapshot()).toEqual({ status: "anonymous" })
+    expect(controller.getScope()).toBeUndefined()
+    expect(dependencies.read.mock.calls[1]?.[0].aborted).toBe(true)
+    complete(session())
+    await Promise.all([pending, later])
+    expect(controller.getSnapshot()).toEqual({ status: "anonymous" })
+  })
+
   it("never restores an old login response after invalidation or a newer request", async () => {
     let resolveOld!: (value: Session) => void
     const read = vi
@@ -149,21 +305,115 @@ describe("private session state", () => {
     expect(dependencies.announceChange).not.toHaveBeenCalled()
   })
 
-  it.each([401, 403, 503])(
+  it.each([401, 403])(
     "hides and clears the previous session on HTTP %s",
     async (status) => {
       const { controller, dependencies } = setup()
       await controller.refresh()
+      const previous = controller.getSnapshot()
       dependencies.read.mockRejectedValueOnce(new ApiFailure(status))
       const refresh = controller.refresh()
-      expect(controller.getSnapshot()).toEqual({ status: "checking" })
+      expect(controller.getSnapshot()).toBe(previous)
       await refresh
-      expect(controller.getSnapshot()).toEqual({
-        status: status === 503 ? "unavailable" : "anonymous",
-      })
+      expect(controller.getSnapshot()).toEqual({ status: "anonymous" })
       expect(dependencies.clearPrivateData).toHaveBeenCalledTimes(2)
+      expect(controller.getScope()).toBeUndefined()
     }
   )
+
+  it.each([new ApiFailure(503), new TypeError("Network unavailable")])(
+    "keeps an unexpired verified session on a transient check failure without extending it",
+    async (error) => {
+      vi.useFakeTimers()
+      const { controller, dependencies } = setup()
+      await controller.refresh()
+      const previous = controller.getSnapshot()
+      if (previous.status !== "active")
+        throw new Error("Expected active session")
+      const scope = controller.getScope()
+      dependencies.clearPrivateData.mockClear()
+      await vi.advanceTimersByTimeAsync(30_000)
+      dependencies.read.mockRejectedValueOnce(error)
+      await controller.refresh()
+      const failed = controller.getSnapshot()
+      expect(failed).toEqual({
+        ...previous,
+        verification: "unavailable",
+      })
+      if (failed.status !== "active") throw new Error("Expected active session")
+      expect(failed.session).toBe(previous.session)
+      expect(controller.getScope()).toBe(scope)
+      expect(dependencies.clearPrivateData).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(30_001)
+      expect(controller.getSnapshot()).toEqual({ status: "anonymous" })
+      expect(controller.getScope()).toBeUndefined()
+      expect(dependencies.read).toHaveBeenCalledTimes(2)
+      expect(dependencies.clearPrivateData).toHaveBeenCalledOnce()
+    }
+  )
+
+  it("clears a failed verification notice after recovery without replacing the session", async () => {
+    const { controller, dependencies } = setup()
+    await controller.refresh()
+    const previous = controller.getSnapshot()
+    if (previous.status !== "active") throw new Error("Expected active session")
+    dependencies.read.mockRejectedValueOnce(new ApiFailure(503))
+    await controller.refresh()
+    dependencies.read.mockResolvedValueOnce({
+      ...previous.session,
+      user: { ...previous.session.user },
+    })
+    await controller.refresh()
+    const recovered = controller.getSnapshot()
+    expect(recovered).toEqual(previous)
+    if (recovered.status !== "active")
+      throw new Error("Expected active session")
+    expect(recovered.session).toBe(previous.session)
+  })
+
+  it("retains an unexpired offline session, aborts its check, and expires without retrying", async () => {
+    vi.useFakeTimers()
+    const { controller, dependencies } = setup()
+    await controller.refresh()
+    const previous = controller.getSnapshot()
+    let complete!: (value: Session) => void
+    dependencies.read.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve
+        })
+    )
+    const checking = controller.refresh()
+    await vi.advanceTimersByTimeAsync(30_000)
+    dependencies.online.mockReturnValue(false)
+    await controller.refresh()
+    expect(controller.getSnapshot()).toEqual({
+      ...previous,
+      verification: "offline",
+    })
+    expect(dependencies.read.mock.calls[1]?.[0].aborted).toBe(true)
+    complete(session())
+    await checking
+    expect(controller.getSnapshot()).toEqual({
+      ...previous,
+      verification: "offline",
+    })
+    await vi.advanceTimersByTimeAsync(30_001)
+    expect(controller.getSnapshot()).toEqual({ status: "anonymous" })
+    expect(dependencies.read).toHaveBeenCalledTimes(2)
+  })
+
+  it("does not grant an initial session after an unavailable or offline check", async () => {
+    const { controller, dependencies } = setup()
+    dependencies.read.mockRejectedValueOnce(new ApiFailure(503))
+    await controller.refresh()
+    expect(controller.getSnapshot()).toEqual({ status: "unavailable" })
+    dependencies.online.mockReturnValue(false)
+    await controller.refresh()
+    expect(controller.getSnapshot()).toEqual({ status: "offline" })
+    expect(controller.getScope()).toBeUndefined()
+    expect(dependencies.read).toHaveBeenCalledOnce()
+  })
 
   it("withdraws expired and offline sessions without exposing cached data", async () => {
     vi.useFakeTimers()
@@ -183,6 +433,7 @@ describe("private session state", () => {
     dependencies.announceChange.mockClear()
     const logout = controller.logout()
     expect(controller.getSnapshot()).toEqual({ status: "checking" })
+    expect(controller.getScope()).toBeUndefined()
     await logout
     expect(dependencies.revoke).toHaveBeenCalledWith("synthetic-csrf")
     expect(controller.getSnapshot()).toEqual({ status: "anonymous" })

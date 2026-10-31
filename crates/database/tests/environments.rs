@@ -350,7 +350,7 @@ async fn suspension_is_atomic_and_waiting_requests_recheck_live_session() {
 
 #[tokio::test]
 #[ignore = "requires the explicitly owned PostgreSQL integration fixture"]
-async fn supervisor_is_exclusive_and_connection_loss_is_terminal() {
+async fn supervisor_replacement_preserves_exclusivity_and_failed_guards_stay_failed() {
     let (db, sql) = fixture().await;
     let installation = Uuid::new_v4();
     let mut guard = db.environment_supervisor(installation).await.unwrap();
@@ -373,7 +373,21 @@ async fn supervisor_is_exclusive_and_connection_loss_is_terminal() {
         guard.check().await.is_err(),
         "guard must never reconnect after losing its lock"
     );
-    let replacement = db.environment_supervisor(installation).await.unwrap();
+    let mut competitor = db.environment_supervisor(installation).await.unwrap();
+    assert!(guard.check().await.is_err());
+    assert!(matches!(
+        db.environment_supervisor(installation).await,
+        Err(EnvironmentError::Conflict)
+    ));
+    competitor.check().await.unwrap();
+    competitor.close().await.unwrap();
+
+    let mut replacement = db.environment_supervisor(installation).await.unwrap();
+    replacement.check().await.unwrap();
+    assert!(
+        guard.check().await.is_err(),
+        "recovery must replace the guard, never reactivate the failed instance"
+    );
     replacement.close().await.unwrap();
     db.close().await;
     sql.close().await;

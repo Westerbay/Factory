@@ -6,7 +6,8 @@ use std::sync::{
 };
 
 /// Shared readiness only. PostgreSQL and the process installation lock own exclusion.
-/// A lost supervisor is terminal: only a new process may acquire ownership again.
+/// Failure is terminal for this host. Recovery must compose a new host with fresh
+/// readiness and observations; old services and runtime permissions stay closed.
 #[derive(Clone)]
 pub struct EnvironmentAvailability {
     state: Arc<AtomicU8>,
@@ -72,7 +73,7 @@ impl EnvironmentService {
             || environment.policy_version != self.config.policy_version
     }
 
-    /// Do not republish a terminal observation from a previous process before
+    /// Do not republish a terminal observation from a previous host before
     /// this supervisor has inspected it. The last observation time stays visible.
     pub fn can_report(&self, environment: Option<&Environment>) -> bool {
         self.is_available()

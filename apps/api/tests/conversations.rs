@@ -37,6 +37,7 @@ const CSRF: &str = "fixture-account-csrf";
 struct Store {
     sessions: Mutex<HashMap<CredentialHash, ActiveSession>>,
     environment: Mutex<Environment>,
+    environment_reads: AtomicUsize,
 }
 
 #[async_trait]
@@ -106,6 +107,7 @@ impl IdentityProvider for NoProvider {
 #[async_trait]
 impl EnvironmentStore for Store {
     async fn get(&self, actor: EnvironmentActor) -> Result<Option<Environment>, EnvironmentError> {
+        self.environment_reads.fetch_add(1, Ordering::SeqCst);
         let sessions = self.sessions.lock().unwrap();
         if !sessions.get(&actor.session_hash).is_some_and(|session| {
             session.user.id == actor.user_id
@@ -662,6 +664,7 @@ impl ConversationFixture {
         let availability = EnvironmentAvailability::default();
         let store = Arc::new(Store {
             sessions: Mutex::new(sessions),
+            environment_reads: AtomicUsize::new(0),
             environment: Mutex::new(Environment {
                 id: Uuid::new_v4(),
                 user_id: users[0],
@@ -1169,29 +1172,134 @@ async fn account_changes_and_logout_refuse_open_or_uncertain_owned_runs() {
 }
 
 #[tokio::test]
-async fn overlapping_model_probes_for_one_user_are_rejected_and_release_the_slot() {
-    let f = ConversationFixture::new().await;
+async fn overlapping_model_requests_share_one_probe_and_release_the_slot() {
+    let f = Arc::new(ConversationFixture::new().await);
     f.provider.hold_models.store(true, Ordering::SeqCst);
-    let actor = {
-        let sessions = f.store.sessions.lock().unwrap();
-        EnvironmentActor {
-            user_id: sessions[&f.hashes[0]].user.id,
-            session_hash: f.hashes[0],
-        }
-    };
-    let runtime = f.runtime.clone();
-    let first = tokio::spawn(async move { runtime.models(actor).await });
+    let first_fixture = f.clone();
+    let first = tokio::spawn(async move {
+        first_fixture
+            .call("GET", "/api/conversations/models", 0, "")
+            .await
+    });
     until(|| f.provider.model_started.load(Ordering::SeqCst) == 1).await;
-    assert!(matches!(
-        f.runtime.models(actor).await,
-        Err(ConversationError::Conflict)
-    ));
+    let reads = f.store.environment_reads.load(Ordering::SeqCst);
+    let second_fixture = f.clone();
+    let second = tokio::spawn(async move {
+        second_fixture
+            .call("GET", "/api/conversations/models", 0, "")
+            .await
+    });
+    until(|| f.store.environment_reads.load(Ordering::SeqCst) > reads).await;
+    assert!(!first.is_finished());
+    assert!(!second.is_finished());
     assert_eq!(f.provider.model_started.load(Ordering::SeqCst), 1);
     f.provider.hold_models.store(false, Ordering::SeqCst);
     f.provider.release_models.notify_one();
-    assert!(first.await.unwrap().is_ok());
-    assert!(f.runtime.models(actor).await.is_ok());
+    let (first, second) = tokio::time::timeout(Duration::from_secs(2), async {
+        (first.await.unwrap(), second.await.unwrap())
+    })
+    .await
+    .expect("shared model requests must finish after provider release");
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(second.status(), StatusCode::OK);
+    assert_eq!(body_json(first).await, body_json(second).await);
+    assert!(f.data.0.lock().unwrap().probes.is_empty());
+    assert_eq!(
+        f.call("GET", "/api/conversations/models", 0, "")
+            .await
+            .status(),
+        StatusCode::OK
+    );
     assert_eq!(f.provider.model_started.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn shared_model_requests_reauthorize_each_session_before_returning_models() {
+    for revoked in [0, 1] {
+        let f = Arc::new(ConversationFixture::new().await);
+        {
+            let mut sessions = f.store.sessions.lock().unwrap();
+            let user = sessions[&f.hashes[0]].user.clone();
+            sessions.get_mut(&f.hashes[1]).unwrap().user = user;
+        }
+        f.provider.hold_models.store(true, Ordering::SeqCst);
+        let first_fixture = f.clone();
+        let first = tokio::spawn(async move {
+            first_fixture
+                .call("GET", "/api/conversations/models", 0, "")
+                .await
+        });
+        until(|| f.provider.model_started.load(Ordering::SeqCst) == 1).await;
+        let reads = f.store.environment_reads.load(Ordering::SeqCst);
+        let second_fixture = f.clone();
+        let second = tokio::spawn(async move {
+            second_fixture
+                .call("GET", "/api/conversations/models", 1, "")
+                .await
+        });
+        until(|| f.store.environment_reads.load(Ordering::SeqCst) > reads).await;
+        f.store.sessions.lock().unwrap().remove(&f.hashes[revoked]);
+        f.provider.hold_models.store(false, Ordering::SeqCst);
+        f.provider.release_models.notify_one();
+        let responses = tokio::time::timeout(Duration::from_secs(2), async {
+            [first.await.unwrap(), second.await.unwrap()]
+        })
+        .await
+        .expect("each session must finish its own authorization check");
+        for (index, response) in responses.into_iter().enumerate() {
+            assert_eq!(
+                response.status(),
+                if index == revoked {
+                    StatusCode::UNAUTHORIZED
+                } else {
+                    StatusCode::OK
+                }
+            );
+            if index == revoked {
+                assert!(
+                    !body_json(response)
+                        .await
+                        .to_string()
+                        .contains("fixture-model")
+                );
+            }
+        }
+        assert_eq!(f.provider.model_started.load(Ordering::SeqCst), 1);
+        assert!(f.data.0.lock().unwrap().probes.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn dropping_the_initial_http_request_does_not_restart_or_abandon_the_shared_probe() {
+    let f = Arc::new(ConversationFixture::new().await);
+    f.provider.hold_models.store(true, Ordering::SeqCst);
+    let first_fixture = f.clone();
+    let first = tokio::spawn(async move {
+        first_fixture
+            .call("GET", "/api/conversations/models", 0, "")
+            .await
+    });
+    until(|| f.provider.model_started.load(Ordering::SeqCst) == 1).await;
+    first.abort();
+    assert!(first.await.unwrap_err().is_cancelled());
+    let reads = f.store.environment_reads.load(Ordering::SeqCst);
+    let second_fixture = f.clone();
+    let second = tokio::spawn(async move {
+        second_fixture
+            .call("GET", "/api/conversations/models", 0, "")
+            .await
+    });
+    until(|| f.store.environment_reads.load(Ordering::SeqCst) > reads).await;
+    assert_eq!(f.provider.model_started.load(Ordering::SeqCst), 1);
+    assert_eq!(f.data.0.lock().unwrap().probes.len(), 1);
+    f.provider.hold_models.store(false, Ordering::SeqCst);
+    f.provider.release_models.notify_one();
+    let response = tokio::time::timeout(Duration::from_secs(2), second)
+        .await
+        .expect("the surviving request must finish after provider release")
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(f.data.0.lock().unwrap().probes.is_empty());
 }
 
 #[tokio::test]
@@ -1376,7 +1484,11 @@ async fn paused_provider_launch_keeps_lease_during_stop_and_restart() {
     );
     f.provider.hold_models.store(false, Ordering::SeqCst);
     f.provider.release_models.notify_one();
-    assert!(launch.await.unwrap().is_ok());
+    let result = tokio::time::timeout(Duration::from_secs(2), launch)
+        .await
+        .expect("the completed probe must release its reservation")
+        .unwrap();
+    assert_eq!(result, Err(ConversationError::Conflict));
     assert!(
         f.data.0.lock().unwrap().probes.is_empty(),
         "a conclusive completed process releases its lease"

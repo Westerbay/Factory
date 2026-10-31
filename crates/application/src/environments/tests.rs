@@ -548,6 +548,63 @@ fn stopped_observation_before_supervisor_start_is_not_recovery_evidence() {
 }
 
 #[tokio::test]
+async fn replacement_host_requires_fresh_observations_and_cannot_revive_old_work() {
+    for desired in [DesiredState::Running, DesiredState::Stopped] {
+        let f = Fixture::new();
+        f.provisioned(desired);
+        let old_service = f.service();
+        let mut old_worker = f.reconciler();
+        old_worker.reconcile_once().await.unwrap();
+        assert!(old_service.can_report(Some(&f.store.row())));
+        f.availability.fail_closed();
+        f.store.row.lock().unwrap().observed_at = Some(Utc::now() - Duration::minutes(1));
+
+        let replacement = EnvironmentAvailability::default();
+        let service =
+            EnvironmentService::new(f.store.clone(), f.config.clone(), replacement.clone())
+                .unwrap();
+        let mut worker = EnvironmentReconciler::new(
+            f.store.clone(),
+            f.runtime.clone(),
+            Box::new(Guard(f.guard.clone())),
+            f.config.clone(),
+            replacement,
+        )
+        .unwrap();
+        let batch = worker.next_batch().await.unwrap();
+        assert!(service.is_available());
+        assert!(!service.can_report(Some(&f.store.row())));
+        worker
+            .reconcile_environment(batch[0].clone())
+            .await
+            .unwrap();
+        assert!(service.can_report(Some(&f.store.row())));
+
+        let count = f.runtime.calls.lock().unwrap().len();
+        assert_eq!(
+            old_worker.reconcile_environment(batch[0].clone()).await,
+            Err(EnvironmentError::Unavailable)
+        );
+        assert_eq!(f.runtime.calls.lock().unwrap().len(), count);
+        assert!(!old_service.can_report(Some(&f.store.row())));
+        assert_eq!(
+            old_service.start(f.actor()).await,
+            Err(EnvironmentError::Unavailable)
+        );
+
+        // Stop and revocation during an outage remain authoritative after recovery.
+        old_service.stop(f.actor()).await.unwrap();
+        worker.reconcile_once().await.unwrap();
+        assert_eq!(f.store.row().observed_state, ObservedState::Stopped);
+        f.store.valid_session.store(false, Ordering::SeqCst);
+        assert_eq!(
+            service.require_running(f.actor()).await,
+            Err(EnvironmentError::Unauthorized)
+        );
+    }
+}
+
+#[tokio::test]
 async fn prepared_target_changes_refuse_interactive_work() {
     for image_changed in [false, true] {
         let f = Fixture::new();

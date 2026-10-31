@@ -1,14 +1,14 @@
 import { afterEach, expect, it, vi } from "vitest"
 
-import type { Session } from "../../lib/auth/session-api"
-import type { SessionState } from "../../lib/auth/session-controller"
+import type { Session } from "../../src/lib/auth/session-api"
+import type { SessionState } from "../../src/lib/auth/session-controller"
 import {
   ConnectionFailure,
   canDisconnectConnection,
   type Connection,
   type ConnectionAction,
-} from "./api"
-import { ConnectionController } from "./connection-controller"
+} from "../../src/features/agent-connections/api"
+import { ConnectionController } from "../../src/features/agent-connections/connection-controller"
 
 const controllers: ConnectionController[] = []
 const disconnected: Connection = { provider: "codex", status: "disconnected" }
@@ -105,7 +105,7 @@ it("only polls pending sign-in every two seconds and stops once the account is c
   expect(dependencies.change).toHaveBeenCalledTimes(1)
 })
 
-it.each(["visible", "online", "available"] as const)(
+it.each(["online", "available"] as const)(
   "clears private state when %s is lost and resumes by GET only",
   async (condition) => {
     const { controller, dependencies } = setup(connecting())
@@ -126,6 +126,81 @@ it.each(["visible", "online", "available"] as const)(
     expect(dependencies.change).not.toHaveBeenCalled()
   }
 )
+
+it("preserves a connected account while hidden and during its resumed status read", async () => {
+  const connected: Connection = {
+    provider: "codex",
+    status: "connected",
+    account: { plan: "plus" },
+  }
+  const { controller, dependencies } = setup(connected)
+  controller.connect()
+  await settle()
+  dependencies.visible.mockReturnValue(false)
+  controller.synchronize()
+  expect(controller.getSnapshot()).toMatchObject({
+    connection: connected,
+    paused: true,
+  })
+  await vi.advanceTimersByTimeAsync(10_000)
+  expect(dependencies.read).toHaveBeenCalledTimes(1)
+  let finish!: (connection: Connection) => void
+  dependencies.read.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve
+      })
+  )
+  dependencies.visible.mockReturnValue(true)
+  controller.synchronize()
+  expect(controller.getSnapshot()).toMatchObject({
+    connection: connected,
+    pending: "read",
+    paused: false,
+  })
+  finish(disconnected)
+  await settle()
+  expect(controller.getSnapshot().connection).toEqual(disconnected)
+  expect(dependencies.change).not.toHaveBeenCalled()
+})
+
+it("keeps the original device-code deadline while hidden without polling or logging in again", async () => {
+  const { controller, dependencies } = setup(connecting(3_000))
+  controller.connect()
+  await settle()
+  dependencies.visible.mockReturnValue(false)
+  controller.synchronize()
+  await vi.advanceTimersByTimeAsync(2_000)
+  expect(controller.getSnapshot().connection?.challenge?.userCode).toBe(
+    "SYNTHETIC-CODE"
+  )
+  await vi.advanceTimersByTimeAsync(1_000)
+  expect(controller.getSnapshot()).toMatchObject({
+    connection: { errorCode: "expired" },
+    paused: true,
+  })
+  expect(controller.getSnapshot().connection?.challenge).toBeUndefined()
+  expect(dependencies.read).toHaveBeenCalledTimes(1)
+  expect(dependencies.change).not.toHaveBeenCalled()
+})
+
+it("does not restart provider observation for verified session metadata updates", async () => {
+  const { controller, dependencies, session, setSession } = setup(connecting())
+  controller.connect()
+  await settle()
+  const before = controller.getSnapshot()
+  setSession({
+    status: "active",
+    session: {
+      ...session,
+      user: { ...session.user, displayName: "Updated name" },
+    },
+  })
+  expect(controller.getSnapshot()).toBe(before)
+  expect(dependencies.read).toHaveBeenCalledTimes(1)
+  await vi.advanceTimersByTimeAsync(2_000)
+  expect(dependencies.read).toHaveBeenCalledTimes(2)
+})
 
 it.each([
   "checking",

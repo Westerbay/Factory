@@ -1,5 +1,6 @@
 //! Conversation entry points validate the supervisor's current environment before storage.
 pub mod coordinator;
+mod model_probes;
 use crate::environments::EnvironmentService;
 use factory_core::{
     conversations::*,

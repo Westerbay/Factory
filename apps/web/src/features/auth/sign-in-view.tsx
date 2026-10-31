@@ -1,3 +1,4 @@
+import { Brand } from "../../components/ui/brand"
 import { API_ORIGIN } from "../../lib/api/client"
 import "./auth.css"
 
@@ -21,26 +22,22 @@ export function signInReason(value: unknown): keyof typeof reasons | undefined {
 export function SignInView({ reason }: { reason?: keyof typeof reasons }) {
   return (
     <section className="auth-page" aria-labelledby="sign-in-title">
-      <p className="eyebrow">Your private workspace</p>
-      <h1 id="sign-in-title">Welcome to Factory</h1>
-      <p className="introduction">
-        Sign in with GitHub to access your workspace. An administrator must
-        approve your access first.
-      </p>
-      {reason && (
-        <p className="auth-notice" role="status">
-          {reasons[reason]}
-        </p>
-      )}
-      <a
-        className="primary-action"
-        href={`${API_ORIGIN}/api/auth/github/start`}
-      >
-        Continue with GitHub
-      </a>
-      <p className="auth-note">
-        No password or email registration is required.
-      </p>
+      <Brand />
+      <div className="auth-content">
+        <h1 id="sign-in-title">Sign in to Factory</h1>
+        {reason && (
+          <p className="auth-notice" role="status">
+            {reasons[reason]}
+          </p>
+        )}
+        <a
+          className="ui-button ui-button-primary auth-sign-in"
+          href={`${API_ORIGIN}/api/auth/github/start`}
+        >
+          <img src="/brand/github.svg" width="20" height="20" alt="" />
+          Continue with GitHub
+        </a>
+      </div>
     </section>
   )
 }

@@ -26,6 +26,7 @@ function retainedEnvironment(targetPath) {
     "TEMP",
     "TMP",
     "CARGO_HOME",
+    "CARGO_BUILD_JOBS",
     "CARGO_TARGET_DIR",
     "RUSTUP_HOME",
     "LIB",
@@ -101,11 +102,12 @@ async function runFixture() {
     await database.close()
     database = undefined
     await writeFile(targetPath, `${JSON.stringify(target)}\n`, { flag: "wx" })
-    for (const [packageName, suite] of [
-      ["factory-api", "composition"],
-      ["factory-database", "identity"],
-      ["factory-database", "environments"],
-      ["factory-database", "conversations"],
+    for (const [packageName, selection] of [
+      ["factory-api", ["--test", "composition"]],
+      ["factory-api", ["--lib", "bootstrap::integration"]],
+      ["factory-database", ["--test", "identity"]],
+      ["factory-database", ["--test", "environments"]],
+      ["factory-database", ["--test", "conversations"]],
     ]) {
       const result = runCargo(
         [
@@ -114,8 +116,7 @@ async function runFixture() {
           "--offline",
           "--package",
           packageName,
-          "--test",
-          suite,
+          ...selection,
           "--",
           "--ignored",
           "--test-threads=1",
@@ -123,7 +124,9 @@ async function runFixture() {
         { env: retainedEnvironment(targetPath) }
       )
       if (result.error || result.status !== 0)
-        throw new Error(`Identity ${suite} integration failed`)
+        throw new Error(
+          `Identity ${packageName} ${selection.join(" ")} integration failed`
+        )
     }
     console.log("Identity integration passed with a fresh database")
   } finally {

@@ -1,4 +1,7 @@
-import { useEffect, useRef } from "react"
+import { useId } from "react"
+
+import { Button } from "../../components/ui/button"
+import { Modal } from "../../components/ui/modal"
 
 export function SuspendDialog({
   name,
@@ -9,36 +12,27 @@ export function SuspendDialog({
   onCancel: () => void
   onConfirm: () => void
 }) {
-  const ref = useRef<HTMLDialogElement>(null)
-  useEffect(() => {
-    const dialog = ref.current
-    dialog?.showModal()
-    return () => {
-      dialog?.close()
-    }
-  }, [])
+  const descriptionId = useId()
 
   return (
-    <dialog
-      className="suspend-dialog"
-      ref={ref}
-      onCancel={onCancel}
-      aria-labelledby="suspend-title"
-      aria-describedby="suspend-description"
+    <Modal
+      open
+      onClose={onCancel}
+      title={`Suspend ${name}?`}
+      descriptionId={descriptionId}
     >
-      <h2 id="suspend-title">Suspend {name}?</h2>
-      <p id="suspend-description">
+      <p id={descriptionId}>
         All of this user's sessions will be revoked immediately. They will not
         be able to sign in until you reactivate their access.
       </p>
-      <div className="admin-actions">
-        <button type="button" autoFocus onClick={onCancel}>
+      <div className="ui-modal-actions">
+        <Button data-autofocus onClick={onCancel}>
           Cancel
-        </button>
-        <button type="button" className="danger-action" onClick={onConfirm}>
+        </Button>
+        <Button variant="danger" onClick={onConfirm}>
           Suspend access
-        </button>
+        </Button>
       </div>
-    </dialog>
+    </Modal>
   )
 }

@@ -23,6 +23,41 @@ NestJS, TanStack Start/SSR, Better Auth, password/mail flows, sample users, Mail
 Valkey and monitoring are excluded from the web/API runtime. No template visual identity
 is required. Shadcn primitives remain deferred until an actual interaction needs them.
 
+## Shared browser presentation
+
+- [Button and IconButton](../apps/web/src/components/ui/button.tsx) preserve native button
+  props and provide shared primary, secondary, ghost and danger variants. Icon-only
+  actions require an accessible label; navigation remains a link.
+- [Modal](../apps/web/src/components/ui/modal.tsx) wraps the native dialog with a named
+  heading, controlled visibility, Escape handling and initial focus. Shutdown and member
+  suspension supply their own consequences and confirmation actions; the primitive owns
+  no mutation or authorization policy.
+- [LoadingState](../apps/web/src/components/ui/loading-state.tsx) provides concise live
+  status and a reduced-motion-safe indicator for preparation states.
+  [Brand](../apps/web/src/components/ui/brand.tsx) provides the shared workspace link.
+- [SplitPane](../apps/web/src/components/ui/split-pane.tsx) owns pointer and keyboard
+  resizing for the chat and terminal panes and an expanded secondary pane. Visibility
+  and expansion preserve mounted content and the requested split width; hidden content
+  is inert. The component does not start or stop a terminal process.
+- [MessageMarkdown](../apps/web/src/features/conversations/message-markdown.tsx) renders
+  completed assistant messages and live deltas with the same scoped typography and
+  overflow behavior. The MIT-licensed `react-markdown` and `remark-gfm` packages supply
+  parsing and GFM support. The component ignores raw HTML, keeps images inert, and
+  accepts only explicit HTTP(S) and mail links without embedded credentials. User
+  messages remain plain text; do not bypass this boundary with raw HTML rendering.
+- [Shared tokens](../apps/web/src/styles/app.css) and
+  [control styles](../apps/web/src/components/ui/ui.css) own replaceable visual conventions.
+  The [workspace composition](../apps/web/src/components/workspace/workspace-page.tsx) joins feature
+  content with sidebar, profile navigation and terminal layout. Provider operations stay
+  in their feature controllers; shell layout does not issue provider requests.
+
+Space Mono 400/700 is self-hosted from [bundled font files](../apps/web/public/fonts/space-mono)
+with its [SIL Open Font License 1.1](../apps/web/public/fonts/space-mono/OFL.txt), copyright
+2016 The Space Mono Project Authors. The bundled [GitHub mark](../apps/web/public/brand/github.svg)
+comes from Simple Icons and retains its [CC0 1.0 license](../apps/web/public/brand/SIMPLE-ICONS-LICENSE.txt).
+Outline interface icons use the installed `lucide-react` package. Font and icon assets
+are public static resources; loading the interface does not require a remote font service.
+
 ## Identity contracts and composition
 
 - [Identity types, policy and ports](../crates/core/src/identity/mod.rs) own stable
@@ -42,7 +77,11 @@ is required. Shadcn primitives remain deferred until an actual interaction needs
 - [Session context and controller](../apps/web/src/lib/auth/session-context.tsx) serve
   member and administrator views with shared verification, expiry, logout and cross-tab
   invalidation. Keep private session state in memory and clear private queries through
-  this lifecycle; do not add feature-specific session caches.
+  this lifecycle; do not add feature-specific session caches. Routine checks coalesce
+  without replacing an active snapshot or its expiry deadline. An opaque presentation
+  scope keys private UI by user, session token and role; it never authorizes a request.
+  Hard invalidation or expiry destroys it. Transient connection notices do not reset
+  an unexpired workspace.
 
 ## Persistence and ownership
 
@@ -50,6 +89,11 @@ is required. Shadcn primitives remain deferred until an actual interaction needs
   connection/readiness/close and transactional identity persistence. Initialization uses the shared initial schema on a verified local target.
   Operator-only administrator setup shares identity locking/upsert with login but is
   deliberately excluded from the HTTP `IdentityStore` port.
+- [Bounded database operations](../crates/database/src/connection.rs) own runtime pool
+  acquisition, query deadlines and connection disposal for identity, environments,
+  conversations and readiness. Reuse this boundary so a silent socket cannot retain
+  pool capacity indefinitely. Preserve transaction ordering and confirmed results;
+  a timeout never establishes rollback and must not trigger automatic write replay.
 - [Rust target verification](../crates/database/src/local_target/mod.rs) and the retained
   [TypeScript verifier](../packages/database/src/target.ts) enforce equivalent ownership
   expectations. [Docker inspection](../scripts/database/owned.mjs) supplies the local
@@ -73,7 +117,11 @@ Connection patterns were checked against the official
   conversation execution consumes these contracts rather than creating another lifecycle.
 - [EnvironmentService and EnvironmentReconciler](../crates/application/src/environments/mod.rs)
   separate authenticated requests from serialized runtime effects. Generation checks
-  protect newer intent; ownership loss closes availability until host restart.
+  protect newer intent; ownership loss permanently closes that host's availability.
+  The [API recovery coordinator](../apps/api/src/bootstrap/recovery.rs) replaces the
+  complete host after old workers settle and a new database guard is acquired. Reuse
+  fresh host services together; never reopen an old availability latch or republish
+  observations made before the replacement host started.
 - [Environment persistence](../crates/database/src/environments/mod.rs) uses the verified
   IdentityDatabase and transactional user/session revalidation. Suspension and environment
   requests share user locking; browser presence and session expiry never change running
@@ -84,9 +132,11 @@ Connection patterns were checked against the official
   and stable installation metadata. Reuse these owners without exposing daemon access,
   Docker IDs or mutable policy parameters to browser features.
 - [useEnvironment](../apps/web/src/features/environments/use-environment.ts) owns one
-  browser lifecycle subscription shared by the environment card and its dependent panels.
-  Consumers use confirmed state rather than starting a
-  second polling loop or inferring availability from an earlier successful operation.
+  browser lifecycle subscription shared by workspace preparation, profile actions and
+  dependent panes. Its controller retains automatic-entry consumption across route
+  remounts in memory and checks recovery before starting a stopped environment. Consumers
+  use confirmed state rather than starting another polling loop or inferring availability
+  from an earlier accepted operation. Explicit stop, retry and recovery remain deliberate.
 
 ## Interactive processes and account connections
 
@@ -135,7 +185,9 @@ Connection patterns were checked against the official
   verified environment stop and a conclusively settled launch; reconnecting must not
   replay a turn. A stopped observation alone cannot release an unsettled launch. Consumers must honor
   conversation-page cursors, history truncation and claimed/uncertain question receipt
-  states. Model discovery reserves a durable lease before starting a provider process;
+  states. Concurrent model readers share one in-flight discovery per user/environment,
+  with each caller validating its own access before and after waiting. Model discovery
+  reserves a durable lease before starting a provider process;
   confirmed cleanup or a fresh later-generation stopped observation releases it only
   after the launch request has settled. The
   supervisor can release the lease for suspended users without changing environment

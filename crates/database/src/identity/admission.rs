@@ -2,14 +2,10 @@ use super::*;
 use uuid::Uuid;
 
 pub(super) async fn admit(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     admission: LoginAdmission,
 ) -> Result<AdmissionOutcome, IdentityError> {
-    admission.identity.validate()?;
-    if !(32..=256).contains(&admission.session.csrf_token.len()) {
-        return Err(IdentityError::InvalidInput);
-    }
-    let mut tx = pool.begin().await.map_err(unavailable)?;
+    let mut tx = connection.begin().await.map_err(unavailable)?;
     let user = upsert_identity(&mut tx, &admission.identity).await?;
     let id = user.id;
     let outcome = match admission_decision(&user, admission.login_started_at) {

@@ -17,7 +17,7 @@ const problemMessages: Record<string, string> = {
   invalid_configuration:
     "Environments need administrator configuration before they can be used.",
   timeout:
-    "The environment operation timed out. Refresh to check its current status.",
+    "The environment operation timed out. Try again to check its current status.",
 }
 
 export function environmentProblem(code: string | null | undefined) {
@@ -81,11 +81,11 @@ export function environmentErrorMessage(error: unknown): string {
     const problem = environmentProblem(error.code)
     if (problem) return problem
     if (error.status === 409)
-      return "The environment changed. Refresh its status before trying again."
+      return "The environment changed. Try again to check its current status."
     if (error.status === 429)
-      return "Too many requests. Wait a moment, then refresh."
+      return "Too many requests. Wait a moment, then try again."
     if (error.status === 503)
-      return "The environment service is unavailable. Refresh to try again."
+      return "The environment service is unavailable. Try again shortly."
   }
-  return "The environment status could not be confirmed. Refresh to try again."
+  return "The environment status could not be confirmed. Try again."
 }

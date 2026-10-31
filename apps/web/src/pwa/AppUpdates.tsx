@@ -1,5 +1,6 @@
 import { useState } from "react"
 
+import { Button } from "../components/ui/button"
 import { useAppUpdate } from "./use-app-update"
 import "./updates.css"
 
@@ -10,13 +11,13 @@ export function AppUpdates() {
   if (available) {
     if (dismissed) {
       return (
-        <button
+        <Button
           className="update-reminder"
           type="button"
           onClick={() => setDismissed(false)}
         >
           Update available
-        </button>
+        </Button>
       )
     }
     return (
@@ -30,12 +31,10 @@ export function AppUpdates() {
           Reload when you are ready. Unsaved changes on this page may be lost.
         </p>
         <div className="update-actions">
-          <button type="button" onClick={applyUpdate}>
+          <Button variant="primary" onClick={applyUpdate}>
             Reload to update
-          </button>
-          <button type="button" onClick={() => setDismissed(true)}>
-            Later
-          </button>
+          </Button>
+          <Button onClick={() => setDismissed(true)}>Later</Button>
         </div>
       </aside>
     )

@@ -3,7 +3,8 @@ import { afterEach, expect, it, vi } from "vitest"
 afterEach(() => vi.unstubAllGlobals())
 
 it("shows known storage failures and ignores unknown error codes", async () => {
-  const { environmentProblem } = await import("./api")
+  const { environmentProblem } =
+    await import("../../src/features/environments/api")
   expect(environmentProblem("volume_missing")).toContain(
     "will not be replaced automatically"
   )
@@ -15,7 +16,7 @@ async function apiWith(response: Response) {
   const fetch = vi.fn().mockResolvedValue(response)
   vi.stubGlobal("fetch", fetch)
   vi.resetModules()
-  return { ...(await import("./api")), fetch }
+  return { ...(await import("../../src/features/environments/api")), fetch }
 }
 
 it.each(["start", "stop"] as const)(

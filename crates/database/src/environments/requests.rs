@@ -1,5 +1,5 @@
 use super::*;
-use sqlx::{Postgres, Transaction};
+use sqlx::{Connection, PgConnection, Postgres, Transaction};
 
 async fn authorize(
     tx: &mut Transaction<'_, Postgres>,
@@ -39,10 +39,10 @@ async fn current(
 }
 
 pub(super) async fn get(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     actor: EnvironmentActor,
 ) -> Result<Option<Environment>, EnvironmentError> {
-    let mut tx = pool.begin().await.map_err(unavailable)?;
+    let mut tx = connection.begin().await.map_err(unavailable)?;
     authorize(&mut tx, actor).await?;
     let record = current(&mut tx, actor.user_id).await?;
     tx.commit().await.map_err(unavailable)?;
@@ -52,12 +52,11 @@ pub(super) async fn get(
 /// Serialize with start/stop and suspension on the user row, and do not change an
 /// existing record even if it is stopped or uses a different policy.
 pub(super) async fn initialize_if_absent(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     actor: EnvironmentActor,
     request: EnvironmentStart,
 ) -> Result<Environment, EnvironmentError> {
-    request.validate()?;
-    let mut tx = pool.begin().await.map_err(unavailable)?;
+    let mut tx = connection.begin().await.map_err(unavailable)?;
     authorize(&mut tx, actor).await?;
     let existing = current(&mut tx, actor.user_id).await?;
     let record = if let Some(existing) = existing {
@@ -91,12 +90,11 @@ async fn insert(
 }
 
 pub(super) async fn start(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     actor: EnvironmentActor,
     request: EnvironmentStart,
 ) -> Result<Environment, EnvironmentError> {
-    request.validate()?;
-    let mut tx = pool.begin().await.map_err(unavailable)?;
+    let mut tx = connection.begin().await.map_err(unavailable)?;
     authorize(&mut tx, actor).await?;
     let existing = current(&mut tx, actor.user_id).await?;
     if existing
@@ -127,10 +125,10 @@ pub(super) async fn start(
 }
 
 pub(super) async fn stop(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     actor: EnvironmentActor,
 ) -> Result<Option<Environment>, EnvironmentError> {
-    let mut tx = pool.begin().await.map_err(unavailable)?;
+    let mut tx = connection.begin().await.map_err(unavailable)?;
     authorize(&mut tx, actor).await?;
     sqlx::query("UPDATE factory_identity.environments SET generation=generation+CASE WHEN desired_state='stopped' THEN 0 ELSE 1 END,desired_state='stopped',next_reconcile_at=clock_timestamp(),updated_at=clock_timestamp() WHERE user_id=$1")
         .bind(actor.user_id).execute(&mut *tx).await.map_err(unavailable)?;

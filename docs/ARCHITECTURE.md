@@ -22,6 +22,25 @@ imports. Browser code must not import Rust implementation details, Node, filesys
 execution application code or persistence adapters. Feature modules do not import one
 another. Shared API and session mechanisms support both member and administrator screens.
 
+## Browser composition and presentation
+
+The [workspace route](../apps/web/src/routes/_authenticated.app.tsx) delegates to
+[WorkspacePage](../apps/web/src/components/workspace/workspace-page.tsx), which composes
+environment, provider, conversation and terminal features. The shell handles layout and
+profile navigation without owning provider operations. Conversation presentation supplies
+its history, title and content to that composition; terminal visibility and resizing do
+not control shell-process lifetime. Feature controllers retain requests, recovery and
+private state ownership. Shared [UI primitives](../apps/web/src/components/ui) provide
+native buttons, dialogs, loading feedback, the wordmark and resizable panes.
+[Design tokens](../apps/web/src/styles/app.css) own surfaces, typography and motion
+independently of application policy.
+
+The entry flow shows GitHub sign-in, environment preparation, provider authorization when
+needed, then the workspace. Provider settings and explicit shutdown move to the profile
+menu; the former environment dashboard and permanent refresh toolbars are removed.
+The [design contract](DESIGN.md) defines the graphite surfaces, self-hosted Space Mono,
+responsive panes, keyboard behavior and reduced-motion treatment.
+
 ## Identity and HTTP contracts
 
 [Identity policy](../crates/core/src/identity/policy.rs) owns admission and access-change
@@ -85,11 +104,18 @@ return a conflict for explicit review, never an automatic retry.
 The [browser session controller](../apps/web/src/lib/auth/session-controller.ts) keeps
 verified session state in memory. Route changes, focus, reconnection and expiry trigger
 verification or invalidation. Unauthorized/forbidden responses, logout, account changes
-and offline transitions clear private query data. BroadcastChannel carries invalidation
+and expiry clear private query data. BroadcastChannel carries invalidation
 only, not session details. Locally observed authorization refusals notify other tabs;
 received invalidations hide private content and revalidate without broadcasting again.
-Protected routes hide stale content while verification fails
-or remains pending; an unconfirmed logout cannot silently restore the session.
+Initial admission and protected route entry require verification; an unconfirmed logout
+cannot silently restore the session. Routine local rechecks share one pending request
+and preserve the existing active snapshot until its fixed expiry. An unchanged response
+does not notify resource consumers. The opaque presentation scope changes with user,
+session token or role, remounting private views when necessary. Network failure/offline
+state keeps an unexpired active view with a compact notice, without extending expiry;
+authorization refusal, invalidation or expiry immediately removes it. Environment and
+provider observers pause while hidden without erasing known observations, then refresh
+silently on return. Routine focus checks do not recreate chat or terminal instances.
 
 ## Persistence and local ownership
 
@@ -131,14 +157,38 @@ policy. The adapter checks ownership before mutation and complete image/mount/is
 policy before start. Foreign resources are never adopted. See the
 [policy owner](../crates/adapters/src/environments/policy.rs) for enforced isolation and unlimited CPU/memory/process settings.
 
-The host retains an installation file lock and a dedicated PostgreSQL advisory-lock
-connection. It monitors the database guard every second and checks it around runtime
-calls. Lock loss makes environment operations unavailable until API restart; it does
-not silently reacquire ownership. Individual Docker errors remain observable and are
-retried after 15 seconds. The supervisor also repairs suspended-user intent independently of Docker work. The host serializes work per environment and runs
-up to 32 environment jobs concurrently, so a slow container does not block another
-user's stop when worker capacity is available. This is bounded supervision, not a
-real-time shutdown guarantee under saturation. API shutdown stops supervision while containers keep running; API restart resumes
+The [prepared host factory](../apps/api/src/bootstrap/environments.rs) retains the
+installation file lock and validated preparation metadata for the API lifetime. Each
+host owns a dedicated PostgreSQL advisory-lock connection, monitored every second and
+checked around runtime calls. A failed check permanently closes that host's admission
+and runtime mutation permissions; old requests and adapters never become usable again.
+
+The [recovery coordinator](../apps/api/src/bootstrap/recovery.rs) drains the failed
+host's reconciliation workers, then acquires a fresh database connection and advisory
+lock before replacing the complete host and router. Acquisition attempts are bounded
+and sequential, with exponential retry delays capped at 30 seconds. A competing
+advisory-lock holder keeps the workspace unavailable. Each HTTP request selects one
+coherent router, including requests on existing keep-alive connections; identity,
+session revocation and quotas retain their existing owner. The replacement host must
+complete its guarded sweep, and Running/Stopped observations must come from the new
+host before interactive work or stopped-run recovery is allowed. Recovery preserves
+persistent intent and model/run reservations; it does not replay interrupted turns or
+infer cleanup. Explicit shutdown gates all hosts. Worker panics and permanent
+configuration or resource-ownership errors stop automatic recovery for investigation.
+
+Runtime persistence operations also have a client deadline covering pooled connection
+acquisition and SQL, including transaction completion. Timed-out or cancelled operations
+discard their connection, and normal pool recycling is bounded. This prevents stalled
+session or chat queries from exhausting the pool needed by a replacement supervisor.
+An uncertain commit is never retried automatically; a confirmed result is preserved
+even if connection recycling fails. Docker work still settles before host replacement.
+
+Individual Docker errors remain observable and are retried after 15 seconds. The
+supervisor also repairs suspended-user intent independently of Docker work. The host
+serializes work per environment and runs up to 32 environment jobs concurrently, so a
+slow container does not block another user's stop when worker capacity is available.
+This is bounded supervision, not a real-time shutdown guarantee under saturation. API
+shutdown stops supervision while containers keep running; API restart resumes
 reconciliation. No independent environment supervisor runs outside the API.
 
 [Environment routes](../apps/api/src/environments/routes.rs) accept no target user ID or
@@ -151,8 +201,15 @@ contain status, observation time, and bounded error codes,
 never Docker identifiers. Image/policy mismatch blocks Start and interactive use while
 Stop remains useful.
 The [member controller](../apps/web/src/features/environments/environment-controller.ts)
-polls only while visible, online and authenticated. Session loss, logout and unmount
-cancel browser requests without changing server intent or stopping the container.
+polls only while visible, online and authenticated. On verified workspace entry it
+initializes an absent environment or requests start for a stopped one, after checking
+recoverable runs. It consumes that opportunity even when the environment is already
+running and retains the decision in memory across route remounts and session rechecks.
+Explicit Stop and failed starts cannot trigger an automatic restart loop. A new browser
+load or authenticated session gets a new entry opportunity. Failed recovery checks and
+recoverable work keep the environment stopped until explicit retry/recovery. Session
+loss, logout and unmount cancel browser requests and clear displayed private data without
+changing server intent or stopping the container.
 
 Missing preparation affects only environments when identity is otherwise ready. Prepared
 metadata keeps the installation UUID and immutable image ID under `.factory/environments`.
@@ -207,7 +264,9 @@ stdin and drops both Docker stream halves before waiting for exit. Credentials s
 `/home/factory/.codex`; only a bounded account projection and pending device challenge
 cross HTTP. Cancellation/logout remain local when the proxy is stopped. Browser account
 polling runs only for an active pending login and visible, authenticated page. The route
-shares one environment controller between the lifecycle card and dependent panels.
+shares one environment controller across preparation, profile actions and dependent panes.
+The provider authorization view and account settings share the connection controller;
+opening settings or resuming the page never begins a new device authorization.
 Codex logout is blocked when a conversation run is active or cleanup remains uncertain.
 
 ## Conversations and execution
@@ -227,8 +286,14 @@ bounded event updates. Account and model operations use per-user gates. Each con
 admits only one active or uncertain run; independent conversations have no Factory-wide
 run-count ceiling. Model probes reserve
 a durable lease before starting a provider process, with at most one lease per user;
-unconfirmed cleanup retains it across API restart. The web client caches each user’s
-model list briefly in memory and clears it on account or session changes. The [API host](../apps/api/src/conversations/runtime.rs) supplies
+unconfirmed cleanup retains it across API restart. Overlapping discoveries for the same
+user and environment share one in-flight result; each caller validates its own session
+and environment, and completed results are not cached on the server. The web client
+keeps each user's last successful model list in session memory and clears it on account
+or session changes. Stale reads refresh after five minutes. Conflict responses use
+progressive retries, slowing to one attempt per minute while visible; unavailability
+cancels pending reads and retries without discarding cached models.
+The [API host](../apps/api/src/conversations/runtime.rs) supplies
 task execution, timers and HTTP-compatible encoding; application policy stays in the
 coordinator. The adapter uses the pinned native app-server inside the owned environment with
 `dangerFullAccess` and approval policy `never`. Commands therefore have the container

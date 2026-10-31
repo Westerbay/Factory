@@ -1011,6 +1011,48 @@ async fn process_start_timeouts_and_transport_errors_keep_the_correct_phase() {
     assert!(fixture.replies.lock().unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn ownership_lost_during_process_preflight_never_creates_an_exec() {
+    use super::process::{FixedProcess, ProcessStartError};
+    let metadata = metadata();
+    let env = environment(&metadata);
+    let permission = Arc::new(AtomicBool::new(true));
+    let mut inspection = reply(
+        "GET",
+        format!("/containers/{}/json", env.container_name),
+        200,
+        container(&env),
+    );
+    inspection.5 = Some(permission.clone());
+    let mut fixture = fixture(
+        metadata,
+        vec![
+            reply(
+                "GET",
+                format!("/volumes/{}", env.volume_name),
+                200,
+                volume(&env),
+            ),
+            inspection,
+        ],
+        Duration::from_secs(1),
+    )
+    .await;
+    fixture.runtime.mutation_permitted = Arc::new(move || permission.load(Ordering::SeqCst));
+    assert!(matches!(
+        fixture
+            .runtime
+            .start_process_checked(&env, FixedProcess::CodexExecution)
+            .await,
+        Err(ProcessStartError::PreSubmission(
+            EnvironmentError::Unavailable
+        ))
+    ));
+    assert!(fixture.replies.lock().unwrap().is_empty());
+    // The fixture rejects any unexpected POST, including a create_exec after inspection.
+    assert_eq!(fixture.requests.load(Ordering::SeqCst), 2);
+}
+
 fn cloned_runtime(fixture: &Fixture) -> Arc<DockerEnvironmentRuntime> {
     Arc::new(DockerEnvironmentRuntime {
         docker: fixture.runtime.docker.clone(),

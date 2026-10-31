@@ -1,71 +1,158 @@
-.codex-section {
-  margin-top: 2.5rem;
-  line-height: 1.6;
-}
-.codex-card {
-  display: block;
-  margin-top: 1rem;
-  min-width: 0;
+.provider-connection {
+  width: min(100%, 23rem);
+  margin-inline: auto;
   overflow-wrap: anywhere;
 }
-.codex-card .codex-status {
-  color: #242529;
-  font-size: 1.125rem;
-  font-weight: 650;
-  margin-top: 0;
+
+.provider-connection h1 {
+  margin: 0 0 1.5rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.35;
 }
-.codex-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
+
+.provider-status,
+.provider-settings-status {
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  margin: 0 0 1rem;
+}
+
+.provider-status:empty,
+.provider-copy-status:empty {
+  margin: 0;
+}
+
+.provider-choice.ui-button {
+  width: 100%;
+  min-height: 4rem;
+  padding: 1rem;
+  justify-content: flex-start;
   gap: 0.75rem;
 }
-.codex-actions a {
-  padding: 0.625rem 0;
+
+.provider-choice > span {
+  flex: 1;
+  text-align: left;
 }
-.codex-actions button:disabled {
-  cursor: default;
+
+.provider-device-code > p,
+.provider-issue p,
+.provider-disconnect-confirmation p {
+  color: var(--text-muted);
+  line-height: 1.65;
+  margin: 0 0 1.25rem;
 }
-.codex-challenge {
-  border-block: 1px solid #e1e3e8;
-  margin-block: 1rem;
-  padding-bottom: 0.5rem;
+
+.provider-code-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface-sidebar);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  margin-block: 1.5rem 1rem;
 }
-.codex-code-label {
-  display: block;
-}
-.codex-code {
-  display: inline-block;
+
+.provider-code-row code {
+  min-width: 0;
+  color: var(--text);
+  font-family: var(--font-code);
+  font-size: 1.25rem;
   user-select: all;
-  color: #242529;
-  font-size: clamp(1.25rem, 5vw, 1.75rem);
-  letter-spacing: 0.08em;
-  margin-block: 0.5rem;
+  overflow-wrap: anywhere;
 }
-.codex-new-tab {
-  font-size: 0.8rem;
+
+.provider-code-row .ui-button {
+  flex: none;
 }
-.codex-account {
+
+.provider-continue {
+  width: 100%;
+}
+
+.provider-device-code .provider-expiry {
+  margin: 0.75rem 0 0;
+  font-size: 0.75rem;
+}
+
+.provider-device-code .provider-copy-status {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+}
+
+.provider-connection .provider-cancel {
+  display: flex;
+  margin: 1.5rem auto 0;
+}
+
+.provider-issue {
+  margin-top: 1.5rem;
+}
+
+.provider-settings h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.provider-account {
+  margin: 1.5rem 0;
+  display: grid;
+  gap: 1rem;
+}
+
+.provider-account > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.provider-account dt {
+  color: var(--text-muted);
+}
+
+.provider-account dd {
+  min-width: 0;
+  margin: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.provider-disconnect {
+  margin-top: 1.5rem;
+}
+
+.provider-disconnect > .ui-button {
+  color: var(--negative);
+}
+
+.provider-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 1rem 2rem;
+  justify-content: flex-end;
+  gap: 0.5rem;
 }
-.codex-account dt {
-  font-size: 0.875rem;
-  color: #5d6069;
-}
-.codex-account dd {
-  margin: 0;
-}
-.codex-feedback:empty {
-  margin: 0;
-}
-.codex-card .codex-observed {
-  font-size: 0.8rem;
-  margin-bottom: 0;
-}
+
 @media (max-width: 480px) {
-  .codex-actions button {
-    width: 100%;
+  .provider-code-row {
+    padding: 0.625rem;
+    gap: 0.5rem;
+  }
+
+  .provider-code-row code {
+    font-size: 1rem;
+  }
+
+  .provider-account > div {
+    display: grid;
+    gap: 0.25rem;
+  }
+
+  .provider-account dd {
+    text-align: left;
   }
 }

@@ -7,18 +7,29 @@ import {
 } from "react"
 import { Terminal } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
+import { Maximize2, Minimize2, Settings2, TerminalSquare } from "lucide-react"
 
+import { Button, IconButton } from "../../components/ui/button"
 import { useSession } from "../../lib/auth/session-context"
 import { openTerminalSocket, requestAttachment } from "./api"
 import { TerminalController } from "./terminal-controller"
 import "@xterm/xterm/css/xterm.css"
 import "./terminal.css"
 
-export default function TerminalSession() {
+export default function TerminalSession({
+  expanded,
+  onExpandedChange,
+}: {
+  expanded: boolean
+  onExpandedChange: (expanded: boolean) => void
+}) {
   const { controller: session } = useSession()
   const host = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
   const controls = useRef<HTMLDivElement>(null)
+  const expandToggle = useRef<HTMLButtonElement>(null)
+  const expansion = useRef({ expanded, onExpandedChange })
+  expansion.current = { expanded, onExpandedChange }
   const controlNextKey = useRef(false)
   const [controlPressed, setControlPressed] = useState(false)
   const [screenReader, setScreenReader] = useState(false)
@@ -46,27 +57,42 @@ export default function TerminalSession() {
 
   useEffect(() => {
     if (!host.current) return
+    const element = host.current
+    const style = getComputedStyle(element)
+    let disposed = false
     const widget = new Terminal({
       cursorBlink: true,
       scrollback: 10_000,
       fontSize: 14,
-      fontFamily: '"Cascadia Code", "Consolas", monospace',
+      fontFamily: style.fontFamily,
       theme: {
-        background: "#15171c",
-        foreground: "#edf0f5",
-        cursor: "#edf0f5",
+        background: style.backgroundColor,
+        foreground: style.color,
+        cursor: style.color,
+        scrollbarSliderBackground: style
+          .getPropertyValue("--scrollbar-thumb")
+          .trim(),
+        scrollbarSliderHoverBackground: style
+          .getPropertyValue("--scrollbar-thumb-hover")
+          .trim(),
+        scrollbarSliderActiveBackground: style
+          .getPropertyValue("--scrollbar-thumb-active")
+          .trim(),
       },
       allowProposedApi: false,
     })
     const fit = new FitAddon()
     widget.loadAddon(fit)
-    widget.open(host.current)
     terminal.current = widget
-    widget.textarea?.setAttribute(
-      "aria-label",
-      "Private terminal. Press Control Shift M to return to terminal controls."
-    )
     widget.attachCustomKeyEventHandler((event) => {
+      if (event.key === "Escape" && expansion.current.expanded) {
+        if (event.type === "keydown") {
+          event.preventDefault()
+          expansion.current.onExpandedChange(false)
+          expandToggle.current?.focus({ preventScroll: true })
+        }
+        return false
+      }
       if (event.ctrlKey && event.shiftKey && event.code === "KeyM") {
         if (event.type === "keydown") controls.current?.focus()
         return false
@@ -91,17 +117,28 @@ export default function TerminalSession() {
       controller.resize(cols, rows)
     )
     const fitView = () => {
-      if (host.current?.clientWidth && host.current.clientHeight) fit.fit()
+      if (!disposed && element.clientWidth && element.clientHeight) fit.fit()
     }
     const observer = new ResizeObserver(fitView)
-    observer.observe(host.current)
-    window.visualViewport?.addEventListener("resize", fitView)
-    fitView()
-    // Opening replaces its button. Keep keyboard users in the new terminal,
-    // unless they moved focus elsewhere while the lazy bundle was loading.
-    if (document.activeElement === document.body) widget.focus()
-    void controller.connect()
+    const attach = () => {
+      if (disposed) return
+      widget.open(element)
+      widget.textarea?.setAttribute(
+        "aria-label",
+        "Private terminal. Press Control Shift M to return to terminal controls."
+      )
+      observer.observe(element)
+      window.visualViewport?.addEventListener("resize", fitView)
+      fitView()
+      void controller.connect()
+    }
+    // Measure the actual code font on first open. Failed font downloads still
+    // leave the system monospace fallback usable.
+    void document.fonts
+      .load("14px " + style.fontFamily)
+      .then(() => document.fonts.ready.then(attach), attach)
     return () => {
+      disposed = true
       observer.disconnect()
       window.visualViewport?.removeEventListener("resize", fitView)
       controller.dispose()
@@ -118,7 +155,6 @@ export default function TerminalSession() {
   }, [screenReader])
 
   const connected = state.status === "connected"
-  const opening = state.status === "opening"
   function open() {
     terminal.current?.focus()
     void controller.connect()
@@ -127,58 +163,101 @@ export default function TerminalSession() {
     terminal.current?.focus()
     void controller.connect(true)
   }
-  function disconnect() {
-    controls.current?.focus()
-    controller.disconnect()
-  }
   function key(value: string) {
     controller.inputText(value)
     terminal.current?.focus()
   }
 
   return (
-    <div className="terminal-panel">
+    <div
+      className="terminal-panel"
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || !expanded || event.defaultPrevented)
+          return
+        event.preventDefault()
+        onExpandedChange(false)
+        expandToggle.current?.focus({ preventScroll: true })
+      }}
+    >
       <div
         ref={controls}
         tabIndex={-1}
-        className="terminal-actions"
-        aria-label="Terminal actions"
+        className="terminal-header"
+        role="group"
+        aria-label="Terminal controls"
       >
-        <button type="button" onClick={open} disabled={opening || connected}>
-          Reconnect
-        </button>
-        <button
-          type="button"
-          onClick={disconnect}
-          disabled={!connected && !opening}
-        >
-          Disconnect display
-        </button>
-        {state.status === "conflict" && (
-          <button type="button" onClick={takeOver}>
-            Take over terminal
-          </button>
-        )}
-        <label>
-          <input
-            type="checkbox"
-            checked={screenReader}
-            onChange={(event) => setScreenReader(event.target.checked)}
-          />{" "}
-          Screen reader mode
-        </label>
+        <h2>
+          <TerminalSquare size={15} aria-hidden="true" />
+          Terminal
+        </h2>
+        <div className="terminal-header-actions">
+          <IconButton
+            ref={expandToggle}
+            label={expanded ? "Restore terminal size" : "Maximize terminal"}
+            aria-pressed={expanded}
+            aria-keyshortcuts={expanded ? "Escape" : undefined}
+            onClick={() => onExpandedChange(!expanded)}
+          >
+            {expanded ? (
+              <Minimize2 aria-hidden="true" size={16} />
+            ) : (
+              <Maximize2 aria-hidden="true" size={16} />
+            )}
+          </IconButton>
+          <details
+            className="terminal-settings"
+            onKeyDown={(event) => {
+              if (event.key !== "Escape" || !event.currentTarget.open) return
+              event.preventDefault()
+              event.currentTarget.open = false
+              event.currentTarget.querySelector("summary")?.focus()
+            }}
+          >
+            <summary aria-label="Terminal settings" title="Terminal settings">
+              <Settings2 size={16} aria-hidden="true" />
+            </summary>
+            <div className="terminal-settings-content">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={screenReader}
+                  onChange={(event) => setScreenReader(event.target.checked)}
+                />
+                Screen reader mode
+              </label>
+              <p>
+                <kbd>Ctrl+Shift+M</kbd> returns to terminal controls.
+              </p>
+            </div>
+          </details>
+        </div>
       </div>
-      <p className="terminal-status" role="status" aria-live="polite">
-        {state.message}
+      <p
+        className={state.message ? "terminal-status" : "sr-only"}
+        role="status"
+        aria-live="polite"
+      >
+        {state.message ||
+          (connected ? "Terminal connected." : "Loading terminal…")}
       </p>
+      {(state.status === "error" || state.status === "disconnected") && (
+        <div className="terminal-recovery">
+          <Button onClick={open}>Reconnect</Button>
+        </div>
+      )}
+      {state.status === "conflict" && (
+        <div className="terminal-recovery">
+          <Button onClick={takeOver}>Take over terminal</Button>
+        </div>
+      )}
       <div
         ref={host}
         className="terminal-screen"
         aria-label="Terminal display"
       />
       <div className="terminal-keys" aria-label="Terminal keyboard shortcuts">
-        <button
-          type="button"
+        <Button
+          variant="ghost"
           disabled={!connected}
           aria-pressed={controlPressed}
           onClick={() => {
@@ -188,40 +267,35 @@ export default function TerminalSession() {
           }}
         >
           Ctrl
-        </button>
-        <button type="button" disabled={!connected} onClick={() => key("\r")}>
+        </Button>
+        <Button variant="ghost" disabled={!connected} onClick={() => key("\r")}>
           Enter
-        </button>
-        <button type="button" disabled={!connected} onClick={() => key("\t")}>
+        </Button>
+        <Button variant="ghost" disabled={!connected} onClick={() => key("\t")}>
           Tab
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="ghost"
           disabled={!connected}
           onClick={() => key("\u0003")}
         >
           Ctrl+C
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="ghost"
           disabled={!connected}
           onClick={() => key("\u0004")}
         >
           Ctrl+D
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="ghost"
           disabled={!connected}
           onClick={() => key("\u001b")}
         >
           Esc
-        </button>
+        </Button>
       </div>
-      <p className="terminal-help">
-        Press Ctrl+Shift+M to leave terminal input and reach these controls.
-        Closing Factory keeps the shell running; stopping the environment ends
-        its processes.
-      </p>
     </div>
   )
 }

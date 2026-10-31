@@ -1,64 +1,197 @@
+.terminal-pane,
 .terminal-panel {
-  min-width: 0;
-  margin: 1.25rem 0 2rem;
-}
-.terminal-actions,
-.terminal-keys {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  background: var(--surface-sidebar);
+}
+.terminal-panel {
+  flex: 1;
+}
+.terminal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 3.5rem;
+  gap: 1rem;
+  padding: 0 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.terminal-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.terminal-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.terminal-header-actions > .ui-icon-button {
+  color: var(--text-muted);
+}
+.terminal-header-actions > .ui-icon-button:hover,
+.terminal-header-actions > .ui-icon-button[aria-pressed="true"] {
+  color: var(--text);
+}
+.terminal-header:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: -3px;
+}
+.terminal-settings {
+  position: relative;
+}
+.terminal-settings summary {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--radius-control);
+  list-style: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
+}
+.terminal-settings summary::-webkit-details-marker {
+  display: none;
+}
+.terminal-settings summary:hover,
+.terminal-settings[open] summary {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.terminal-settings-content {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  z-index: 3;
+  width: 16rem;
+  max-width: calc(100vw - 2rem);
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--surface-raised);
+  box-shadow: 0 8px 24px #0003;
+  font-size: 0.75rem;
+  animation: terminal-settings-in var(--motion-normal) var(--ease-out);
+}
+.terminal-settings-content label {
+  display: flex;
   align-items: center;
   gap: 0.65rem;
+  min-height: 2rem;
+  color: var(--text);
 }
-.terminal-actions label {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
+.terminal-settings-content input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--text);
 }
-.terminal-actions input {
-  width: auto;
+.terminal-settings-content p {
+  margin: 0.75rem 0 0;
+  line-height: 1.7;
+  color: var(--text-muted);
 }
-.terminal-actions:focus-visible {
-  outline: 3px solid #6356c8;
-  outline-offset: 4px;
+.terminal-settings-content kbd {
+  font: inherit;
+  color: var(--text);
 }
 .terminal-status {
-  min-height: 1.5em;
+  margin: 0;
+  padding: 1rem 1rem 0;
+  font-size: 0.75rem;
+  line-height: 1.7;
+  color: var(--text-muted);
   overflow-wrap: anywhere;
 }
-.terminal-screen {
-  height: clamp(16rem, 52dvh, 38rem);
-  min-width: 0;
-  padding: 0.75rem;
-  border-radius: 0.65rem;
-  background: #15171c;
-  overflow: hidden;
+.terminal-recovery {
+  padding: 0.75rem 1rem 0;
 }
-.terminal-screen:focus-within {
-  outline: 3px solid #6356c8;
-  outline-offset: 2px;
+.terminal-screen {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  /* FitAddon measures this box; keep spacing outside its content area. */
+  margin: 1rem;
+  overflow: hidden;
+  font-family: var(--font-code);
+  color: var(--text);
+  background: var(--surface-sidebar);
 }
 .terminal-screen .xterm {
   height: 100%;
 }
+.terminal-screen .xterm .xterm-viewport {
+  /* This legacy viewport extends below the last complete terminal row. */
+  background-color: var(--surface-sidebar);
+}
+.terminal-screen .xterm .xterm-scrollable-element > .scrollbar > .slider,
+.terminal-screen .xterm .xterm-scrollable-element > .scrollbar > .slider:hover,
+.terminal-screen
+  .xterm
+  .xterm-scrollable-element
+  > .scrollbar
+  > .slider.active {
+  /* Keep xterm's full pointer target while painting a quieter, narrower thumb. */
+  border: 4px solid transparent;
+  border-radius: 8px;
+  background-clip: padding-box;
+}
 .terminal-keys {
-  margin-top: 0.8rem;
+  display: none;
 }
-.terminal-keys button {
-  min-width: 3rem;
-  min-height: 2.75rem;
-  padding: 0.5rem 0.75rem;
-}
-.terminal-help {
-  color: #5d6069;
-  font-size: 0.875rem;
-  line-height: 1.6;
-}
-@media (max-width: 480px) {
-  .terminal-screen {
-    height: clamp(14rem, 42dvh, 26rem);
-    padding: 0.35rem;
+@keyframes terminal-settings-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
   }
-  .terminal-actions button {
-    flex: 1 1 auto;
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (pointer: coarse), (max-width: 900px) {
+  .terminal-settings summary {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+  .terminal-screen {
+    margin: 0.75rem;
+  }
+  .terminal-keys {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    padding: 0.5rem;
+    border-top: 1px solid var(--border);
+  }
+  .terminal-keys .ui-button {
+    flex: 1;
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+    padding: 0.5rem;
+    font-size: 0.75rem;
+  }
+  .terminal-keys [aria-pressed="true"] {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .terminal-settings summary {
+    transition: none;
+  }
+  .terminal-settings-content {
+    animation: none;
   }
 }

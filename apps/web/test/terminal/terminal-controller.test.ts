@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { ApiFailure } from "../../lib/api/client"
-import type { SessionState } from "../../lib/auth/session-controller"
-import type { requestAttachment } from "./api"
-import { TerminalController } from "./terminal-controller"
+import { ApiFailure } from "../../src/lib/api/client"
+import type { SessionState } from "../../src/lib/auth/session-controller"
+import type { requestAttachment } from "../../src/features/terminal/api"
+import { TerminalController } from "../../src/features/terminal/terminal-controller"
 
 class Socket {
   static OPEN = 1
@@ -102,6 +102,28 @@ function setup() {
 }
 
 describe("terminal attachment", () => {
+  it("keeps the transport during a same-session refresh but closes it on token rotation", async () => {
+    const { controller, dependencies, changeSession } = setup()
+    await controller.connect()
+    const socket = sockets[0]!
+    socket.ready()
+    const auth = dependencies.session.getSnapshot()
+    if (auth.status !== "active") throw new Error("Expected active fixture")
+    changeSession({ status: "active", session: { ...auth.session } })
+    expect(socket.closed).toBe(false)
+    expect(controller.getSnapshot().status).toBe("connected")
+    controller.inputText("pending input")
+    changeSession({
+      status: "active",
+      session: { ...auth.session, csrfToken: "rotated-synthetic-token" },
+    })
+    expect(socket.closed).toBe(true)
+    expect(controller.getSnapshot().status).toBe("disconnected")
+    await vi.advanceTimersByTimeAsync(20)
+    expect(socket.sent.some((frame) => frame.type === "input")).toBe(false)
+    expect(dependencies.display.reset).toHaveBeenCalledTimes(2)
+  })
+
   it("sends the ticket only as the first frame and acknowledges output after display processing", async () => {
     const { controller, pending } = setup()
     controller.resize(100, 32)

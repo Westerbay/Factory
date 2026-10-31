@@ -3,42 +3,91 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#17181a" />
     <meta name="robots" content="noindex, nofollow" />
     <title>Factory — Offline</title>
     <style>
+      @font-face {
+        font-family: "Space Mono";
+        font-style: normal;
+        font-weight: 400;
+        font-display: swap;
+        src: url("/fonts/space-mono/space-mono-latin-400.woff2") format("woff2");
+      }
+      @font-face {
+        font-family: "Space Mono";
+        font-style: normal;
+        font-weight: 700;
+        font-display: swap;
+        src: url("/fonts/space-mono/space-mono-latin-700.woff2") format("woff2");
+      }
+      * {
+        box-sizing: border-box;
+      }
       body {
         margin: 0;
-        padding: 4rem 1.5rem;
-        background: #f7f8fa;
-        color: #242529;
-        font-family: system-ui, sans-serif;
+        min-height: 100dvh;
+        display: grid;
+        place-items: center;
+        padding: 2rem 1.5rem;
+        background: #17181a;
+        color: oklch(0.935 0.003 265);
+        font-family: "Space Mono", ui-monospace, monospace;
+        font-size: 0.875rem;
+        font-synthesis: none;
+        -webkit-font-smoothing: antialiased;
       }
       main {
-        max-width: 32rem;
-        margin: auto;
+        width: min(100%, 30rem);
+      }
+      .brand {
+        margin: 0 0 2.5rem;
+        color: inherit;
+        font-size: 1.125rem;
+        font-weight: 700;
+        letter-spacing: -0.05em;
       }
       h1 {
-        font-size: 2rem;
-        line-height: 1.2;
+        margin: 0 0 1rem;
+        font-size: 1.5rem;
+        font-weight: 700;
+        line-height: 1.4;
       }
       p {
         line-height: 1.7;
-        color: #5d6069;
+        color: oklch(0.71 0.006 265);
       }
       a {
-        color: #5340ac;
-        display: inline-block;
-        padding: 0.75rem 0;
+        display: inline-flex;
+        align-items: center;
+        min-height: 2.75rem;
+        margin-top: 1rem;
+        padding: 0.625rem 1rem;
+        border-radius: 6px;
+        background: oklch(0.935 0.003 265);
+        color: #17181a;
+        text-decoration: none;
+        touch-action: manipulation;
+        transition: opacity 120ms ease-out;
+      }
+      a:hover {
+        opacity: 0.85;
       }
       a:focus-visible {
-        outline: 3px solid #7355d8;
+        outline: 2px solid oklch(0.935 0.003 265);
         outline-offset: 4px;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        a {
+          transition: none;
+        }
       }
     </style>
   </head>
   <body>
     <main>
-      <p>Factory</p>
+      <p class="brand">factory</p>
       <h1>You are offline</h1>
       <p>
         Connect to the internet to open your workspace. Account and workspace
