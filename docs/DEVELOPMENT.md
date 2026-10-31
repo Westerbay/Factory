@@ -166,6 +166,17 @@ documentation links, OpenAPI parity and builds, including Cargo formatting, Clip
 tests. It does not require provider credentials, Docker or a database. `web:check`
 targets frontend types/tests/build; `rust:build` produces a locked release build.
 Node and Cargo lockfiles remain versioned. `pnpm format` applies formatting.
+
+GitHub Actions runs TypeScript and Rust checks in parallel. Pull requests limited to
+`apps/web/`, `docs/` and `README.md` skip Docker and database integrations; all other
+pull requests run them. Pushes to `main`, nightly runs and manual runs execute the full
+integrations. A separate workflow builds Rust release binaries on those same events,
+without adding a skipped job to pull requests. Branch pushes without a pull request do
+not start either workflow. The `check` job requires the applicable foundation jobs to
+succeed; the release workflow reports its result separately. The Docker integration builds
+the real workspace and egress images and may remain slow on a cold runner. `pnpm check`
+locally continues to include the release build.
+
 `environments:test` runs deterministic preparation-tool regressions and is included in
 routine checks. `environments:integration` explicitly builds a fixture image and runs
 real Docker environment isolation, persistence and resource-limit tests.
