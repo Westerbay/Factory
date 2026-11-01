@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next"
 import { useEffect, useId, useRef, useState } from "react"
 
 import { Button } from "../../components/ui/button"
@@ -15,6 +16,7 @@ export function ConnectedProvider({
   state: ConnectionState
   controller: ConnectionController
 }) {
+  const { t: translate } = useTranslation()
   const headingId = useId()
   const statusElement = useRef<HTMLParagraphElement>(null)
   const disconnectButton = useRef<HTMLButtonElement>(null)
@@ -31,17 +33,17 @@ export function ConnectedProvider({
     connection?.status === "unavailable"
   const status =
     state.pending === "logout"
-      ? "Disconnecting Codex…"
+      ? translate("Disconnecting Codex…")
       : state.pending === "read" && !connection
-        ? "Checking the account…"
+        ? translate("Checking the account…")
         : (issue ??
           (connection?.status === "connected"
-            ? "Connected"
+            ? translate("Connected")
             : connection?.status === "disconnected"
-              ? "Not connected"
+              ? translate("Not connected")
               : connection?.status === "connecting"
-                ? "Waiting for authorization"
-                : "The account status could not be confirmed."))
+                ? translate("Waiting for authorization")
+                : translate("The account status could not be confirmed.")))
 
   useEffect(() => {
     if (confirming) cancelButton.current?.focus()
@@ -76,16 +78,19 @@ export function ConnectedProvider({
         aria-live="polite"
         aria-atomic="true"
       >
-        {status}
+        {translate(status)}
       </p>
       {connection?.account && (
         <dl className="provider-account">
           <div>
-            <dt>Account</dt>
-            <dd>{connection.account.email ?? "Personal ChatGPT account"}</dd>
+            <dt>{translate("Account")}</dt>
+            <dd>
+              {connection.account.email ??
+                translate("Personal ChatGPT account")}
+            </dd>
           </div>
           <div>
-            <dt>Plan</dt>
+            <dt>{translate("Plan")}</dt>
             <dd>{connection.account.plan}</dd>
           </div>
         </dl>
@@ -96,7 +101,9 @@ export function ConnectedProvider({
           onClick={check}
           disabled={state.pending !== null || state.paused}
         >
-          {state.pending === "read" ? "Checking…" : "Check again"}
+          {state.pending === "read"
+            ? translate("Checking…")
+            : translate("Check again")}
         </Button>
       )}
       {canDisconnect && (
@@ -104,9 +111,9 @@ export function ConnectedProvider({
           {confirming ? (
             <div className="provider-disconnect-confirmation">
               <p>
-                Disconnect Codex? This removes its saved sign-in and keeps your
-                files. Terminal processes may continue; Stop environment ends
-                all running processes.
+                {translate(
+                  "Disconnect Codex? This removes its saved sign-in and keeps your files. Terminal processes may continue; Stop environment ends all running processes."
+                )}{" "}
               </p>
               <div className="provider-actions">
                 <Button
@@ -115,14 +122,14 @@ export function ConnectedProvider({
                   onClick={cancelConfirmation}
                   disabled={busy || state.paused}
                 >
-                  Cancel
+                  {translate("Cancel")}{" "}
                 </Button>
                 <Button
                   variant="danger"
                   onClick={disconnect}
                   disabled={busy || state.paused}
                 >
-                  Disconnect Codex
+                  {translate("Disconnect Codex")}{" "}
                 </Button>
               </div>
             </div>
@@ -133,7 +140,7 @@ export function ConnectedProvider({
               onClick={showConfirmation}
               disabled={busy || state.paused}
             >
-              Disconnect Codex
+              {translate("Disconnect Codex")}{" "}
             </Button>
           )}
         </div>

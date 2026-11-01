@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next"
 import { lazy, Suspense, useEffect, useRef, useState } from "react"
 import "./terminal.css"
 
@@ -20,6 +21,7 @@ export function TerminalPanel({
   expanded: boolean
   onExpandedChange: (expanded: boolean) => void
 }) {
+  const { t: translate } = useTranslation()
   const [opened, setOpened] = useState(visible)
   const detached = useRef(new Map<string, number>())
   const terminalKey = conversationId ?? "documents"
@@ -32,14 +34,14 @@ export function TerminalPanel({
     <section className="terminal-pane" aria-label="Terminal">
       {projectWarnings?.map((warning) => (
         <p key={warning} className="terminal-project-warning" role="status">
-          {warning}
+          {translate(warning)}
         </p>
       ))}
       {opened && available ? (
         <Suspense
           fallback={
             <p className="terminal-status" role="status">
-              Loading terminal…
+              {translate("Loading terminal…")}{" "}
             </p>
           }
         >
@@ -66,7 +68,7 @@ export function TerminalPanel({
         </Suspense>
       ) : !available ? (
         <p className="terminal-status" role="status">
-          Waiting for your environment…
+          {translate("Waiting for your environment…")}{" "}
         </p>
       ) : null}
     </section>

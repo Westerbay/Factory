@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next"
 import { useEffect, useState, type ReactNode } from "react"
 import { Link, useRouterState } from "@tanstack/react-router"
 
@@ -7,6 +8,7 @@ import { LoadingState } from "../../components/ui/loading-state"
 import { useSession } from "../../lib/auth/session-context"
 
 export function SessionGate({ children }: { children: ReactNode }) {
+  const { t: translate } = useTranslation()
   const { state, controller } = useSession()
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
@@ -37,12 +39,12 @@ export function SessionGate({ children }: { children: ReactNode }) {
           <div className="session-notice" role="status">
             <span>
               {state.verification === "offline"
-                ? "Offline. Reconnect to continue."
-                : "Session check failed."}
+                ? translate("Offline. Reconnect to continue.")
+                : translate("Session check failed.")}
             </span>
             {state.verification === "unavailable" && (
               <Button variant="ghost" onClick={() => void controller.refresh()}>
-                Retry
+                {translate("Retry")}{" "}
               </Button>
             )}
           </div>
@@ -54,27 +56,32 @@ export function SessionGate({ children }: { children: ReactNode }) {
     state.status === "checking" ||
     (state.status === "active" && !state.verification)
   )
-    content = <LoadingState title="Checking your access…" />
+    content = <LoadingState title={translate("Checking your access…")} />
   else if (state.status === "anonymous")
     content = (
       <>
-        <h1>Sign in to continue</h1>
-        <p>Your session is missing, expired, or no longer has access.</p>
+        <h1>{translate("Sign in to continue")}</h1>
+        <p>
+          {translate(
+            "Your session is missing, expired, or no longer has access."
+          )}
+        </p>
         <Link className="ui-button ui-button-primary" to="/sign-in">
-          Continue to sign-in
+          {translate("Continue to sign-in")}{" "}
         </Link>
       </>
     )
   else if (state.status === "logout-failed")
     content = (
       <>
-        <h1>Sign-out could not be confirmed</h1>
+        <h1>{translate("Sign-out could not be confirmed")}</h1>
         <p>
-          Your workspace is hidden. Retry to make sure your server session is
-          revoked.
+          {translate(
+            "Your workspace is hidden. Retry to make sure your server session is revoked."
+          )}{" "}
         </p>
         <Button onClick={() => void controller.logout()}>
-          Try signing out again
+          {translate("Try signing out again")}{" "}
         </Button>
       </>
     )
@@ -84,14 +91,17 @@ export function SessionGate({ children }: { children: ReactNode }) {
         <h1>
           {state.status === "offline" ||
           (state.status === "active" && state.verification === "offline")
-            ? "You are offline"
-            : "Access could not be verified"}
+            ? translate("You are offline")
+            : translate("Access could not be verified")}
         </h1>
         <p>
-          Your workspace is hidden until your connection and access can be
-          checked.
+          {translate(
+            "Your workspace is hidden until your connection and access can be checked."
+          )}{" "}
         </p>
-        <Button onClick={() => void controller.refresh()}>Check again</Button>
+        <Button onClick={() => void controller.refresh()}>
+          {translate("Check again")}
+        </Button>
       </>
     )
 

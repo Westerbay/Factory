@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next"
 import { useId, useRef } from "react"
 import { ArrowUp, CircleHelp, Square } from "lucide-react"
 
@@ -33,6 +34,7 @@ export function ChatComposer({
   onSend: () => void
   onStop: () => void
 }) {
+  const { t: translate } = useTranslation()
   const inputId = useId()
   const composing = useRef(false)
   const selected = models.find((item) => item.id === model)
@@ -45,7 +47,7 @@ export function ChatComposer({
       }}
     >
       <label className="sr-only" htmlFor={inputId}>
-        Message assistant
+        {translate("Message assistant")}{" "}
       </label>
       <textarea
         id={inputId}
@@ -69,31 +71,31 @@ export function ChatComposer({
             if (!sendDisabled && !running) onSend()
           }
         }}
-        placeholder="Ask anything…"
+        placeholder={translate("Ask anything…")}
         disabled={disabled}
         rows={2}
       />
       <div className="chat-composer-actions">
         <label className="chat-model">
-          <span className="sr-only">Model</span>
+          <span className="sr-only">{translate("Model")}</span>
           <select
             value={model}
             onChange={(event) => onModel(event.target.value)}
             disabled={disabled || !models.length}
           >
             {models.length === 0 && (
-              <option value="">No models available</option>
+              <option value="">{translate("No models available")}</option>
             )}
             {models.map((item) => (
               <option key={item.id} value={item.id}>
-                {item.name}
+                {item.name.replace(" (1M context)", translate(" (1M context)"))}
               </option>
             ))}
           </select>
         </label>
         {selected && selected.effortLevels.length > 0 && (
           <label className="chat-effort">
-            <span className="sr-only">Reasoning effort</span>
+            <span className="sr-only">{translate("Reasoning effort")}</span>
             <select
               value={effort}
               onChange={(event) => onEffort(event.target.value)}
@@ -101,7 +103,9 @@ export function ChatComposer({
             >
               {selected.effortLevels.map((level) => (
                 <option key={level} value={level}>
-                  {level === "ultra" ? "Ultra (automatic delegation)" : level}
+                  {level === "ultra"
+                    ? translate("Ultra (automatic delegation)")
+                    : translate(level)}
                 </option>
               ))}
             </select>
@@ -109,23 +113,21 @@ export function ChatComposer({
         )}
         <details className="chat-access">
           <summary
-            aria-label="Assistant access information"
-            title="Assistant access"
+            aria-label={translate("Assistant access information")}
+            title={translate("Assistant access")}
           >
             <CircleHelp aria-hidden="true" size={16} />
-            <span className="sr-only">Assistant access</span>
+            <span className="sr-only">{translate("Assistant access")}</span>
           </summary>
           <p>
-            The selected assistant has full access to files and credentials
-            inside your environment. It can read, change or delete them without
-            asking for each action. Switching providers shares saved messages
-            with the selected provider; tool activity and answers to interactive
-            questions are not transferred.
+            {translate(
+              "The selected assistant has full access to files and credentials inside your environment. It can read, change or delete them without asking for each action. Switching providers shares saved messages with the selected provider; tool activity and answers to interactive questions are not transferred."
+            )}{" "}
           </p>
         </details>
         {running ? (
           <IconButton
-            label="Stop response"
+            label={translate("Stop response")}
             onClick={onStop}
             disabled={stopDisabled}
           >
@@ -135,7 +137,7 @@ export function ChatComposer({
           <IconButton
             type="submit"
             variant="primary"
-            label="Send message"
+            label={translate("Send message")}
             disabled={sendDisabled}
           >
             <ArrowUp aria-hidden="true" size={16} />

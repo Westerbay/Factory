@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next"
 import { useId, useRef } from "react"
 import { ArrowRight, CodeXml } from "lucide-react"
 
@@ -23,6 +24,7 @@ export function ProviderConnection({
   claudeAvailable?: boolean
   inSettings?: boolean
 }) {
+  const { t: translate } = useTranslation()
   const headingId = useId()
   const statusElement = useRef<HTMLParagraphElement>(null)
   const connection = state.connection
@@ -34,25 +36,27 @@ export function ProviderConnection({
     state.message ??
     connectionProblem(connection?.errorCode) ??
     (connection?.status === "unavailable"
-      ? "Codex is unavailable. Check again to retry."
+      ? translate("Codex is unavailable. Check again to retry.")
       : connection?.status === "error"
-        ? "The account status is uncertain. Check again before connecting."
+        ? translate(
+            "The account status is uncertain. Check again before connecting."
+          )
         : null)
   const checking = !connection && !state.message && !busy
   const Heading = inSettings ? "h3" : "h1"
   const status =
     state.pending === "login"
-      ? "Starting sign-in…"
+      ? translate("Starting sign-in…")
       : state.pending === "cancel"
-        ? "Cancelling sign-in…"
+        ? translate("Cancelling sign-in…")
         : state.pending === "logout"
-          ? "Disconnecting Codex…"
+          ? translate("Disconnecting Codex…")
           : challenge
-            ? "Waiting for authorization…"
+            ? translate("Waiting for authorization…")
             : checking
-              ? "Checking your provider…"
+              ? translate("Checking your provider…")
               : connection?.status === "connected"
-                ? "Connected"
+                ? translate("Connected")
                 : ""
 
   function act(action: () => Promise<void>) {
@@ -67,8 +71,8 @@ export function ProviderConnection({
         {inSettings
           ? "Codex"
           : challenge || busy
-            ? "Connect Codex"
-            : "Connect a provider"}
+            ? translate("Connect Codex")
+            : translate("Connect a provider")}
       </Heading>
       <p
         ref={statusElement}
@@ -78,7 +82,7 @@ export function ProviderConnection({
         aria-live="polite"
         aria-atomic="true"
       >
-        {status}
+        {translate(status)}
       </p>
       {canLogin && (
         <Button
@@ -88,7 +92,7 @@ export function ProviderConnection({
           onClick={() => act(controller.login)}
         >
           <CodeXml aria-hidden="true" />
-          <span>{inSettings ? "Connect Codex" : "Codex"}</span>
+          <span>{inSettings ? translate("Connect Codex") : "Codex"}</span>
           <ArrowRight aria-hidden="true" />
         </Button>
       )}
@@ -109,13 +113,15 @@ export function ProviderConnection({
       )}
       {issue && (
         <div className="provider-issue">
-          <p role="status">{issue}</p>
+          <p role="status">{translate(issue)}</p>
           <Button
             variant="secondary"
             disabled={state.pending !== null || state.paused}
             onClick={() => act(controller.refresh)}
           >
-            {state.pending === "read" ? "Checking…" : "Check again"}
+            {state.pending === "read"
+              ? translate("Checking…")
+              : translate("Check again")}
           </Button>
         </div>
       )}
@@ -126,7 +132,7 @@ export function ProviderConnection({
           disabled={busy || state.paused}
           onClick={() => act(controller.cancelLogin)}
         >
-          Cancel
+          {translate("Cancel")}{" "}
         </Button>
       )}
     </section>

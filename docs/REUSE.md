@@ -242,3 +242,9 @@ window and process-launch mechanisms are retired rather than exposed to the brow
 These execution mechanisms have no web-user ownership and must not be composed into
 member routes until that boundary is designed. They do not grant access to legacy history,
 provider credentials or global configuration.
+
+## Web interface language
+
+The web localization runtime in [`apps/web/src/lib/i18n`](../apps/web/src/lib/i18n/)
+provides supported languages, browser preference matching, and the locally stored choice.
+Use its message catalog for Factory interface copy; provider output remains user content.

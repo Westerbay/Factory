@@ -1,5 +1,11 @@
 # Product
 
+## Interface language
+
+The profile settings offer English and French. Without a saved choice, Factory uses the
+first supported browser language, falling back to English. A manual choice is retained
+in that browser and synchronized across its open tabs. Agent responses and terminal output remain in their original language.
+
 ## Current capabilities
 
 Factory offers a private member space and an administrator backoffice. Sign-in uses

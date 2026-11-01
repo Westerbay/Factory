@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next"
 import { useState } from "react"
 
 import { Button } from "../components/ui/button"
@@ -5,6 +6,7 @@ import { useAppUpdate } from "./use-app-update"
 import "./updates.css"
 
 export function AppUpdates() {
+  const { t: translate } = useTranslation()
   const { available, error, applyUpdate } = useAppUpdate()
   const [dismissed, setDismissed] = useState(false)
 
@@ -16,7 +18,7 @@ export function AppUpdates() {
           type="button"
           onClick={() => setDismissed(false)}
         >
-          Update available
+          {translate("Update available")}{" "}
         </Button>
       )
     }
@@ -26,15 +28,19 @@ export function AppUpdates() {
         aria-labelledby="update-title"
         aria-live="polite"
       >
-        <h2 id="update-title">An update is ready</h2>
+        <h2 id="update-title">{translate("An update is ready")}</h2>
         <p>
-          Reload when you are ready. Unsaved changes on this page may be lost.
+          {translate(
+            "Reload when you are ready. Unsaved changes on this page may be lost."
+          )}{" "}
         </p>
         <div className="update-actions">
           <Button variant="primary" onClick={applyUpdate}>
-            Reload to update
+            {translate("Reload to update")}{" "}
           </Button>
-          <Button onClick={() => setDismissed(true)}>Later</Button>
+          <Button onClick={() => setDismissed(true)}>
+            {translate("Later")}
+          </Button>
         </div>
       </aside>
     )
@@ -43,8 +49,9 @@ export function AppUpdates() {
   if (error) {
     return (
       <p className="update-error" role="status">
-        App updates could not be checked. Reload this page when you are online
-        to try again.
+        {translate(
+          "App updates could not be checked. Reload this page when you are online to try again."
+        )}{" "}
       </p>
     )
   }

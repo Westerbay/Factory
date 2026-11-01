@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next"
 import {
   useCallback,
   useEffect,
@@ -70,6 +71,7 @@ export function Chat({
   navigationVisible?: boolean
   renderLayout: (parts: ChatLayout) => ReactNode
 }) {
+  const { t: translate, i18n } = useTranslation()
   const { state: session, controller: sessionController } = useSession()
   const queryClient = useQueryClient()
   const closeProjectPicker = projectWorkspace.setPickerOpen
@@ -612,10 +614,10 @@ export function Chat({
   }, [projectId, listedProject, available, projectWorkspace.refreshVersion])
   const title = selectedConversation
     ? `${project?.fullName ? `${project.fullName} · ` : ""}${conversationLabel(selectedConversation)}`
-    : "New chat"
+    : translate("New chat")
   const outcome = resuming
-    ? "Checking workspace…"
-    : runOutcome(currentHistory, available)
+    ? translate("Checking workspace…")
+    : translate(runOutcome(currentHistory, available))
   const latestRun = currentHistory?.runs[currentHistory.runs.length - 1]
   const historyReady = Boolean(currentHistory) && verifiedHistory === selected
   const submitDisabled =
@@ -657,7 +659,7 @@ export function Chat({
           disabled={!available || busy}
         >
           <SquarePen aria-hidden="true" size={16} />
-          New chat
+          {translate("New chat")}{" "}
         </Button>
         <ProjectNavigation
           workspace={projectWorkspace}
@@ -705,12 +707,12 @@ export function Chat({
     conversation: (
       <section
         className="chat"
-        aria-label="Assistant conversation"
+        aria-label={translate("Assistant conversation")}
         aria-busy={resuming}
       >
         {warnings.map((warning) => (
           <p key={warning} className="chat-project-warning" role="status">
-            {warning}
+            {translate(warning)}
           </p>
         ))}
         <div
@@ -718,28 +720,28 @@ export function Chat({
           ref={observeMessages}
           role="region"
           tabIndex={0}
-          aria-label="Conversation messages"
+          aria-label={translate("Conversation messages")}
           onScroll={onMessageScroll}
         >
           <div className="chat-transcript">
             {!selected && (
               <div className="chat-empty">
-                <h2>What are we building?</h2>
+                <h2>{translate("What are we building?")}</h2>
                 <Button
                   variant="primary"
                   onClick={() => newConversation()}
                   disabled={!available || busy}
                 >
-                  New chat
+                  {translate("New chat")}{" "}
                 </Button>
               </div>
             )}
             {selected && !currentHistory && !message && available && (
-              <LoadingState title="Loading chat…" />
+              <LoadingState title={translate("Loading chat…")} />
             )}
             {selected && currentHistory?.messages.length === 0 && !delta && (
               <div className="chat-empty">
-                <h2>What are we building?</h2>
+                <h2>{translate("What are we building?")}</h2>
               </div>
             )}
             {currentHistory &&
@@ -747,15 +749,24 @@ export function Chat({
                 currentHistory.messagesTruncated ||
                 currentHistory.requestsTruncated) && (
                 <p className="chat-history-note" role="status">
-                  Only recent history is shown. Older{" "}
-                  {[
-                    currentHistory.runsTruncated && "runs",
-                    currentHistory.messagesTruncated && "messages",
-                    currentHistory.requestsTruncated && "requests",
-                  ]
-                    .filter(Boolean)
-                    .join(", ")}{" "}
-                  are not displayed.
+                  {translate(
+                    "Only recent history is shown. Older {{items}} are not displayed.",
+                    {
+                      items: new Intl.ListFormat(i18n.language, {
+                        type: "disjunction",
+                      }).format([
+                        ...(currentHistory.runsTruncated
+                          ? [translate("runs")]
+                          : []),
+                        ...(currentHistory.messagesTruncated
+                          ? [translate("messages")]
+                          : []),
+                        ...(currentHistory.requestsTruncated
+                          ? [translate("requests")]
+                          : []),
+                      ]),
+                    }
+                  )}
                 </p>
               )}
             {currentHistory?.messages.map((item) => (
@@ -763,7 +774,9 @@ export function Chat({
                 className={`chat-message chat-message-${item.role}`}
                 key={item.id}
                 aria-label={
-                  item.role === "user" ? "Your message" : "Assistant message"
+                  item.role === "user"
+                    ? translate("Your message")
+                    : translate("Assistant message")
                 }
               >
                 {item.role === "assistant" && <strong>Assistant</strong>}
@@ -777,7 +790,7 @@ export function Chat({
             {delta && currentHistory && (
               <article
                 className="chat-message chat-message-assistant"
-                aria-label="Assistant response in progress"
+                aria-label={translate("Assistant response in progress")}
               >
                 <strong>Assistant</strong>
                 <MessageMarkdown>{delta}</MessageMarkdown>
@@ -797,8 +810,10 @@ export function Chat({
                     respond(request)
                   }}
                 >
-                  <h2>Assistant has a question</h2>
-                  {receipt.message && <p role="status">{receipt.message}</p>}
+                  <h2>{translate("Assistant has a question")}</h2>
+                  {receipt.message && (
+                    <p role="status">{translate(receipt.message)}</p>
+                  )}
                   {request.questions.map((question) => (
                     <fieldset
                       key={question.id}
@@ -832,7 +847,7 @@ export function Chat({
                       ))}
                       {question.allowFreeText && (
                         <label className="chat-free-answer">
-                          Other answer
+                          {translate("Other answer")}{" "}
                           <input
                             value={
                               question.options.some(
@@ -857,7 +872,7 @@ export function Chat({
                     type="submit"
                     disabled={receipt.disabled || busy || !available}
                   >
-                    Send answers
+                    {translate("Send answers")}{" "}
                   </Button>
                 </form>
               )
@@ -871,21 +886,27 @@ export function Chat({
             onClick={showLatest}
           >
             <ArrowDown aria-hidden="true" size={14} />
-            Jump to latest
+            {translate("Jump to latest")}{" "}
           </Button>
         )}
         <div className="chat-bottom">
           {modelQuery.failureCount > 5 && !modelError && !models.length && (
             <p className="chat-status" role="status">
-              Model discovery is still busy. Retrying automatically.
+              {translate(
+                "Model discovery is still busy. Retrying automatically."
+              )}{" "}
             </p>
           )}
           {modelError && (
             <div className="chat-notice" role="status">
               <p>
                 {models.length
-                  ? "Models could not be updated. Your previous selection remains available."
-                  : "Models could not be loaded. Existing chats remain available."}
+                  ? translate(
+                      "Models could not be updated. Your previous selection remains available."
+                    )
+                  : translate(
+                      "Models could not be loaded. Existing chats remain available."
+                    )}
               </p>
               <Button
                 variant="ghost"
@@ -894,16 +915,18 @@ export function Chat({
                   void modelQuery.refetch({ cancelRefetch: false })
                 }
               >
-                Retry models
+                {translate("Retry models")}{" "}
               </Button>
             </div>
           )}
           {!modelError && missingProviders.length > 0 && (
             <div className="chat-notice" role="status">
               <p>
-                Models from{" "}
-                {missingProviders.map((provider) => provider.name).join(", ")}{" "}
-                could not be loaded.
+                {translate("Models from {{providers}} could not be loaded.", {
+                  providers: missingProviders
+                    .map((provider) => provider.name)
+                    .join(", "),
+                })}
               </p>
               <Button
                 variant="ghost"
@@ -912,29 +935,29 @@ export function Chat({
                   void modelQuery.refetch({ cancelRefetch: false })
                 }
               >
-                Retry models
+                {translate("Retry models")}{" "}
               </Button>
             </div>
           )}
           {message && (
             <div className="chat-notice" role="status">
-              <p>{message}</p>
+              <p>{translate(message)}</p>
               {selected && (
                 <Button
                   variant="ghost"
                   disabled={!available || busy}
                   onClick={retryHistory}
                 >
-                  Check status
+                  {translate("Check status")}{" "}
                 </Button>
               )}
             </div>
           )}
           {uncertain && (
             <p className="chat-notice" role="status">
-              This run is not confirmed stopped. Use Stop environment in your
-              profile, then recover the run before continuing. Some launches
-              need administrator help.
+              {translate(
+                "This run is not confirmed stopped. Use Stop environment in your profile, then recover the run before continuing. Some launches need administrator help."
+              )}{" "}
             </p>
           )}
           {outcome && !uncertain && (

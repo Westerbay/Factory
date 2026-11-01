@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next"
 import { useEffect, useId, useRef, useState } from "react"
 
 import { Button } from "../../components/ui/button"
@@ -15,6 +16,7 @@ export function ClaudeSettings({
   available: boolean
   onConnect: () => void
 }) {
+  const { t: translate } = useTranslation()
   const { state } = useSession()
   const [confirming, setConfirming] = useState(false)
   const [pending, setPending] = useState(false)
@@ -60,39 +62,41 @@ export function ClaudeSettings({
         aria-live="polite"
       >
         {pending
-          ? "Disconnecting Claude…"
+          ? translate("Disconnecting Claude…")
           : connection.isFetching && !connection.data
-            ? "Checking the account…"
+            ? translate("Checking the account…")
             : connected
-              ? "Connected"
+              ? translate("Connected")
               : connection.data?.status === "connecting"
-                ? "Waiting for authorization"
+                ? translate("Waiting for authorization")
                 : connection.data?.status === "disconnected"
-                  ? "Not connected"
+                  ? translate("Not connected")
                   : (claudeConnectionProblem(connection.data) ??
-                    "The account status could not be confirmed.")}
+                    translate("The account status could not be confirmed."))}
       </p>
       {connection.data?.account && (
         <dl className="provider-account">
           <div>
-            <dt>Account</dt>
+            <dt>{translate("Account")}</dt>
             <dd>
-              {connection.data.account.email ?? "Personal Claude account"}
+              {connection.data.account.email ??
+                translate("Personal Claude account")}
             </dd>
           </div>
           <div>
-            <dt>Plan</dt>
+            <dt>{translate("Plan")}</dt>
             <dd>{connection.data.account.plan}</dd>
           </div>
         </dl>
       )}
-      {error && <p role="alert">{error}</p>}
+      {error && <p role="alert">{translate(error)}</p>}
       {connected ? (
         confirming ? (
           <div className="provider-disconnect-confirmation">
             <p>
-              Disconnect Claude Code? Your files remain. Terminal processes may
-              continue until the environment stops.
+              {translate(
+                "Disconnect Claude Code? Your files remain. Terminal processes may continue until the environment stops."
+              )}{" "}
             </p>
             <div className="provider-actions">
               <Button
@@ -101,14 +105,14 @@ export function ClaudeSettings({
                 disabled={pending}
                 onClick={() => setConfirming(false)}
               >
-                Cancel
+                {translate("Cancel")}{" "}
               </Button>
               <Button
                 variant="danger"
                 disabled={pending}
                 onClick={() => void disconnect()}
               >
-                Disconnect Claude
+                {translate("Disconnect Claude")}{" "}
               </Button>
             </div>
           </div>
@@ -119,28 +123,28 @@ export function ClaudeSettings({
             disabled={!available || pending}
             onClick={() => setConfirming(true)}
           >
-            Disconnect Claude
+            {translate("Disconnect Claude")}{" "}
           </Button>
         )
       ) : connection.data?.status === "connecting" ? (
         <Button variant="secondary" disabled={!available} onClick={onConnect}>
-          Continue sign-in
+          {translate("Continue sign-in")}{" "}
         </Button>
       ) : connection.data?.status === "disconnected" ? (
         <Button variant="secondary" disabled={!available} onClick={onConnect}>
-          Connect Claude
+          {translate("Connect Claude")}{" "}
         </Button>
       ) : (
         <div className="provider-actions">
           <Button variant="secondary" disabled={!available} onClick={onConnect}>
-            Connect Claude
+            {translate("Connect Claude")}{" "}
           </Button>
           <Button
             variant="ghost"
             disabled={!available || connection.isFetching}
             onClick={() => void connection.refetch()}
           >
-            Check again
+            {translate("Check again")}{" "}
           </Button>
         </div>
       )}

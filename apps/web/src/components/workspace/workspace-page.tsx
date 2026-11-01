@@ -5,6 +5,8 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react"
+import { useTranslation } from "react-i18next"
+import { setLanguage, type Language } from "../../lib/i18n"
 import {
   PanelLeft,
   PanelLeftClose,
@@ -43,6 +45,8 @@ function subscribeCompact(listener: () => void) {
 const readCompact = () => window.matchMedia(compactQuery).matches
 
 export function WorkspacePage() {
+  const { t: translate } = useTranslation()
+  const { t, i18n } = useTranslation()
   const environment = useEnvironment(hasRecoverableWork)
   const available =
     environment.state.environment?.status === "running" &&
@@ -191,10 +195,10 @@ export function WorkspacePage() {
                   ref={navigationToggle}
                   label={
                     compact
-                      ? "Open chats"
+                      ? t("Open chats")
                       : sidebarVisible
-                        ? "Hide chats"
-                        : "Show chats"
+                        ? t("Hide chats")
+                        : t("Show chats")
                   }
                   aria-expanded={compact ? drawerOpen : sidebarVisible}
                   aria-controls={
@@ -214,10 +218,12 @@ export function WorkspacePage() {
                     <PanelLeftOpen aria-hidden="true" />
                   )}
                 </IconButton>
-                <h1>{parts?.title ?? "New chat"}</h1>
+                <h1>{parts?.title ?? t(translate("New chat"))}</h1>
                 <IconButton
                   ref={terminalToggle}
-                  label={terminalVisible ? "Hide terminal" : "Show terminal"}
+                  label={
+                    terminalVisible ? t("Hide terminal") : t("Show terminal")
+                  }
                   aria-expanded={terminalVisible}
                   aria-controls="workspace-terminal"
                   onClick={() => changeTerminal(!terminalVisible)}
@@ -228,7 +234,7 @@ export function WorkspacePage() {
             </div>
             {resumeIssue && (
               <div className="workspace-notice" role="status">
-                <p>{resumeIssue}</p>
+                <p>{t(resumeIssue)}</p>
                 {available && connection.state.message && (
                   <Button
                     variant="ghost"
@@ -238,7 +244,7 @@ export function WorkspacePage() {
                     }
                     onClick={() => void connection.controller.refresh()}
                   >
-                    Check again
+                    {t(translate("Check again"))}
                   </Button>
                 )}
               </div>
@@ -291,13 +297,13 @@ export function WorkspacePage() {
         <Modal
           open={compact && drawerOpen && showWorkspace}
           onClose={() => setDrawerOpen(false)}
-          title="Chats"
+          title={t("Chats")}
           className="workspace-drawer"
         >
           <div className="workspace-drawer-top">
             <Brand />
             <IconButton
-              label="Close chats"
+              label={t("Close chats")}
               data-autofocus
               onClick={() => setDrawerOpen(false)}
             >
@@ -326,10 +332,22 @@ export function WorkspacePage() {
           returnFocusRef={compact ? navigationToggle : undefined}
           open={settingsOpen}
           onClose={() => setSettingsOpen(false)}
-          title="Settings"
+          title={t("Settings")}
         >
           <div className="workspace-settings">
-            <p>Dark · Space Mono</p>
+            <p>Space Mono</p>
+            <label>
+              {t("Language")}
+              <select
+                value={i18n.language}
+                onChange={(event) =>
+                  setLanguage(event.target.value as Language)
+                }
+              >
+                <option value="en">English</option>
+                <option value="fr">Français</option>
+              </select>
+            </label>
             {available ? (
               <>
                 {codexConnected ? (
@@ -345,20 +363,22 @@ export function WorkspacePage() {
               </>
             ) : (
               <p>
-                Provider settings are available when your workspace is running.
+                {t(
+                  "Provider settings are available when your workspace is running."
+                )}
               </p>
             )}
           </div>
           <div className="ui-modal-actions">
             <Button data-autofocus onClick={() => setSettingsOpen(false)}>
-              Done
+              {t("Done")}
             </Button>
           </div>
         </Modal>
         <Modal
           open={claudeSetup && connected}
           onClose={() => void closeClaudeSetup()}
-          title="Connect Claude Code"
+          title={t("Connect Claude Code")}
         >
           <ClaudeLogin
             connection={claude}
@@ -369,17 +389,17 @@ export function WorkspacePage() {
           returnFocusRef={compact ? navigationToggle : undefined}
           open={stopOpen}
           onClose={() => setStopOpen(false)}
-          title="Stop your environment?"
+          title={t("Stop your environment?")}
           descriptionId="stop-environment-description"
         >
           <p id="stop-environment-description">
-            Running tasks and terminal processes will stop. Saved files and
-            completed chat messages are kept. You can return to your workspace
-            later.
+            {t(
+              "Running tasks and terminal processes will stop. Saved files and completed chat messages are kept. You can return to your workspace later."
+            )}
           </p>
           <div className="ui-modal-actions">
             <Button data-autofocus onClick={() => setStopOpen(false)}>
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button
               variant="danger"
@@ -389,7 +409,7 @@ export function WorkspacePage() {
                 void environment.controller.stop()
               }}
             >
-              Stop environment
+              {t("Stop environment")}
             </Button>
           </div>
         </Modal>

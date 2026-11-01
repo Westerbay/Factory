@@ -337,3 +337,33 @@
 .profile-theme input {
   accent-color: var(--text);
 }
+.workspace-settings > label {
+  display: grid;
+  justify-items: start;
+  gap: 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+}
+.workspace-settings select {
+  max-width: 100%;
+  min-height: 2.25rem;
+  padding: 0.25rem;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.75rem;
+}
+.workspace-settings select:hover {
+  background: var(--surface-hover);
+}
+.workspace-settings select:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 3px;
+}
+@media (max-width: 600px), (pointer: coarse) {
+  .workspace-settings select {
+    min-height: 2.75rem;
+  }
+}

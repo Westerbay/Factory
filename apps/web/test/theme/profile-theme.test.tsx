@@ -35,3 +35,18 @@ it("keeps independently mounted profile menus in separate radio groups", () => {
   expect(names[0]).not.toBe(names[2])
   expect(radios.filter((radio) => radio.includes('checked=""'))).toHaveLength(2)
 })
+
+it("translates the theme controls alongside the profile menu", async () => {
+  const { default: i18n } = await import("../../src/lib/i18n")
+  await i18n.changeLanguage("fr")
+  try {
+    const html = renderToStaticMarkup(
+      <ProfileMenu canStop onSettings={() => {}} onStop={() => {}} />
+    )
+    expect(html).toContain("Thème")
+    expect(html).toContain("Clair")
+    expect(html).toContain("Sombre")
+  } finally {
+    await i18n.changeLanguage("en")
+  }
+})

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next"
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import {
   ChevronDown,
@@ -35,6 +36,7 @@ export function ProjectNavigation({
   onSelectConversation: (id: string) => void
   onProjectRemoved: (projectId: string) => void
 }) {
+  const { t: translate } = useTranslation()
   const [search, setSearch] = useState("")
   const [deleteTarget, setDeleteTarget] = useState<string>()
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
@@ -84,12 +86,12 @@ export function ProjectNavigation({
     (project) => project.id === deleteTarget
   )
   return (
-    <section className="project-navigation" aria-label="Projects">
+    <section className="project-navigation" aria-label={translate("Projects")}>
       <div className="project-navigation-heading">
-        <p className="conversation-list-label">Projects</p>
+        <p className="conversation-list-label">{translate("Projects")}</p>
         <IconButton
           ref={addButton}
-          label="Add project"
+          label={translate("Add project")}
           disabled={!available || workspace.busy}
           onClick={() => {
             setSearch("")
@@ -101,13 +103,13 @@ export function ProjectNavigation({
       </div>
       {workspace.loading && !workspace.projects.length && (
         <p className="project-hint" role="status">
-          Loading projects…
+          {translate("Loading projects…")}{" "}
         </p>
       )}
       {!workspace.loading && !workspace.projects.length && (
-        <p className="project-hint">No projects yet.</p>
+        <p className="project-hint">{translate("No projects yet.")}</p>
       )}
-      <nav className="project-list" aria-label="Your projects">
+      <nav className="project-list" aria-label={translate("Your projects")}>
         {workspace.projects.map((project) => (
           <div className="project-item" key={project.id}>
             <div className="project-row-group">
@@ -138,7 +140,9 @@ export function ProjectNavigation({
               </Button>
               <IconButton
                 className="project-create-chat"
-                label={`New chat in ${project.fullName}`}
+                label={translate("New chat in {{name}}", {
+                  name: project.fullName,
+                })}
                 disabled={!available || busy || project.state !== "ready"}
                 onClick={() => {
                   workspace.setSelectedProjectId(project.id)
@@ -152,7 +156,7 @@ export function ProjectNavigation({
               </IconButton>
               <IconButton
                 className="project-delete"
-                label={`Delete ${project.fullName}`}
+                label={translate("Delete {{name}}", { name: project.fullName })}
                 disabled={
                   !available ||
                   workspace.busy ||
@@ -171,7 +175,9 @@ export function ProjectNavigation({
             {expandedProjects.has(project.id) && (
               <div
                 className="project-chats conversation-list"
-                aria-label={`Chats in ${project.fullName}`}
+                aria-label={translate("Chats in {{name}}", {
+                  name: project.fullName,
+                })}
               >
                 {conversations
                   .filter(
@@ -199,12 +205,16 @@ export function ProjectNavigation({
             {project.state !== "ready" && (
               <p className="project-state" role="status">
                 {project.state === "importing"
-                  ? "Importing…"
+                  ? translate("Importing…")
                   : project.state === "uncertain"
-                    ? "Import interrupted. Stop the workspace and recover it before retrying."
+                    ? translate(
+                        "Import interrupted. Stop the workspace and recover it before retrying."
+                      )
                     : project.state === "deleting"
-                      ? "Deletion interrupted. Delete again to finish."
-                      : "Import needs attention."}
+                      ? translate(
+                          "Deletion interrupted. Delete again to finish."
+                        )
+                      : translate("Import needs attention.")}
               </p>
             )}
             {project.id === workspace.selectedProjectId &&
@@ -213,14 +223,19 @@ export function ProjectNavigation({
               workspace.selectedVerification !== "checking" && (
                 <p className="project-state" role="status">
                   {workspace.selectedVerification === "changed"
-                    ? "The original GitHub address changed or is inaccessible. Check the Git remote before pushing."
-                    : "GitHub address not verified; check your Git remote before pushing."}
+                    ? translate(
+                        "The original GitHub address changed or is inaccessible. Check the Git remote before pushing."
+                      )
+                    : translate(
+                        "GitHub address not verified; check your Git remote before pushing."
+                      )}
                 </p>
               )}
             {project.renamedSinceClone && (
               <p className="project-state" role="status">
-                Repository renamed since import. Verify the Git remote before
-                pushing.
+                {translate(
+                  "Repository renamed since import. Verify the Git remote before pushing."
+                )}{" "}
               </p>
             )}
             {project.state === "failed" && (
@@ -230,7 +245,7 @@ export function ProjectNavigation({
                 disabled={!available || workspace.busy}
                 onClick={() => workspace.retry(project.id)}
               >
-                Retry import
+                {translate("Retry import")}{" "}
               </Button>
             )}
           </div>
@@ -243,19 +258,19 @@ export function ProjectNavigation({
           disabled={!available || workspace.busy || workspace.loading}
           onClick={workspace.loadMoreProjects}
         >
-          Older projects
+          {translate("Older projects")}{" "}
         </Button>
       )}
       {workspace.message && (
         <div className="project-message" role="status">
-          <p>{workspace.message}</p>
+          <p>{translate(workspace.message)}</p>
           {workspace.needsCheck && (
             <Button
               variant="ghost"
               disabled={!available || workspace.busy}
               onClick={workspace.refresh}
             >
-              Check projects
+              {translate("Check projects")}{" "}
             </Button>
           )}
         </div>
@@ -263,19 +278,19 @@ export function ProjectNavigation({
       <Modal
         open={Boolean(target)}
         onClose={() => setDeleteTarget(undefined)}
-        title="Delete project?"
+        title={translate("Delete project?")}
         returnFocusRef={deleteFocus}
         className="project-delete-dialog"
       >
         <p>
-          This permanently deletes <strong>{target?.fullName}</strong>, its
-          local folder in Documents, and all its chats. Unpushed changes are
-          lost. Stop terminal commands before deleting. The GitHub repository
-          stays intact.
+          {translate(
+            "This permanently deletes {{name}}, its local folder in Documents, and all its chats. Unpushed changes are lost. Stop terminal commands before deleting. The GitHub repository stays intact.",
+            { name: target?.fullName }
+          )}
         </p>
         <div className="project-delete-actions">
           <Button data-autofocus onClick={() => setDeleteTarget(undefined)}>
-            Cancel
+            {translate("Cancel")}{" "}
           </Button>
           <Button
             variant="danger"
@@ -289,14 +304,16 @@ export function ProjectNavigation({
               })
             }}
           >
-            Delete project
+            {translate("Delete project")}{" "}
           </Button>
         </div>
       </Modal>
       <Modal
         open={workspace.pickerOpen}
         onClose={workspace.closePicker}
-        title={progress ? "Import project" : "Add a project"}
+        title={
+          progress ? translate("Import project") : translate("Add a project")
+        }
         returnFocusRef={addButton}
         className="project-picker"
       >
@@ -305,19 +322,21 @@ export function ProjectNavigation({
             {importInterrupted ? (
               <div role="status" aria-live="polite">
                 <p className="project-import-title">
-                  Import could not be confirmed
+                  {translate("Import could not be confirmed")}{" "}
                 </p>
                 <p>
-                  Check the project list before trying again. If the import was
-                  interrupted, stop the workspace and recover it before
-                  retrying.
+                  {translate(
+                    "Check the project list before trying again. If the import was interrupted, stop the workspace and recover it before retrying."
+                  )}{" "}
                 </p>
               </div>
             ) : (
               <>
-                <LoadingState title="Importing project…" />
+                <LoadingState title={translate("Importing project…")} />
                 <p>
-                  Cloning <strong>{progress.fullName}</strong> into Documents.
+                  {translate("Cloning {{name}} into Documents.", {
+                    name: progress.fullName,
+                  })}
                 </p>
               </>
             )}
@@ -325,10 +344,12 @@ export function ProjectNavigation({
         ) : workspace.connection?.status === "connected" ? (
           <>
             <p className="project-picker-caption">
-              Choose a GitHub repository to clone into your workspace.
+              {translate(
+                "Choose a GitHub repository to clone into your workspace."
+              )}{" "}
             </p>
             <label className="project-search">
-              Search repositories
+              {translate("Search repositories")}{" "}
               <input
                 data-autofocus
                 type="search"
@@ -339,7 +360,7 @@ export function ProjectNavigation({
             </label>
             <div
               className="project-repositories"
-              aria-label="Importable repositories"
+              aria-label={translate("Importable repositories")}
               aria-busy={workspace.repositoryLoading || workspace.busy}
             >
               {matching.map((repository) => (
@@ -352,7 +373,11 @@ export function ProjectNavigation({
                 >
                   <span>{repository.fullName}</span>
                   <span className="project-repository-meta">
-                    <small>{repository.private ? "Private" : "Public"}</small>
+                    <small>
+                      {repository.private
+                        ? translate("Private")
+                        : translate("Public")}
+                    </small>
                     <ChevronRight size={16} aria-hidden="true" />
                   </span>
                 </Button>
@@ -362,38 +387,38 @@ export function ProjectNavigation({
                 !workspace.repositoryMessage && (
                   <p className="project-hint">
                     {search
-                      ? "No matches in the loaded repositories."
-                      : "No repositories to import."}
+                      ? translate("No matches in the loaded repositories.")
+                      : translate("No repositories to import.")}
                   </p>
                 )}
             </div>
             <p className="project-hint">
-              Search includes loaded repositories.{" "}
+              {translate("Search includes loaded repositories.")}{" "}
               {workspace.nextPage
-                ? "Load more to search additional repositories."
+                ? translate("Load more to search additional repositories.")
                 : ""}
             </p>
             {workspace.repositoryLoading && (
               <p className="project-hint" role="status">
-                Loading repositories…
+                {translate("Loading repositories…")}{" "}
               </p>
             )}
             {workspace.repositoryMessage && (
               <div className="project-message" role="status">
-                <p>{workspace.repositoryMessage}</p>
+                <p>{translate(workspace.repositoryMessage)}</p>
                 <Button
                   variant="ghost"
                   disabled={workspace.busy}
                   onClick={workspace.refreshRepositories}
                 >
-                  Try again
+                  {translate("Try again")}{" "}
                 </Button>
                 <Button
                   variant="ghost"
                   disabled={workspace.busy}
                   onClick={workspace.connect}
                 >
-                  Reconnect GitHub
+                  {translate("Reconnect GitHub")}{" "}
                 </Button>
               </div>
             )}
@@ -403,49 +428,48 @@ export function ProjectNavigation({
                 disabled={workspace.repositoryLoading || workspace.busy}
                 onClick={workspace.loadMoreRepositories}
               >
-                Load more
+                {translate("Load more")}{" "}
               </Button>
             )}
             <details className="project-account">
-              <summary>GitHub access</summary>
+              <summary>{translate("GitHub access")}</summary>
               <p>
-                Connected as {workspace.connection.login}. Git commits include
-                your GitHub email. Disconnecting here keeps your projects and
-                may leave the SSH key active on GitHub.
+                {translate(
+                  "Connected as {{login}}. Git commits include your GitHub email. Disconnecting here keeps your projects and may leave the SSH key active on GitHub.",
+                  { login: workspace.connection.login }
+                )}
               </p>
               <Button
                 variant="ghost"
                 disabled={workspace.busy}
                 onClick={workspace.disconnect}
               >
-                Disconnect GitHub access
+                {translate("Disconnect GitHub access")}{" "}
               </Button>
               <a
                 href="https://github.com/settings/keys"
                 target="_blank"
                 rel="noreferrer"
               >
-                Review SSH keys on GitHub
+                {translate("Review SSH keys on GitHub")}{" "}
               </a>
             </details>
           </>
         ) : workspace.connectionLoading && !workspace.connection ? (
           <p className="project-picker-caption" role="status">
-            Checking GitHub access…
+            {translate("Checking GitHub access…")}{" "}
           </p>
         ) : workspace.connection?.status === "disconnected" ? (
           <div className="project-connect">
             <p>
-              Connect the same GitHub account to list and clone your
-              repositories.
+              {translate(
+                "Connect the same GitHub account to list and clone your repositories."
+              )}{" "}
             </p>
             <p>
-              The GitHub authorization grants Factory broad read and write
-              access to your private repositories and some organization
-              resources. It also allows Factory to add an SSH key and read your
-              GitHub email. The SSH key lets the workspace use your GitHub
-              permissions. Your commit email is visible to anyone who can read
-              those commits.
+              {translate(
+                "The GitHub authorization grants Factory broad read and write access to your private repositories and some organization resources. It also allows Factory to add an SSH key and read your GitHub email. The SSH key lets the workspace use your GitHub permissions. Your commit email is visible to anyone who can read those commits."
+              )}
             </p>
             <Button
               data-autofocus
@@ -453,26 +477,30 @@ export function ProjectNavigation({
               disabled={!available || workspace.busy}
               onClick={workspace.connect}
             >
-              {workspace.busy ? "Connecting…" : "Connect GitHub"}
+              {workspace.busy
+                ? translate("Connecting…")
+                : translate("Connect GitHub")}
             </Button>
           </div>
         ) : (
           <div className="project-connect">
-            <p role="status">GitHub connection status is unavailable.</p>
+            <p role="status">
+              {translate("GitHub connection status is unavailable.")}
+            </p>
             <Button
               data-autofocus
               disabled={workspace.busy}
               onClick={workspace.refresh}
             >
-              Try again
+              {translate("Try again")}{" "}
             </Button>
           </div>
         )}
         <div className="ui-modal-actions">
           <Button ref={closeButton} onClick={workspace.closePicker}>
             {progress && !importInterrupted
-              ? "Continue in background"
-              : "Close"}
+              ? translate("Continue in background")
+              : translate("Close")}
           </Button>
         </div>
       </Modal>

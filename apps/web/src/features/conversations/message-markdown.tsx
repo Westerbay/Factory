@@ -1,4 +1,5 @@
-import { memo } from "react"
+import { useTranslation } from "react-i18next"
+import { memo, type ReactNode } from "react"
 import Markdown, { type Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
 
@@ -43,21 +44,31 @@ const components: Components = {
       {alt ? `Image: ${alt}` : "Image"}
     </span>
   ),
-  pre: ({ children }) => (
-    <pre tabIndex={0} aria-label="Code block">
+  pre: CodeBlock,
+  table: AccessibleTable,
+}
+
+function CodeBlock({ children }: { children?: ReactNode }) {
+  const { t } = useTranslation()
+  return (
+    <pre tabIndex={0} aria-label={t("Code block")}>
       {children}
     </pre>
-  ),
-  table: ({ children }) => (
+  )
+}
+
+function AccessibleTable({ children }: { children?: ReactNode }) {
+  const { t } = useTranslation()
+  return (
     <div
       className="message-markdown-table"
       role="region"
-      aria-label="Table"
+      aria-label={t("Table")}
       tabIndex={0}
     >
       <table>{children}</table>
     </div>
-  ),
+  )
 }
 
 /** Render completed and in-progress agent text without executing embedded content. */
