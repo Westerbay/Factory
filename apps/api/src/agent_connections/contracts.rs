@@ -8,6 +8,7 @@ use uuid::Uuid;
 #[serde(rename_all = "lowercase")]
 pub enum AgentProvider {
     Codex,
+    Claude,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -58,6 +59,18 @@ impl AgentConnectionResponse {
             error_code: Some("unavailable".into()),
             observed_at: None,
         }
+    }
+
+    pub fn claude(snapshot: ConnectionSnapshot) -> Self {
+        let mut response: Self = snapshot.into();
+        response.provider = AgentProvider::Claude;
+        response
+    }
+
+    pub fn claude_unavailable() -> Self {
+        let mut response = Self::unavailable();
+        response.provider = AgentProvider::Claude;
+        response
     }
 }
 

@@ -41,20 +41,52 @@ impl From<ProcessStartError> for EnvironmentError {
 }
 
 /// No string command or Docker identifier supplied by a browser can reach this enum.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) enum FixedProcess {
     TerminalAttach,
     TerminalDetach,
     CodexAccount,
     CodexExecution,
+    ClaudeStatus,
+    ClaudeLogout,
+    ClaudeProbe,
+    ClaudeExecution(ClaudeLaunch),
     #[cfg(test)]
     CodexSchema,
 }
 
+/// Arguments are individual Docker exec arguments, never a shell command.
+#[derive(Clone)]
+pub(crate) struct ClaudeLaunch {
+    model: String,
+    session: uuid::Uuid,
+    resume: bool,
+}
+
+impl ClaudeLaunch {
+    pub(crate) fn new(model: &str, session: uuid::Uuid, resume: bool) -> Option<Self> {
+        if model.is_empty()
+            || model.len() > 256
+            || !model.as_bytes()[0].is_ascii_alphanumeric()
+            || !model
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"-_.:/[]".contains(&c))
+            || session.is_nil()
+        {
+            return None;
+        }
+        Some(Self {
+            model: model.to_owned(),
+            session,
+            resume,
+        })
+    }
+}
+
 impl FixedProcess {
-    fn options(self) -> CreateExecOptions<&'static str> {
+    fn options(self) -> CreateExecOptions<String> {
         let terminal = matches!(self, Self::TerminalAttach);
-        let cmd = match self {
+        let mut cmd: Vec<String> = match &self {
             Self::TerminalAttach => vec![
                 "/usr/bin/tmux",
                 "-f",
@@ -92,25 +124,58 @@ impl FixedProcess {
                 "--listen",
                 "stdio://",
             ],
+            Self::ClaudeStatus => vec![
+                "/usr/bin/timeout", "--signal=TERM", "--kill-after=5s", "30s",
+                "/opt/claude/claude", "auth", "status",
+            ],
+            Self::ClaudeLogout => vec![
+                "/usr/bin/timeout", "--signal=TERM", "--kill-after=5s", "30s",
+                "/opt/claude/claude", "auth", "logout",
+            ],
+            Self::ClaudeProbe => vec![
+                "/usr/bin/timeout", "--signal=TERM", "--kill-after=5s", "60s",
+                "/opt/claude/claude", "--print", "--input-format", "stream-json",
+                "--output-format", "stream-json", "--verbose", "--no-session-persistence",
+                "--strict-mcp-config", "--settings", "{\"disableAllHooks\":true}",
+            ],
+            Self::ClaudeExecution(_) => vec![
+                "/usr/bin/timeout", "--signal=TERM", "--kill-after=5s", "86400s",
+                "/opt/claude/claude", "--print", "--input-format", "stream-json",
+                "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+                "--dangerously-skip-permissions", "--permission-prompt-tool", "stdio",
+            ],
             #[cfg(test)]
             Self::CodexSchema => vec![
                 "/bin/sh",
                 "-c",
                 "/opt/codex/bin/codex app-server generate-json-schema --out /tmp/factory-schema && cat /tmp/factory-schema/v2/TurnStartParams.json",
             ],
-        };
+        }.into_iter().map(str::to_owned).collect();
+        if let Self::ClaudeExecution(launch) = self {
+            cmd.push(
+                if launch.resume {
+                    "--resume"
+                } else {
+                    "--session-id"
+                }
+                .into(),
+            );
+            cmd.push(launch.session.to_string());
+            cmd.push("--model".into());
+            cmd.push(launch.model);
+        }
         CreateExecOptions {
             attach_stdin: Some(true),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             tty: Some(terminal),
             privileged: Some(false),
-            user: Some("10000:10000"),
-            working_dir: Some("/home/factory/Documents"),
+            user: Some("10000:10000".into()),
+            working_dir: Some("/home/factory/Documents".into()),
             env: Some(vec![
-                "HOME=/home/factory",
-                "CODEX_HOME=/home/factory/.codex",
-                "TERM=xterm-256color",
+                "HOME=/home/factory".into(),
+                "CODEX_HOME=/home/factory/.codex".into(),
+                "TERM=xterm-256color".into(),
             ]),
             cmd: Some(cmd),
             ..Default::default()
@@ -366,6 +431,8 @@ mod tests {
             .write_all(b"printf 'factory-%s\\n' ready\r")
             .await?;
         until(&mut first.output, "factory-ready").await?;
+        first.input.write_all(b"claude --version\r").await?;
+        until(&mut first.output, "2.1.268 (Claude Code)").await?;
         runtime.resize_process(&first.id, 123, 37).await?;
         first.input.write_all(b"stty size\r").await?;
         until(&mut first.output, "37 123").await?;
@@ -446,6 +513,34 @@ mod tests {
         assert_eq!(
             runtime
                 .wait_process_exit(&execution_id, Duration::from_secs(15))
+                .await?,
+            0
+        );
+
+        // Exercise the unmodified Claude binary in the isolated, unsigned-in home.
+        let mut status = runtime
+            .start_process(env, FixedProcess::ClaudeStatus)
+            .await?;
+        until(&mut status.output, "\"loggedIn\": false").await?;
+        let status_id = status.id.clone();
+        drop(status);
+        assert_eq!(
+            runtime
+                .wait_process_exit(&status_id, Duration::from_secs(15))
+                .await?,
+            1
+        );
+        let mut probe = runtime
+            .start_process(env, FixedProcess::ClaudeProbe)
+            .await?;
+        probe.input.write_all(b"{\"type\":\"control_request\",\"request_id\":\"factory-init\",\"request\":{\"subtype\":\"initialize\",\"hooks\":{},\"mcpServers\":{}}}\n").await?;
+        until(&mut probe.output, "\"models\"").await?;
+        probe.input.shutdown().await?;
+        let probe_id = probe.id.clone();
+        drop(probe);
+        assert_eq!(
+            runtime
+                .wait_process_exit(&probe_id, Duration::from_secs(15))
                 .await?,
             0
         );

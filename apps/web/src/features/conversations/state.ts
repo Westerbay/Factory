@@ -30,11 +30,11 @@ export function runOutcome(
   const run = history?.runs[history.runs.length - 1]
   switch (run?.status) {
     case "active":
-      return "Codex is working…"
+      return "Assistant is working…"
     case "completed":
-      return "Codex finished."
+      return "Assistant finished."
     case "failed":
-      return "Codex could not complete this run. Review the conversation and try again."
+      return "Assistant could not complete this run. Review the conversation and try again."
     case "interrupted":
       return "The run was interrupted. You can start another message."
     case "uncertain":
@@ -58,7 +58,7 @@ export function questionReceipt(
   if (state === "claimed" || sent)
     return {
       disabled: true,
-      message: "Answer sent. Waiting for Codex to confirm receipt.",
+      message: "Answer sent. Waiting for the provider to confirm receipt.",
     }
   return { disabled: false, message: "" }
 }

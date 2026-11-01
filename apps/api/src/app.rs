@@ -46,7 +46,15 @@ pub fn router_with_user_services(
     terminal: Option<Arc<TerminalService>>,
     accounts: Option<Arc<AgentConnectionService>>,
 ) -> Result<Router, &'static str> {
-    router_with_conversations(config, identity, environments, terminal, accounts, None)
+    router_with_conversations(
+        config,
+        identity,
+        environments,
+        terminal,
+        accounts,
+        None,
+        None,
+    )
 }
 
 pub(crate) fn router_with_conversations(
@@ -55,6 +63,7 @@ pub(crate) fn router_with_conversations(
     environments: Option<Arc<EnvironmentService>>,
     terminal: Option<Arc<TerminalService>>,
     accounts: Option<Arc<AgentConnectionService>>,
+    claude_accounts: Option<Arc<AgentConnectionService>>,
     conversations: Option<Arc<conversations::runtime::ConversationRuntime>>,
 ) -> Result<Router, &'static str> {
     let origin = HeaderValue::from_str(config.web_origin()).map_err(|_| "WEB_ORIGIN_INVALID")?;
@@ -67,8 +76,15 @@ pub(crate) fn router_with_conversations(
             axum::http::HeaderName::from_static("x-csrf-token"),
         ])
         .max_age(Duration::from_secs(60));
-    let (routes, _) = documented_router(identity, environments, terminal, accounts, conversations)
-        .split_for_parts();
+    let (routes, _) = documented_router(
+        identity,
+        environments,
+        terminal,
+        accounts,
+        claude_accounts,
+        conversations,
+    )
+    .split_for_parts();
     Ok(routes
         .fallback(http::not_found)
         .layer(middleware::from_fn_with_state(
@@ -85,6 +101,7 @@ pub(crate) fn documented_router(
     environments: Option<Arc<EnvironmentService>>,
     terminal: Option<Arc<TerminalService>>,
     accounts: Option<Arc<AgentConnectionService>>,
+    claude_accounts: Option<Arc<AgentConnectionService>>,
     conversations: Option<Arc<conversations::runtime::ConversationRuntime>>,
 ) -> OpenApiRouter {
     let database = identity.as_ref().map(|runtime| runtime.database.clone());
@@ -96,6 +113,7 @@ pub(crate) fn documented_router(
         .merge(agent_connections::documented_router(
             auth.clone(),
             accounts,
+            claude_accounts,
             conversations
                 .clone()
                 .map(|v| v as Arc<dyn agent_connections::DisconnectGuard>),

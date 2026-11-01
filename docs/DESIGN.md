@@ -73,11 +73,11 @@ cover hover, focus, pressed, disabled, pending and error. Links remain links.
    never an effect of every poll, focus change or session recheck.
 3. Show **Starting your workspace…** while starting. Never invent a percentage.
    A failure stays visible and offers contextual retry.
-4. An unconnected account sees **Codex** as the sole provider choice. Device
+4. An unconnected account can choose **Codex** or **Claude Code**. Codex device
    authorization retains copy, cancel, expiry, the validated official OpenAI link
-   and uncertain completion. A displayed code does not mean connected. Returning
-   to a pending operation reads it without beginning another login.
-5. A confirmed saved Codex account proceeds directly to the workspace.
+   and uncertain completion. Claude sign-in uses the private terminal and the CLI's
+   own flow. A displayed code does not mean connected.
+5. An account with at least one connected provider proceeds to the workspace.
 
 Explicit Stop suppresses automatic restart while the same app session remains open,
 including route remounts and focus checks. The automatic start opportunity is
@@ -151,7 +151,7 @@ any loaded models, use a compact status message while automatic recovery continu
 ## Account and destructive actions
 
 The profile menu contains Settings, administrator-only User access, Stop environment
-and Sign out. Provider details and Disconnect Codex belong in Settings. Disconnect
+and Sign out. Provider details, additional connections and disconnect actions belong in Settings. Disconnect
 retains active/uncertain-run guards and explains its consequences when invoked.
 
 Stop opens **Stop your environment?** The confirmation explains that running tasks

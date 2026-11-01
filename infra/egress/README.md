@@ -38,8 +38,9 @@ before changing interfaces and keep them stopped until preparation succeeds.
 User bridges use `gateway_mode_ipv4=isolated` and disable IPv6. The proxy has no
 published ports, mounts, Docker socket or user credentials. Its namespace has
 forwarding disabled both through sysctls and nftables. Only its HTTP port 3128
-accepts incoming new connections. Squid accepts CONNECT to three exact names on
-443, denies special/private addresses and does not intercept TLS or log tunnels.
+accepts incoming new connections. Squid accepts CONNECT to the OpenAI and Anthropic
+names listed in [squid.conf](squid.conf) on port 443, denies special/private
+addresses and does not intercept TLS or log tunnels.
 
 The entrypoint requires init-only NET_ADMIN, SETUID, SETGID, SETPCAP and CHOWN.
 After installing the firewall, `setpriv` irreversibly clears the bounding,

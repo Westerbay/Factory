@@ -1,6 +1,8 @@
 use super::recovery::RecoveryHost;
 use crate::config::RuntimeConfig;
 use crate::conversations::runtime::ConversationRuntime;
+use factory_adapters::claude_account::ClaudeAccountAdapter;
+use factory_adapters::claude_execution::ClaudeExecutionAdapter;
 use factory_adapters::codex_account::CodexAccountAdapter;
 use factory_adapters::codex_execution::CodexExecutionAdapter;
 use factory_adapters::egress::EgressMetadata;
@@ -10,6 +12,7 @@ use factory_adapters::environments::{
 use factory_adapters::terminals::DockerTerminalRuntime;
 use factory_application::agent_connections::AgentConnectionService;
 use factory_application::conversations::ConversationService;
+use factory_application::conversations::coordinator::ExecutionProvider;
 use factory_application::environments::{
     EnvironmentAvailability, EnvironmentReconciler, EnvironmentService,
 };
@@ -39,6 +42,7 @@ pub struct EnvironmentHost {
     service: Arc<EnvironmentService>,
     terminal: Arc<TerminalService>,
     accounts: Arc<AgentConnectionService>,
+    claude_accounts: Arc<AgentConnectionService>,
     conversations: Arc<ConversationRuntime>,
     availability: EnvironmentAvailability,
     stop: watch::Sender<bool>,
@@ -164,14 +168,31 @@ impl EnvironmentHostFactory {
             service.clone(),
             Arc::new(CodexAccountAdapter::new(runtime.clone())),
         ));
-        let conversations = crate::conversations::runtime::new(
+        let claude_accounts = Arc::new(AgentConnectionService::new(
+            service.clone(),
+            Arc::new(ClaudeAccountAdapter::new(runtime.clone())),
+        ));
+        let conversations = crate::conversations::runtime::with_providers(
             Arc::new(ConversationService::new(
                 service.clone(),
                 Arc::new(self.database.conversation_store()),
             )),
-            Arc::new(CodexExecutionAdapter::new(runtime.clone())),
-            accounts.clone(),
-        );
+            vec![
+                ExecutionProvider {
+                    id: "codex",
+                    display_name: "Codex",
+                    accounts: accounts.clone(),
+                    runtime: Arc::new(CodexExecutionAdapter::new(runtime.clone())),
+                },
+                ExecutionProvider {
+                    id: "claude",
+                    display_name: "Claude",
+                    accounts: claude_accounts.clone(),
+                    runtime: Arc::new(ClaudeExecutionAdapter::new(runtime.clone())),
+                },
+            ],
+        )
+        .map_err(|_| EnvironmentError::InvalidConfiguration)?;
         let job_availability = availability.clone();
         let create_reconciler = move || {
             EnvironmentReconciler::new(
@@ -205,6 +226,7 @@ impl EnvironmentHostFactory {
             service,
             terminal,
             accounts,
+            claude_accounts,
             conversations,
             availability,
             stop,
@@ -226,6 +248,10 @@ impl EnvironmentHost {
 
     pub fn accounts(&self) -> Arc<AgentConnectionService> {
         self.accounts.clone()
+    }
+
+    pub fn claude_accounts(&self) -> Arc<AgentConnectionService> {
+        self.claude_accounts.clone()
     }
 
     pub(crate) fn conversations(&self) -> Arc<ConversationRuntime> {

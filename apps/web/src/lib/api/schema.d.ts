@@ -31,6 +31,38 @@ export interface paths {
     patch: operations["changeAccess"]
     trace?: never
   }
+  "/api/agent-connections/claude": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get: operations["getClaudeConnection"]
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/agent-connections/claude/logout": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post: operations["logoutClaude"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   "/api/agent-connections/codex": {
     parameters: {
       query?: never
@@ -506,7 +538,7 @@ export interface components {
       verificationUrl: string
     }
     /** @enum {string} */
-    AgentProvider: "codex"
+    AgentProvider: "codex" | "claude"
     AnswerBody: {
       answers: components["schemas"]["AnswerView"][]
       /** Format: uuid */
@@ -898,6 +930,139 @@ export interface operations {
         }
       }
       /** @description Dependency unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  getClaudeConnection: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Current Claude account state */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["AgentConnectionResponse"]
+        }
+      }
+      /** @description Active session required */
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Environment changed */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Rate limit */
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Identity unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  logoutClaude: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Session CSRF token; exact frontend Origin required; empty request body */
+        "X-CSRF-Token": string
+      }
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Provider logout confirmed */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["AgentConnectionResponse"]
+        }
+      }
+      /** @description Body must be empty */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Active session required */
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Origin or CSRF rejected */
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Active or uncertain run */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Rate limit */
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Provider unavailable or cleanup uncertain */
       503: {
         headers: {
           [name: string]: unknown

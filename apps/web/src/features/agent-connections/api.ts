@@ -35,7 +35,7 @@ export function isOfficialVerificationUrl(value: string): boolean {
   }
 }
 
-const safeText = (max: number) =>
+export const safeText = (max: number) =>
   z
     .string()
     .min(1)

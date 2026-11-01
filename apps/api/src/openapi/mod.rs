@@ -15,7 +15,8 @@ use utoipa::openapi::{
 };
 
 pub fn document() -> OpenApi {
-    let (_, mut document) = app::documented_router(None, None, None, None, None).split_for_parts();
+    let (_, mut document) =
+        app::documented_router(None, None, None, None, None, None).split_for_parts();
     document.merge(TerminalProtocol::openapi());
     document.info = Info::builder()
         .title("Factory API")

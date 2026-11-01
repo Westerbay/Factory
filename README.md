@@ -3,13 +3,13 @@
 Factory is a private React/TypeScript web application with a Rust API. Its current
 foundation provides GitHub sign-in, administrator-controlled admission, revocable
 server sessions, a user-access backoffice and private local Docker environments,
-with Codex conversations, a persistent web terminal and personal account connection.
+with Codex and Claude Code conversations, a persistent web terminal and personal account connections.
 The frontend builds to static assets
 hosted independently of Rust and is installable as a PWA.
 
-The member workspace provides Codex conversations and an xterm terminal backed by Docker
-exec and tmux. Codex runs with full access inside the user container, including its home
-and credentials. Repository selection, Claude and global skills remain future work.
+The member workspace provides provider conversations and an xterm terminal backed by Docker
+exec and tmux. Codex and Claude Code run with full access inside the user container, including
+its home and credentials. Repository selection and global skills remain future work.
 The existing TypeScript execution packages remain porting references;
 their history is not assigned or exposed to web users. Hosting and deployment are
 outside the current local increment.
@@ -60,14 +60,15 @@ users, sessions and conversations. Existing Docker homes and containers are not 
 they are no longer associated with the new database. Set up the administrator again.
 Missing environment preparation leaves only environments unavailable when identity is otherwise ready.
 
-After workspace preparation, choose **Codex** and authorize your personal account. A saved
-confirmed account opens chat directly. The terminal icon folds or opens the side panel;
+After workspace preparation, choose **Codex** or **Claude Code** and connect your personal
+account. Both can be connected from Settings; the model selector combines their models.
+A saved connected account opens chat directly. The terminal icon folds or opens the side panel;
 drag its separator to resize, or maximize it from its header. The chats sidebar can
 collapse independently. Returning to the tab checks the session in the background.
-Full-access Codex
+The selected full-access assistant
 can read and modify the container user's files and credentials without per-action
 approval. Closing Factory leaves the shell running; reconnecting never replays unsent input. See the
-[terminal and account instructions](docs/DEVELOPMENT.md#terminal-and-codex-account).
+[terminal and account instructions](docs/DEVELOPMENT.md#terminal-and-provider-accounts).
 
 See [development](docs/DEVELOPMENT.md) for explicit local database setup, API
 configuration, [persistent environment lifecycle](docs/DEVELOPMENT.md#local-environments),
