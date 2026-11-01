@@ -85,7 +85,7 @@ fn error(e: ConversationError) -> Response {
     let status = match e {
         ConversationError::Unauthorized => StatusCode::UNAUTHORIZED,
         ConversationError::NotFound => StatusCode::NOT_FOUND,
-        ConversationError::Conflict => StatusCode::CONFLICT,
+        ConversationError::Conflict | ConversationError::ContextLimit => StatusCode::CONFLICT,
         ConversationError::Invalid => StatusCode::BAD_REQUEST,
         ConversationError::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
     };

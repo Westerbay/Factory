@@ -483,11 +483,13 @@ impl ConversationStore for PgConversationStore {
         generation: i64,
         run_id: Uuid,
         thread: &str,
+        previous: Option<&str>,
     ) -> Result<(), ConversationError> {
         if !valid(thread, 512) {
             return Err(ConversationError::Invalid);
         }
         let thread = thread.to_owned();
+        let previous = previous.map(str::to_owned);
         with_connection(&self.pool, || ConversationError::Unavailable, |connection| {
             Box::pin(async move {
                 let mut tx = connection.begin().await.map_err(unavailable)?;
@@ -496,7 +498,7 @@ impl ConversationStore for PgConversationStore {
                 if run.status != RunStatus::Active {
                     return Err(ConversationError::Conflict);
                 }
-                let updated=sqlx::query("UPDATE factory_identity.conversations SET provider_thread=$1 WHERE id=$2 AND user_id=$3 AND (provider_thread IS NULL OR provider_thread=$1)").bind(thread).bind(run.conversation_id).bind(actor.user_id).execute(&mut *tx).await.map_err(unavailable)?;
+                let updated=sqlx::query("UPDATE factory_identity.conversations SET provider_thread=$1 WHERE id=$2 AND user_id=$3 AND (provider_thread IS NOT DISTINCT FROM $4 OR provider_thread=$1)").bind(thread).bind(run.conversation_id).bind(actor.user_id).bind(previous).execute(&mut *tx).await.map_err(unavailable)?;
                 if updated.rows_affected() != 1 {
                     return Err(ConversationError::Conflict);
                 }

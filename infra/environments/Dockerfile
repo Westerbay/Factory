@@ -22,6 +22,28 @@ RUN set -eu; \
     test -s /tmp/schema/v2/CancelLoginAccountParams.json; \
     test -s /tmp/schema/v2/LogoutAccountResponse.json
 
+# Official, unmodified native Claude Code release. Pin both architectures independently.
+RUN set -eu; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) platform=linux-x64; checksum=9691a2b7bd796712ca8cffb8e32e54ff7fc45b662540233171a16a94a0425653 ;; \
+      arm64) platform=linux-arm64; checksum=116fd031f939ef1e09edf170d62c489e1cc28ed6bfbda49f948773ba168c8f62 ;; \
+      *) echo 'Unsupported Claude Code architecture' >&2; exit 1 ;; \
+    esac; \
+    mkdir /opt/claude; \
+    curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+      "https://downloads.claude.ai/claude-code-releases/2.1.268/${platform}/claude" -o /opt/claude/claude; \
+    echo "$checksum  /opt/claude/claude" | sha256sum --check --strict; \
+    chmod 0555 /opt/claude/claude; \
+    /opt/claude/claude --version | grep -Fx '2.1.268 (Claude Code)'
+
+# Verify the pinned CLI's initialization and model catalog with an empty home.
+RUN set -eu; \
+    mkdir -p /tmp/claude-probe; \
+    printf '%s\n' '{"type":"control_request","request_id":"factory-probe","request":{"subtype":"initialize","hooks":{},"mcpServers":{}}}' \
+      | HOME=/tmp/claude-probe CLAUDE_CONFIG_DIR=/tmp/claude-probe/config \
+        /opt/claude/claude --print --input-format stream-json --output-format stream-json --verbose \
+      | jq -e 'select(.type == "control_response" and .response.request_id == "factory-probe" and .response.subtype == "success") | .response.response | (.models | type == "array" and length > 0) and (.account.tokenSource == "none")' >/dev/null
+
 # Pin and verify the upstream Oh My Zsh source independently of the mutable branch.
 RUN curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
       https://codeload.github.com/ohmyzsh/ohmyzsh/tar.gz/17a2b4c3a5855524ad4772a17ada0dc474e2fdf3 -o /tmp/oh-my-zsh.tar.gz \
@@ -33,6 +55,7 @@ RUN curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
 FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
 LABEL io.factory.environment.image="5"
 LABEL io.factory.codex.version="0.160.0"
+LABEL io.factory.claude.version="2.1.268"
 RUN printf '%s\n' 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261027T000000Z bookworm main' \
       'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20261027T000000Z bookworm-security main' > /etc/apt/sources.list \
     && rm /etc/apt/sources.list.d/debian.sources \
@@ -43,6 +66,7 @@ RUN printf '%s\n' 'deb [check-valid-until=no] http://snapshot.debian.org/archive
     && mkdir -p /home/factory/Documents \
     && chown -R 10000:10000 /home/factory
 COPY --from=codex /opt/codex /opt/codex
+COPY --from=codex /opt/claude /opt/claude
 COPY --from=codex /opt/oh-my-zsh /opt/oh-my-zsh
 COPY tmux.conf /etc/factory/tmux.conf
 COPY zshrc /etc/factory/zshrc
@@ -51,7 +75,8 @@ COPY auth-controller.sh /usr/local/bin/factory-auth-controller
 RUN chmod 0555 /usr/local/bin/factory-auth-controller \
     && printf '\nsource /etc/factory/zshrc\n' >> /etc/zsh/zshrc \
     && : > "/usr/share/zsh/$(zsh -fc 'print -r -- $ZSH_VERSION')/scripts/newuser" \
-    && ln -s /opt/codex/bin/codex /usr/local/bin/codex
+    && ln -s /opt/codex/bin/codex /usr/local/bin/codex \
+    && ln -s /opt/claude/claude /usr/local/bin/claude
 ENV HOME=/home/factory
 USER 10000:10000
 WORKDIR /home/factory/Documents

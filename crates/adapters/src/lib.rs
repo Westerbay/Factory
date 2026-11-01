@@ -1,8 +1,11 @@
 //! Concrete provider adapters; credentials are injected by the runtime composition.
 
+pub mod claude_account;
+pub mod claude_execution;
 pub mod codex_account;
 pub mod codex_execution;
 pub mod egress;
 pub mod environments;
 pub mod identity;
+mod json_stream;
 pub mod terminals;

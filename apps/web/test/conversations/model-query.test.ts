@@ -53,7 +53,7 @@ it("reuses a user's fresh model list but isolates users and account invalidation
   await cache.invalidateQueries({ queryKey: first.queryKey })
   await cache.fetchQuery(first)
   expect(read).toHaveBeenCalledTimes(3)
-  cache.removeQueries({ queryKey: ["codex-models"] })
+  cache.removeQueries({ queryKey: ["provider-models"] })
   await cache.fetchQuery(first)
   expect(read).toHaveBeenCalledTimes(4)
 })

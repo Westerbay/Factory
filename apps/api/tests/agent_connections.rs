@@ -252,6 +252,7 @@ struct Fixture {
     auth: AuthState,
     store: Arc<Store>,
     runtime: Arc<Runtime>,
+    claude_runtime: Arc<Runtime>,
     hash: CredentialHash,
     token: String,
     url: String,
@@ -322,7 +323,15 @@ impl Fixture {
         let environments =
             Arc::new(EnvironmentService::new(store.clone(), config, availability).unwrap());
         let runtime = Arc::new(Runtime::default());
-        let service = Arc::new(AgentConnectionService::new(environments, runtime.clone()));
+        let service = Arc::new(AgentConnectionService::new(
+            environments.clone(),
+            runtime.clone(),
+        ));
+        let claude_runtime = Arc::new(Runtime::default());
+        let claude_service = Arc::new(AgentConnectionService::new(
+            environments,
+            claude_runtime.clone(),
+        ));
         let auth = AuthState::new(
             Arc::new(IdentityService::new(store.clone(), Arc::new(NoProvider))),
             &RuntimeConfig::from_values(|_| None).unwrap(),
@@ -348,8 +357,12 @@ impl Fixture {
             }
         }
         let guard = Arc::new(FixtureGuard(service.clone()));
-        let router =
-            agent_connections::router_with_disconnect_guard(auth.clone(), Some(service), guard);
+        let router = agent_connections::router_with_providers(
+            auth.clone(),
+            Some(service),
+            Some(claude_service),
+            guard,
+        );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("{}", listener.local_addr().unwrap());
         let server_router = router.clone();
@@ -361,6 +374,7 @@ impl Fixture {
             auth,
             store,
             runtime,
+            claude_runtime,
             hash,
             token,
             url,
@@ -666,4 +680,72 @@ async fn confirmed_account_replaces_the_pending_challenge() {
     assert_eq!(body["account"]["plan"], "plus");
     assert!(body["challenge"].is_null());
     assert!(body["errorCode"].is_null());
+}
+
+#[tokio::test]
+async fn claude_connection_is_private_and_disconnects_independently() {
+    let fixture = Fixture::new(ChronoDuration::minutes(5)).await;
+    *fixture.runtime.snapshot.lock().unwrap() = Some(ConnectionSnapshot::account(
+        Some(AccountSummary {
+            email: None,
+            plan: "codex".into(),
+        }),
+        Utc::now(),
+    ));
+    *fixture.claude_runtime.snapshot.lock().unwrap() = Some(ConnectionSnapshot::account(
+        Some(AccountSummary {
+            email: None,
+            plan: "claude".into(),
+        }),
+        Utc::now(),
+    ));
+    let make = |method: &str, path: &str, csrf: bool| {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("cookie", format!("factory_session={}", fixture.token))
+            .header("origin", ORIGIN);
+        if csrf {
+            request = request.header("x-csrf-token", CSRF);
+        }
+        request.body(Body::empty()).unwrap()
+    };
+    let (status, value) = response(
+        fixture
+            .router
+            .clone()
+            .oneshot(make("GET", "/api/agent-connections/claude", false))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["provider"], "claude");
+    assert_eq!(value["status"], "connected");
+    let (status, _) = response(
+        fixture
+            .router
+            .clone()
+            .oneshot(make("POST", "/api/agent-connections/claude/logout", false))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(fixture.claude_runtime.logouts.load(Ordering::SeqCst), 0);
+    let (status, value) = response(
+        fixture
+            .router
+            .clone()
+            .oneshot(make("POST", "/api/agent-connections/claude/logout", true))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["status"], "disconnected");
+    assert_eq!(fixture.claude_runtime.logouts.load(Ordering::SeqCst), 1);
+    let (status, codex) = fixture.call("GET", "", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(codex["status"], "connected");
 }

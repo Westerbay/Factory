@@ -124,9 +124,11 @@ export function Chat({
       }
       if (!showMessage) return
       setMessage(
-        error instanceof ApiFailure && error.status === 409
-          ? "The conversation changed or is still starting. Check its status before trying again."
-          : "The conversation could not be updated. Check its status before trying again."
+        error instanceof api.ContextTransferFailure
+          ? "This conversation is too long to transfer. Start a new chat to use another provider."
+          : error instanceof ApiFailure && error.status === 409
+            ? "The conversation changed or is still starting. Check its status before trying again."
+            : "The conversation could not be updated. Check its status before trying again."
       )
     },
     [sessionController]
@@ -577,7 +579,7 @@ export function Chat({
     conversation: (
       <section
         className="chat"
-        aria-label="Codex conversation"
+        aria-label="Assistant conversation"
         aria-busy={resuming}
       >
         <div
@@ -630,10 +632,10 @@ export function Chat({
                 className={`chat-message chat-message-${item.role}`}
                 key={item.id}
                 aria-label={
-                  item.role === "user" ? "Your message" : "Codex message"
+                  item.role === "user" ? "Your message" : "Assistant message"
                 }
               >
-                {item.role === "assistant" && <strong>Codex</strong>}
+                {item.role === "assistant" && <strong>Assistant</strong>}
                 {item.role === "assistant" ? (
                   <MessageMarkdown>{item.content}</MessageMarkdown>
                 ) : (
@@ -644,9 +646,9 @@ export function Chat({
             {delta && currentHistory && (
               <article
                 className="chat-message chat-message-assistant"
-                aria-label="Codex response in progress"
+                aria-label="Assistant response in progress"
               >
-                <strong>Codex</strong>
+                <strong>Assistant</strong>
                 <MessageMarkdown>{delta}</MessageMarkdown>
               </article>
             )}
@@ -664,7 +666,7 @@ export function Chat({
                     respond(request)
                   }}
                 >
-                  <h2>Codex has a question</h2>
+                  <h2>Assistant has a question</h2>
                   {receipt.message && <p role="status">{receipt.message}</p>}
                   {request.questions.map((question) => (
                     <fieldset

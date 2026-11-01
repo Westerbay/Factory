@@ -1,6 +1,7 @@
 //! Conversation entry points validate the supervisor's current environment before storage.
 pub mod coordinator;
 mod model_probes;
+mod provider_sessions;
 use crate::environments::EnvironmentService;
 use factory_core::{
     conversations::*,
@@ -105,10 +106,11 @@ impl ConversationService {
         env: &Environment,
         run_id: Uuid,
         thread: &str,
+        previous: Option<&str>,
     ) -> Result<(), ConversationError> {
         self.same_environment(actor, env).await?;
         self.store
-            .set_thread(actor, env.id, env.generation, run_id, thread)
+            .set_thread(actor, env.id, env.generation, run_id, thread, previous)
             .await
     }
     pub async fn append_assistant(

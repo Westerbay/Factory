@@ -113,11 +113,27 @@ async fn conversations_are_owned_idempotent_and_block_uncertain_runs() {
             .1
     );
     store
-        .set_thread(one, env1, 1, run.id, "thread-1")
+        .set_thread(one, env1, 1, run.id, "thread-1", None)
         .await
         .unwrap();
     assert!(matches!(
-        store.set_thread(one, env1, 1, run.id, "thread-2").await,
+        store
+            .set_thread(one, env1, 1, run.id, "thread-2", None)
+            .await,
+        Err(ConversationError::Conflict)
+    ));
+    store
+        .set_thread(one, env1, 1, run.id, "thread-1", None)
+        .await
+        .unwrap();
+    store
+        .set_thread(one, env1, 1, run.id, "combined-threads", Some("thread-1"))
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .set_thread(one, env1, 1, run.id, "stale-update", Some("thread-1"))
+            .await,
         Err(ConversationError::Conflict)
     ));
     let request = PendingRequest {

@@ -40,8 +40,8 @@ describe("conversation snapshots", () => {
     expect(await result).toBeUndefined()
   })
   it.each([
-    ["completed", "Codex finished."],
-    ["failed", "Codex could not complete"],
+    ["completed", "Assistant finished."],
+    ["failed", "Assistant could not complete"],
     ["interrupted", "The run was interrupted"],
     ["uncertain", "The run may still be active"],
   ])("surfaces %s after reload", (status, message) => {

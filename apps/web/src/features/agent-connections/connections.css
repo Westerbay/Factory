@@ -4,11 +4,16 @@
   overflow-wrap: anywhere;
 }
 
-.provider-connection h1 {
+.provider-connection h1,
+.provider-connection h3 {
   margin: 0 0 1.5rem;
   font-size: 1.5rem;
   font-weight: 700;
   line-height: 1.35;
+}
+
+.provider-connection h3 {
+  font-size: 1rem;
 }
 
 .provider-status,
@@ -32,9 +37,23 @@
   gap: 0.75rem;
 }
 
+.provider-choice.ui-button + .provider-choice.ui-button {
+  margin-top: 0.75rem;
+}
+
 .provider-choice > span {
   flex: 1;
   text-align: left;
+}
+
+.provider-connection .terminal-pane {
+  height: min(45vh, 24rem);
+  min-height: 15rem;
+  margin-block: 1.25rem;
+}
+
+.provider-connection .terminal-header-actions > .ui-icon-button:first-child {
+  display: none;
 }
 
 .provider-device-code > p,
@@ -93,7 +112,7 @@
   margin-top: 1.5rem;
 }
 
-.provider-settings h2 {
+.provider-settings h3 {
   margin: 0 0 0.75rem;
   font-size: 1rem;
   font-weight: 700;

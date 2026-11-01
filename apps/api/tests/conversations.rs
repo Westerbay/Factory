@@ -10,6 +10,7 @@ use factory_api::{auth::AuthState, config::RuntimeConfig, conversations};
 use factory_application::{
     agent_connections::AgentConnectionService,
     conversations::ConversationService,
+    conversations::coordinator::ExecutionProvider,
     environments::{EnvironmentAvailability, EnvironmentReconciler, EnvironmentService},
     identity::IdentityService,
 };
@@ -179,12 +180,12 @@ impl EnvironmentRuntime for NoEnvironmentRuntime {
     }
 }
 
-struct Connected;
+struct Connected(bool);
 #[async_trait]
 impl AgentConnectionPort for Connected {
     async fn read(&self, _: &Environment) -> Result<ConnectionSnapshot, AgentConnectionError> {
         Ok(ConnectionSnapshot::account(
-            Some(AccountSummary {
+            self.0.then(|| AccountSummary {
                 email: None,
                 plan: "fixture".into(),
             }),
@@ -421,6 +422,7 @@ impl ConversationStore for Conversations {
         _: i64,
         _: Uuid,
         thread: &str,
+        _: Option<&str>,
     ) -> Result<(), ConversationError> {
         self.0
             .lock()
@@ -620,11 +622,18 @@ struct ConversationFixture {
     store: Arc<Store>,
     data: Arc<Conversations>,
     provider: Arc<Provider>,
+    other_provider: Option<Arc<Provider>>,
     tokens: [String; 2],
     hashes: [CredentialHash; 2],
 }
 impl ConversationFixture {
     async fn new() -> Self {
+        Self::create(false).await
+    }
+    async fn create(with_second_provider: bool) -> Self {
+        Self::with_connections(with_second_provider, true, true).await
+    }
+    async fn with_connections(with_second_provider: bool, codex: bool, claude: bool) -> Self {
         let tokens = [
             URL_SAFE_NO_PAD.encode([7u8; 32]),
             URL_SAFE_NO_PAD.encode([8u8; 32]),
@@ -696,9 +705,13 @@ impl ConversationFixture {
         let env = Arc::new(EnvironmentService::new(store.clone(), config, availability).unwrap());
         let accounts = Arc::new(AgentConnectionService::new(
             env.clone(),
-            Arc::new(Connected),
+            Arc::new(Connected(codex)),
         ));
         let data = Arc::new(Conversations::default());
+        let other_accounts = Arc::new(AgentConnectionService::new(
+            env.clone(),
+            Arc::new(Connected(claude)),
+        ));
         let service = Arc::new(ConversationService::new(env, data.clone()));
         let (tx, rx) = mpsc::channel(32);
         let provider = Arc::new(Provider {
@@ -713,7 +726,45 @@ impl ConversationFixture {
             started: Arc::new(AtomicUsize::new(0)),
             stopped: Arc::new(AtomicUsize::new(0)),
         });
-        let runtime = factory_api::conversations::runtime::new(service, provider.clone(), accounts);
+        let other_provider = if with_second_provider {
+            let (tx, rx) = mpsc::channel(32);
+            Some(Arc::new(Provider {
+                tx,
+                rx: AsyncMutex::new(Some(rx)),
+                opens: AtomicUsize::new(0),
+                fail_open: Mutex::new(None),
+                model_started: AtomicUsize::new(0),
+                fail_models: Mutex::new(None),
+                hold_models: AtomicBool::new(false),
+                release_models: Notify::new(),
+                started: Arc::new(AtomicUsize::new(0)),
+                stopped: Arc::new(AtomicUsize::new(0)),
+            }))
+        } else {
+            None
+        };
+        let runtime = if let Some(other) = &other_provider {
+            factory_api::conversations::runtime::with_providers(
+                service,
+                vec![
+                    ExecutionProvider {
+                        id: "codex",
+                        display_name: "Codex",
+                        accounts,
+                        runtime: provider.clone(),
+                    },
+                    ExecutionProvider {
+                        id: "claude",
+                        display_name: "Claude",
+                        accounts: other_accounts,
+                        runtime: other.clone(),
+                    },
+                ],
+            )
+            .unwrap()
+        } else {
+            factory_api::conversations::runtime::new(service, provider.clone(), accounts)
+        };
         let auth = AuthState::new(
             Arc::new(IdentityService::new(store.clone(), Arc::new(NoProvider))),
             &RuntimeConfig::from_values(|_| None).unwrap(),
@@ -725,6 +776,7 @@ impl ConversationFixture {
             store,
             data,
             provider,
+            other_provider,
             tokens,
             hashes,
         }
@@ -1526,4 +1578,77 @@ async fn model_probe_preflight_releases_capacity_but_submitted_timeout_keeps_it(
             assert!(f.runtime.models(actor).await.is_ok());
         }
     }
+}
+
+#[tokio::test]
+async fn models_and_turns_are_dispatched_to_the_selected_connected_provider() {
+    let f = ConversationFixture::create(true).await;
+    let models = body_json(f.call("GET", "/api/conversations/models", 0, "").await).await;
+    assert_eq!(models.as_array().unwrap().len(), 2);
+    assert_eq!(models[0]["id"], "factory:codex:fixture-model");
+    assert_eq!(models[0]["name"], "Codex · Fixture model");
+    assert_eq!(models[1]["id"], "factory:claude:fixture-model");
+    assert_eq!(models[1]["name"], "Claude · Fixture model");
+    let create = f.call("POST", "/api/conversations", 0, "").await;
+    let id = body_json(create).await["id"].as_str().unwrap().to_owned();
+    let body = json!({"operationId":Uuid::new_v4(),"model":"factory:claude:fixture-model","input":"hello"}).to_string();
+    let response = f
+        .call("POST", &format!("/api/conversations/{id}/runs"), 0, &body)
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let other = f.other_provider.as_ref().unwrap();
+    until(|| other.opens.load(Ordering::SeqCst) == 1).await;
+    assert_eq!(f.provider.opens.load(Ordering::SeqCst), 0);
+    other
+        .tx
+        .send(ExecutionEvent::ThreadReady {
+            provider_thread: "claude-private-thread".into(),
+        })
+        .await
+        .unwrap();
+    until(|| other.started.load(Ordering::SeqCst) == 1).await;
+    other.tx.send(ExecutionEvent::Completed).await.unwrap();
+    until(|| {
+        f.data
+            .0
+            .lock()
+            .unwrap()
+            .run
+            .as_ref()
+            .is_some_and(|run| run.status == RunStatus::Completed)
+    })
+    .await;
+    let history = body_json(
+        f.call("GET", &format!("/api/conversations/{id}"), 0, "")
+            .await,
+    )
+    .await
+    .to_string();
+    assert!(!history.contains("claude-private-thread"));
+}
+
+#[tokio::test]
+async fn models_require_at_least_one_connection_and_include_only_connected_providers() {
+    let only_claude = ConversationFixture::with_connections(true, false, true).await;
+    let response = only_claude
+        .call("GET", "/api/conversations/models", 0, "")
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let models = body_json(response).await;
+    assert_eq!(models.as_array().unwrap().len(), 1);
+    assert_eq!(models[0]["id"], "factory:claude:fixture-model");
+    let created = only_claude.call("POST", "/api/conversations", 0, "").await;
+    let id = body_json(created).await["id"].as_str().unwrap().to_owned();
+    let body = json!({"operationId":Uuid::new_v4(),"model":"factory:claude:fixture-model","input":"hello"}).to_string();
+    let response = only_claude
+        .call("POST", &format!("/api/conversations/{id}/runs"), 0, &body)
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let other = only_claude.other_provider.as_ref().unwrap();
+    until(|| other.opens.load(Ordering::SeqCst) == 1).await;
+    assert_eq!(only_claude.provider.opens.load(Ordering::SeqCst), 0);
+
+    let none = ConversationFixture::with_connections(true, false, false).await;
+    let response = none.call("GET", "/api/conversations/models", 0, "").await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
 }

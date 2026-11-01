@@ -160,6 +160,9 @@ Connection patterns were checked against the official
   [fixed Docker process transport](../crates/adapters/src/environments/process.rs) with
   the terminal adapter. Account operations never start agent turns or expose provider
   tokens; the container home remains the credential source of truth.
+- [ClaudeAccountAdapter](../crates/adapters/src/claude_account/mod.rs) projects the
+  personal CLI sign-in and performs native logout. Sign-in runs directly in the private
+  terminal, rather than transferring credentials through the account API.
 - [The account HTTP lifecycle](../apps/api/src/agent_connections/lifecycle.rs) owns
   detached request completion, pending-operation monitoring and revocation cleanup.
   Browser disconnection must not abandon an authorized process without an owner.
@@ -175,10 +178,14 @@ Connection patterns were checked against the official
   environment-bound conversation, run, question and recovery behavior. Use their
   validated operations instead of reading another user's persistence directly.
 - [ExecutionRuntime](../crates/core/src/conversations/execution.rs) separates provider
-  control from bounded events. The [Codex adapter](../crates/adapters/src/codex_execution/mod.rs)
-  implements the current full-access provider; provider identifiers remain private.
+  control from bounded events. The [Codex](../crates/adapters/src/codex_execution/mod.rs)
+  and [Claude](../crates/adapters/src/claude_execution/mod.rs) adapters implement that
+  contract; native session references remain private.
 - [Conversation coordinator](../crates/application/src/conversations/coordinator.rs)
-  owns durable claims, provider lifecycle and session checks. The
+  owns durable claims, provider registration, model routing, lifecycle and session checks.
+  Its [provider session mapping](../crates/application/src/conversations/provider_sessions.rs)
+  preserves old Codex sessions and transfers bounded conversation context on provider
+  changes. The
   [API routes](../apps/api/src/conversations/mod.rs) and
   [host facilities](../apps/api/src/conversations/runtime.rs) own HTTP, event transport,
   task execution and encoding. Uncertain cleanup requires explicit recovery after a

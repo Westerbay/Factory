@@ -281,8 +281,10 @@ pnpm environments:prepare
 
 This operator command builds the pinned [workspace image](../infra/environments/Dockerfile)
 and [egress proxy](../infra/egress/Dockerfile), so initial preparation requires network
-access and may take several minutes. The workspace contains zsh with Oh My Zsh, tmux and native Codex
-0.160.0; no host Codex installation or credentials are imported. Preparation
+access and may take several minutes. The workspace contains zsh with Oh My Zsh, tmux,
+native Codex 0.160.0 and Claude Code 2.1.268. The Claude binary's initialization and
+model-list response are checked during a build step with an empty home. No host
+provider installation or credentials are imported. Preparation
 stores the stable installation UUID in `.factory/environments/installation.json` and
 the immutable workspace image ID/policy in `prepared.json` and the proxy metadata in
 `egress.json`. Preserve this ignored directory while
@@ -313,8 +315,8 @@ Containers retain a fixed non-root user, read-only root, bounded tmpfs/logs, dro
 capabilities, no-new-privileges, isolated per-user internal networks and no published
 ports. They receive neither
 host bind mounts, platform credentials nor the Docker socket. Named volumes have no
-portable disk quota. Only the approved Codex HTTPS destinations pass through the shared
-proxy; direct Internet, host/LAN and other-user access remain blocked. Package downloads,
+portable disk quota. Only the approved OpenAI and Anthropic HTTPS destinations pass through
+the shared proxy; direct Internet, host/LAN and other-user access remain blocked. Package downloads,
 GitHub cloning and development-server publishing are not enabled in this increment.
 
 A prepared image with a different policy is not applied to existing containers. During
@@ -372,9 +374,9 @@ WSL behavior remains unverified, and installation/checkout identities must
 not be assumed interchangeable. Integration commands create their own labeled fixtures
 and verify ownership before cleanup; they never prune or remove user volumes.
 
-## Terminal and Codex account
+## Terminal and provider accounts
 
-Wait for automatic workspace preparation and connect Codex. The header's terminal icon
+Wait for automatic workspace preparation and connect a provider. The header's terminal icon
 opens or folds the panel; opening loads xterm and attaches to its zsh tmux shell in
 `/home/factory/Documents`. Folding preserves the attached display and shell. Drag the
 separator to resize, or focus it and use arrow keys; Enter folds the terminal. Narrow
@@ -398,6 +400,11 @@ cancel it if it is no longer needed. The connection controller polls pending aut
 seconds while visible and shows Connected only after provider confirmation and account
 verification. The reported plan does not guarantee access to a particular model.
 
+Choose **Claude Code** to open the private terminal. Run `claude auth login --claudeai`
+and complete Anthropic's own sign-in. Factory checks `claude auth status` and retains
+only a bounded account projection. The profile settings can connect the other provider
+later. A saved local CLI sign-in does not prove the subscription can use every model.
+
 Only the initiating Factory session can retrieve a pending code. Reloading that page
 recovers its current state without starting another login. Expiry, logout or suspension
 closes access and attempts to cancel pending authorization. After an API crash, an
@@ -408,13 +415,14 @@ arbitrary container processes.
 Codex stores credentials under `/home/factory/.codex` with private permissions. The API
 does not read host credentials or store provider tokens in PostgreSQL or browser storage.
 In profile **Settings**, **Disconnect Codex** clears the saved sign-in through the account protocol and preserves
-the rest of the home. It is blocked for active or uncertain Factory runs. This does not
+the rest of the home. **Disconnect Claude** runs the native CLI logout independently.
+Both actions are blocked for active or uncertain Factory runs. This does not
 prove already-running manual Codex requests stopped;
 use **Stop environment** when all processes must end. Factory sign-out leaves an already
 connected Codex account saved in its owner's home.
 
-The initial proxy allows only `auth.openai.com`, `chatgpt.com` and `api.openai.com` over
-HTTPS CONNECT on port 443. Direct egress and private destinations are refused. If the
+The proxy allows the OpenAI and Anthropic hosts listed in [squid.conf](../infra/egress/squid.conf)
+over HTTPS CONNECT on port 443. Direct egress and private destinations are refused. If the
 proxy is down, provider settings report unavailable while local terminal work continues;
 local account cancellation/logout does not require the proxy. No HTTP endpoint can
 open an arbitrary Docker exec or target another user's container.
@@ -424,9 +432,11 @@ stream into the chat; completed messages and run state are retained. The visible
 is bounded and indicates when older entries are omitted; the conversation list can load
 older pages. Questions need an explicit
 reply; a submitted answer can remain claimed or uncertain until provider confirmation
-and is not automatically resent. Codex runs with full access inside the user's container and does not
+and is not automatically resent. Both providers run with full access inside the user's container and do not
 request per-action approval: its commands can read, modify or delete the user's home,
-including account credentials. A displayed model is not proof of account entitlement.
+including account credentials. Switching providers sends the saved conversation messages
+as context; a truncated or oversized history prevents the switch. A displayed model is
+not proof of account entitlement.
 Provider calls may consume the user's model allowance.
 
 If stopping a run does not confirm cleanup, it remains uncertain and blocks further work.
@@ -446,7 +456,7 @@ The integration commands exercise real PTYs, reattachment after adapter restart,
 detached 4-MiB output producer, account-controller cleanup with synthetic cache data,
 controlled DNS/private-address refusals. They neither
 authorize a real account nor consume model allowance. A successful real login and a
-small intentional Codex chat turn remain human acceptance.
+small intentional chat turn for each provider remain human acceptance.
 
 ## Execution reference and Codex diagnostics
 

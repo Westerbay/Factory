@@ -14,6 +14,8 @@ pub enum ConversationError {
     NotFound,
     #[error("Conversation state changed")]
     Conflict,
+    #[error("Conversation history is too large to transfer to another provider")]
+    ContextLimit,
     #[error("Invalid conversation input")]
     Invalid,
     #[error("Conversation service is unavailable")]
@@ -202,6 +204,7 @@ pub trait ConversationStore: Send + Sync {
         generation: i64,
         run_id: Uuid,
         thread: &str,
+        previous: Option<&str>,
     ) -> Result<(), ConversationError>;
     /// Store each completed provider item exactly once. Correlation stays private.
     /// Repeated identical items return the existing record; changed text conflicts.

@@ -3,15 +3,38 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { apiClient, ApiFailure } from "../../src/lib/api/client"
 import {
   cancel,
+  ContextTransferFailure,
   list,
   listRecoverable,
   recoverModelProbe,
+  start,
   stream,
 } from "../../src/features/conversations/api"
 
 const userRun = "f7eae12b-e8f7-4ee3-a27c-a9c84a12962b"
 const conversation = "9bf3cbec-9818-44c2-bd7a-a9c722b910e6"
 afterEach(() => vi.restoreAllMocks())
+
+it("distinguishes a transfer limit from ordinary conversation conflicts", async () => {
+  const post = vi.spyOn(apiClient, "POST")
+  post.mockResolvedValueOnce({
+    error: { code: "ContextLimit" },
+    response: new Response(null, { status: 409 }),
+  } as never)
+  post.mockResolvedValueOnce({
+    error: { code: "Conflict" },
+    response: new Response(null, { status: 409 }),
+  } as never)
+  const body = {
+    operationId: userRun,
+    model: "factory:claude:sonnet",
+    input: "hello",
+  }
+  const send = () =>
+    start(conversation, body, "csrf", new AbortController().signal)
+  await expect(send()).rejects.toBeInstanceOf(ContextTransferFailure)
+  await expect(send()).rejects.toBeInstanceOf(ApiFailure)
+})
 
 describe("conversation pages", () => {
   it("requests an older page using the cursor and validates the response", async () => {

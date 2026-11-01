@@ -29,7 +29,7 @@ export function useConnection(available: boolean) {
       state.pending === "logout" ||
       state.connection?.status === "disconnected"
     ) {
-      queryClient.removeQueries({ queryKey: ["codex-models"] })
+      void queryClient.resetQueries({ queryKey: ["provider-models"] })
     }
   }, [queryClient, state.pending, state.connection?.status])
   useEffect(() => {

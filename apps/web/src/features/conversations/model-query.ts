@@ -6,7 +6,7 @@ import { models } from "./api"
 const conflictRetryDelays = [2_000, 4_000, 8_000, 16_000, 30_000]
 
 export const modelQueryKey = (userId: string) =>
-  ["codex-models", userId] as const
+  ["provider-models", userId] as const
 
 export function modelQueryOptions(userId: string) {
   return queryOptions({
