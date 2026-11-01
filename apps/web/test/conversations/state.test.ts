@@ -3,8 +3,34 @@ import {
   latestReader,
   mergeOlderConversations,
   runOutcome,
+  selectedEffort,
 } from "../../src/features/conversations/state"
 import type { History } from "../../src/features/conversations/api"
+
+describe("model effort selection", () => {
+  const model = {
+    id: "model",
+    name: "Model",
+    effortLevels: ["low", "medium", "high"],
+    defaultEffort: "low",
+  }
+  it("keeps a supported choice and otherwise selects an advertised level", () => {
+    expect(selectedEffort(model, "high")).toBe("high")
+    expect(selectedEffort(model, "")).toBe("low")
+    expect(selectedEffort({ ...model, defaultEffort: null }, "")).toBe("medium")
+    expect(
+      selectedEffort({ ...model, defaultEffort: "invalid" }, "removed")
+    ).toBe("medium")
+    expect(
+      selectedEffort(
+        { ...model, defaultEffort: null, effortLevels: ["high"] },
+        ""
+      )
+    ).toBe("high")
+    expect(selectedEffort({ ...model, effortLevels: [] }, "")).toBe("")
+    expect(selectedEffort(undefined, "high")).toBe("")
+  })
+})
 
 function deferred<T>() {
   let resolve!: (value: T) => void

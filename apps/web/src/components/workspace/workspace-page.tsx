@@ -14,8 +14,8 @@ import {
 } from "lucide-react"
 
 import { ConnectedProvider } from "../../features/agent-connections/connected-provider"
-import { claudeConnectionProblem } from "../../features/agent-connections/claude-api"
 import { ClaudeSettings } from "../../features/agent-connections/claude-connection"
+import { ClaudeLogin } from "../../features/agent-connections/claude-login"
 import { useClaudeConnection } from "../../features/agent-connections/use-claude-connection"
 import { ProviderConnection } from "../../features/agent-connections/provider-connection"
 import { useConnection } from "../../features/agent-connections/use-connection"
@@ -129,7 +129,12 @@ export function WorkspacePage() {
   function connectClaude() {
     setSettingsOpen(false)
     setClaudeSetup(true)
-    if (connected) changeTerminal(true)
+    if (claude.data?.status !== "connecting") void claude.begin()
+  }
+  async function closeClaudeSetup() {
+    if (claude.pending) return
+    if (claude.data?.challenge && !(await claude.cancel())) return
+    setClaudeSetup(false)
   }
   const profile = (
     <ProfileMenu
@@ -237,20 +242,6 @@ export function WorkspacePage() {
                 )}
               </div>
             )}
-            {claudeSetup && (
-              <div className="workspace-notice" role="status">
-                <p>
-                  In the terminal, run <code>claude auth login --claudeai</code>{" "}
-                  and complete the Claude sign-in.
-                </p>
-                <Button variant="ghost" onClick={() => void claude.refetch()}>
-                  Check connection
-                </Button>
-                <Button variant="ghost" onClick={() => setClaudeSetup(false)}>
-                  Close
-                </Button>
-              </div>
-            )}
             <SplitPane
               compact={compact}
               primary={parts?.conversation}
@@ -276,44 +267,11 @@ export function WorkspacePage() {
           >
             {available ? (
               claudeSetup ? (
-                <div className="provider-connection">
-                  <h1 ref={claudeHeading} tabIndex={-1}>
-                    Connect Claude Code
-                  </h1>
-                  <p>
-                    Run this command in the terminal, then complete the Claude
-                    sign-in:
-                  </p>
-                  <p>
-                    <code>claude auth login --claudeai</code>
-                  </p>
-                  <TerminalPanel
-                    available={available}
-                    visible
-                    expanded={false}
-                    onExpandedChange={() => {}}
-                  />
-                  <div className="provider-actions">
-                    <Button
-                      variant="ghost"
-                      onClick={() => setClaudeSetup(false)}
-                    >
-                      Back
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      onClick={() => void claude.refetch()}
-                    >
-                      Check connection
-                    </Button>
-                  </div>
-                  {(claude.isError || claudeConnectionProblem(claude.data)) && (
-                    <p role="alert">
-                      {claudeConnectionProblem(claude.data) ??
-                        "Claude status could not be checked. Try again."}
-                    </p>
-                  )}
-                </div>
+                <ClaudeLogin
+                  connection={claude}
+                  headingRef={claudeHeading}
+                  onClose={() => setClaudeSetup(false)}
+                />
               ) : (
                 <ProviderConnection
                   {...connection}
@@ -394,6 +352,16 @@ export function WorkspacePage() {
           </div>
         </Modal>
         <Modal
+          open={claudeSetup && connected}
+          onClose={() => void closeClaudeSetup()}
+          title="Connect Claude Code"
+        >
+          <ClaudeLogin
+            connection={claude}
+            onClose={() => setClaudeSetup(false)}
+          />
+        </Modal>
+        <Modal
           returnFocusRef={compact ? navigationToggle : undefined}
           open={stopOpen}
           onClose={() => setStopOpen(false)}
@@ -427,6 +395,10 @@ export function WorkspacePage() {
   return connected || wasConnected ? (
     <Chat
       available={workspaceReady}
+      connectedProviders={[
+        ...(codexConnected ? [{ id: "codex", name: "Codex" }] : []),
+        ...(claudeConnected ? [{ id: "claude", name: "Claude" }] : []),
+      ]}
       resuming={resuming}
       renderLayout={layout}
     />

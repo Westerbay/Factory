@@ -56,6 +56,37 @@ it("accepts only consistent Claude account projections", () => {
   ).toBe(false)
 })
 
+it("accepts only Claude's own browser-code authorization challenge", () => {
+  const verificationUrl =
+    "https://claude.com/cai/oauth/authorize?redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&response_type=code&code_challenge_method=S256&state=fixture&code_challenge=fixture"
+  const challenge = {
+    operationId: "6a579df6-0551-41a3-9875-5db5aa7c1234",
+    verificationUrl,
+    userCode: null,
+    expiresAt: "2099-01-01T00:00:00Z",
+  }
+  expect(
+    claudeSchema.safeParse({
+      provider: "claude",
+      status: "connecting",
+      challenge,
+    }).success
+  ).toBe(true)
+  expect(
+    claudeSchema.safeParse({
+      provider: "claude",
+      status: "connecting",
+      challenge: {
+        ...challenge,
+        verificationUrl: `${verificationUrl}&redirect_uri=https://evil.test`,
+      },
+    }).success
+  ).toBe(false)
+  expect(
+    claudeSchema.safeParse({ provider: "claude", status: "connecting" }).success
+  ).toBe(false)
+})
+
 it("disconnects with the session CSRF token and no request body", async () => {
   const fetch = vi.fn().mockResolvedValue(
     Response.json({

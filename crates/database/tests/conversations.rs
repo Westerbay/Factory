@@ -75,6 +75,7 @@ async fn conversations_are_owned_idempotent_and_block_uncertain_runs() {
         input: "hello".into(),
     };
     assert!(!store.has_open_runs(one).await.unwrap());
+    assert_eq!(store.find_turn(one, input.clone()).await.unwrap(), None);
     let (run, new) = store.begin_turn(one, input.clone()).await.unwrap();
     assert!(store.has_open_runs(one).await.unwrap());
     assert!(!store.has_open_runs(two).await.unwrap());
@@ -82,8 +83,34 @@ async fn conversations_are_owned_idempotent_and_block_uncertain_runs() {
     let (repeated, new) = store.begin_turn(one, input.clone()).await.unwrap();
     assert!(!new);
     assert_eq!(run, repeated);
+    assert_eq!(
+        store.find_turn(one, input.clone()).await.unwrap(),
+        Some(run.clone())
+    );
+    assert!(matches!(
+        store.find_turn(two, input.clone()).await,
+        Err(ConversationError::Conflict)
+    ));
+    let mut other_user_turn = input.clone();
+    other_user_turn.environment_id = env2;
+    assert!(matches!(
+        store.find_turn(two, other_user_turn).await,
+        Err(ConversationError::NotFound)
+    ));
+    let revoked = EnvironmentActor {
+        user_id: one.user_id,
+        session_hash: CredentialHash([0; 32]),
+    };
+    assert!(matches!(
+        store.find_turn(revoked, input.clone()).await,
+        Err(ConversationError::Unauthorized)
+    ));
     let mut different = input.clone();
     different.input = "different".into();
+    assert!(matches!(
+        store.find_turn(one, different.clone()).await,
+        Err(ConversationError::Conflict)
+    ));
     assert!(matches!(
         store.begin_turn(one, different).await,
         Err(ConversationError::Conflict)

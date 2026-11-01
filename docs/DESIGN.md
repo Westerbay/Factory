@@ -75,8 +75,8 @@ cover hover, focus, pressed, disabled, pending and error. Links remain links.
    A failure stays visible and offers contextual retry.
 4. An unconnected account can choose **Codex** or **Claude Code**. Codex device
    authorization retains copy, cancel, expiry, the validated official OpenAI link
-   and uncertain completion. Claude sign-in uses the private terminal and the CLI's
-   own flow. A displayed code does not mean connected.
+   and uncertain completion. Claude sign-in shows the CLI's validated link and accepts
+   the one-time code returned by Claude. A displayed code does not mean connected.
 5. An account with at least one connected provider proceeds to the workspace.
 
 Explicit Stop suppresses automatic restart while the same app session remains open,
@@ -143,10 +143,14 @@ Remove permanent Refresh models/Refresh conversation, the environment dashboard,
 visible width slider, Disconnect display and redundant setup controls. Remove
 obsolete components, CSS, props and exports after their last consumer is removed.
 Contextual retry/recovery are safeguards, not replacement toolbars. Keep the last
-successful model list in session memory while refreshing stale data in the background;
-account/session changes clear private cached data. Temporary model conflicts must not
+successful model list in session memory across tab changes; confirmed account changes
+refresh it and session changes clear private cached data. Temporary model conflicts must not
 replace a loaded selection with an error banner. If discovery remains blocked without
 any loaded models, use a compact status message while automatic recovery continues.
+The composer shows a concise model name and the provider-reported version when available, without a redundant identifier, and a labeled
+reasoning-effort selector only when the selected model advertises options. It shows and
+sends a concrete level: the advertised default when available, otherwise medium when
+supported, or the first supported level.
 
 ## Account and destructive actions
 

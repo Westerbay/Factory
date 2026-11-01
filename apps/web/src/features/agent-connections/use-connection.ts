@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react"
-import { useQueryClient } from "@tanstack/react-query"
 import { useSession } from "../../lib/auth/session-context"
 import { changeConnection, readConnection } from "./api"
 import { ConnectionController } from "./connection-controller"
+import { useModelCacheSync } from "./model-cache"
 
 export function useConnection(available: boolean) {
-  const { controller: session } = useSession()
-  const queryClient = useQueryClient()
+  const { controller: session, state: sessionState } = useSession()
   const controller = useMemo(
     () =>
       new ConnectionController({
@@ -23,15 +22,11 @@ export function useConnection(available: boolean) {
     controller.subscribe,
     controller.getSnapshot
   )
-  useEffect(() => {
-    if (
-      state.pending === "login" ||
-      state.pending === "logout" ||
-      state.connection?.status === "disconnected"
-    ) {
-      void queryClient.resetQueries({ queryKey: ["provider-models"] })
-    }
-  }, [queryClient, state.pending, state.connection?.status])
+  useModelCacheSync(
+    sessionState.status === "active" ? sessionState.session.user.id : null,
+    "codex",
+    state.connection?.status
+  )
   useEffect(() => {
     controller.connect()
     document.addEventListener("visibilitychange", controller.synchronize)

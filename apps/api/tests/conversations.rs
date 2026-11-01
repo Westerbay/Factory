@@ -215,6 +215,7 @@ impl AgentConnectionPort for Connected {
 struct ConversationData {
     conversation: Option<Conversation>,
     run: Option<Run>,
+    run_environment: Option<Uuid>,
     messages: Vec<Message>,
     probes: std::collections::HashMap<Uuid, (Uuid, Uuid, i64, bool)>,
     run_settled: bool,
@@ -375,6 +376,33 @@ impl ConversationStore for Conversations {
             requests_truncated: false,
         })
     }
+    async fn find_turn(
+        &self,
+        actor: EnvironmentActor,
+        turn: StartTurn,
+    ) -> Result<Option<Run>, ConversationError> {
+        self.owned(actor, turn.conversation_id)?;
+        let d = self.0.lock().unwrap();
+        let Some(run) = d
+            .run
+            .as_ref()
+            .filter(|run| run.operation_id == turn.operation_id)
+        else {
+            return Ok(None);
+        };
+        if run.model != turn.model
+            || run.environment_generation != turn.generation
+            || d.run_environment != Some(turn.environment_id)
+            || !d.messages.iter().any(|message| {
+                message.run_id == run.id
+                    && message.role == MessageRole::User
+                    && message.content == turn.input
+            })
+        {
+            return Err(ConversationError::Conflict);
+        }
+        Ok(Some(run.clone()))
+    }
     async fn begin_turn(
         &self,
         actor: EnvironmentActor,
@@ -404,6 +432,7 @@ impl ConversationStore for Conversations {
             content: turn.input,
             created_at: Utc::now(),
         });
+        d.run_environment = Some(turn.environment_id);
         d.run = Some(r.clone());
         Ok((r, true))
     }
@@ -565,6 +594,7 @@ struct Provider {
     tx: mpsc::Sender<ExecutionEvent>,
     rx: AsyncMutex<Option<mpsc::Receiver<ExecutionEvent>>>,
     opens: AtomicUsize,
+    effort: Mutex<Option<String>>,
     fail_open: Mutex<Option<ExecutionError>>,
     model_started: AtomicUsize,
     fail_models: Mutex<Option<ExecutionError>>,
@@ -586,6 +616,9 @@ impl ExecutionRuntime for Provider {
         Ok(vec![ExecutionModel {
             id: "fixture-model".into(),
             name: "Fixture model".into(),
+            resolved_model: Some("fixture-model".into()),
+            effort_levels: vec!["low".into(), "high".into()],
+            default_effort: Some("low".into()),
         }])
     }
     async fn open(
@@ -593,8 +626,10 @@ impl ExecutionRuntime for Provider {
         _: &Environment,
         _: Option<&str>,
         _: &str,
+        effort: Option<&str>,
         _: &str,
     ) -> Result<ExecutionSession, ExecutionError> {
+        *self.effort.lock().unwrap() = effort.map(str::to_owned);
         self.opens.fetch_add(1, Ordering::SeqCst);
         if let Some(error) = *self.fail_open.lock().unwrap() {
             return Err(error);
@@ -718,6 +753,7 @@ impl ConversationFixture {
             tx,
             rx: AsyncMutex::new(Some(rx)),
             opens: AtomicUsize::new(0),
+            effort: Mutex::new(None),
             fail_open: Mutex::new(None),
             model_started: AtomicUsize::new(0),
             fail_models: Mutex::new(None),
@@ -732,6 +768,7 @@ impl ConversationFixture {
                 tx,
                 rx: AsyncMutex::new(Some(rx)),
                 opens: AtomicUsize::new(0),
+                effort: Mutex::new(None),
                 fail_open: Mutex::new(None),
                 model_started: AtomicUsize::new(0),
                 fail_models: Mutex::new(None),
@@ -1589,15 +1626,40 @@ async fn models_and_turns_are_dispatched_to_the_selected_connected_provider() {
     assert_eq!(models[0]["name"], "Codex · Fixture model");
     assert_eq!(models[1]["id"], "factory:claude:fixture-model");
     assert_eq!(models[1]["name"], "Claude · Fixture model");
+    assert_eq!(models[1]["resolvedModel"], "fixture-model");
+    assert_eq!(models[1]["effortLevels"], json!(["low", "high"]));
     let create = f.call("POST", "/api/conversations", 0, "").await;
     let id = body_json(create).await["id"].as_str().unwrap().to_owned();
-    let body = json!({"operationId":Uuid::new_v4(),"model":"factory:claude:fixture-model","input":"hello"}).to_string();
+    let invalid = json!({"operationId":Uuid::new_v4(),"model":"factory:claude:fixture-model","effort":"max","input":"hello"}).to_string();
+    let rejected = f
+        .call(
+            "POST",
+            &format!("/api/conversations/{id}/runs"),
+            0,
+            &invalid,
+        )
+        .await;
+    assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        f.other_provider
+            .as_ref()
+            .unwrap()
+            .opens
+            .load(Ordering::SeqCst),
+        0
+    );
+    let operation = Uuid::new_v4();
+    let body = json!({"operationId":operation,"model":"factory:claude:fixture-model","effort":"high","input":"hello"}).to_string();
     let response = f
         .call("POST", &format!("/api/conversations/{id}/runs"), 0, &body)
         .await;
     assert_eq!(response.status(), StatusCode::OK);
+    let run = body_json(response).await;
+    assert_eq!(run["model"], "factory:claude:fixture-model");
+    assert_eq!(run["effort"], "high");
     let other = f.other_provider.as_ref().unwrap();
     until(|| other.opens.load(Ordering::SeqCst) == 1).await;
+    assert_eq!(other.effort.lock().unwrap().as_deref(), Some("high"));
     assert_eq!(f.provider.opens.load(Ordering::SeqCst), 0);
     other
         .tx
@@ -1618,6 +1680,37 @@ async fn models_and_turns_are_dispatched_to_the_selected_connected_provider() {
             .is_some_and(|run| run.status == RunStatus::Completed)
     })
     .await;
+    *other.fail_models.lock().unwrap() = Some(ExecutionError::PreflightUnavailable);
+    let discovery_count = other.model_started.load(Ordering::SeqCst);
+    let replay = f
+        .call("POST", &format!("/api/conversations/{id}/runs"), 0, &body)
+        .await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(body_json(replay).await["id"], run["id"]);
+    assert_eq!(other.model_started.load(Ordering::SeqCst), discovery_count);
+    assert_eq!(other.opens.load(Ordering::SeqCst), 1);
+    let changed_input = json!({"operationId":operation,"model":"factory:claude:fixture-model","effort":"high","input":"different"}).to_string();
+    assert_eq!(
+        f.call(
+            "POST",
+            &format!("/api/conversations/{id}/runs"),
+            0,
+            &changed_input
+        )
+        .await
+        .status(),
+        StatusCode::CONFLICT
+    );
+    let changed = json!({"operationId":operation,"model":"factory:claude:fixture-model","effort":"low","input":"hello"}).to_string();
+    let replay = f
+        .call(
+            "POST",
+            &format!("/api/conversations/{id}/runs"),
+            0,
+            &changed,
+        )
+        .await;
+    assert_eq!(replay.status(), StatusCode::CONFLICT);
     let history = body_json(
         f.call("GET", &format!("/api/conversations/{id}"), 0, "")
             .await,
@@ -1625,6 +1718,62 @@ async fn models_and_turns_are_dispatched_to_the_selected_connected_provider() {
     .await
     .to_string();
     assert!(!history.contains("claude-private-thread"));
+}
+
+#[tokio::test]
+async fn model_discovery_isolates_confirmed_provider_failures() {
+    for failed_claude in [false, true] {
+        let f = ConversationFixture::create(true).await;
+        let other = f.other_provider.as_ref().unwrap();
+        let failed = if failed_claude { other } else { &f.provider };
+        *failed.fail_models.lock().unwrap() = Some(ExecutionError::PreflightUnavailable);
+        let response = f.call("GET", "/api/conversations/models", 0, "").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let models = body_json(response).await;
+        let expected = if failed_claude {
+            "factory:codex:fixture-model"
+        } else {
+            "factory:claude:fixture-model"
+        };
+        assert_eq!(models.as_array().unwrap().len(), 1);
+        assert_eq!(models[0]["id"], expected);
+        assert!(f.data.0.lock().unwrap().probes.is_empty());
+        let create = f.call("POST", "/api/conversations", 0, "").await;
+        let id = body_json(create).await["id"].as_str().unwrap().to_owned();
+        let body =
+            json!({"operationId":Uuid::new_v4(),"model":expected,"effort":"high","input":"hello"})
+                .to_string();
+        assert_eq!(
+            f.call("POST", &format!("/api/conversations/{id}/runs"), 0, &body)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+    }
+    for error in [
+        ExecutionError::LaunchUncertain,
+        ExecutionError::CleanupUncertain,
+    ] {
+        let f = ConversationFixture::create(true).await;
+        *f.other_provider
+            .as_ref()
+            .unwrap()
+            .fail_models
+            .lock()
+            .unwrap() = Some(error);
+        assert_eq!(
+            f.call("GET", "/api/conversations/models", 0, "")
+                .await
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let probes = f.data.0.lock().unwrap();
+        assert_eq!(probes.probes.len(), 1);
+        assert_eq!(
+            probes.probes.values().next().unwrap().3,
+            error == ExecutionError::CleanupUncertain
+        );
+    }
 }
 
 #[tokio::test]

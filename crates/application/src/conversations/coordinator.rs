@@ -11,7 +11,8 @@ use factory_core::{
         RunStatus,
         execution::{
             ExecutionControl, ExecutionError, ExecutionEvent, ExecutionModel, ExecutionOutput,
-            ExecutionQuestion, ExecutionRuntime, QuestionAnswer, validate_answers,
+            ExecutionQuestion, ExecutionRuntime, QuestionAnswer, encode_selection,
+            validate_answers,
         },
     },
     environments::{Environment, EnvironmentActor},
@@ -65,6 +66,7 @@ struct Launch {
     thread: Option<String>,
     previous: Option<String>,
     model: String,
+    effort: Option<String>,
     input: String,
     provider_id: &'static str,
 }
@@ -220,6 +222,7 @@ impl ConversationRuntime {
         let lease = Uuid::new_v4();
         self.service.reserve_model_probe(actor, env, lease).await?;
         let mut result = Ok(Vec::new());
+        let mut failed = false;
         for provider in connected {
             match provider.runtime.models(env).await {
                 Ok(models) => {
@@ -227,8 +230,8 @@ impl ConversationRuntime {
                         .iter()
                         .any(|model| 9 + provider.id.len() + model.id.len() > 256)
                     {
-                        result = Err(ExecutionError::Protocol);
-                        break;
+                        failed = true;
+                        continue;
                     }
                     let target = result.as_mut().expect("successful result");
                     for mut model in models {
@@ -237,11 +240,17 @@ impl ConversationRuntime {
                         target.push(model);
                     }
                 }
-                Err(error) => {
+                Err(
+                    error @ (ExecutionError::LaunchUncertain | ExecutionError::CleanupUncertain),
+                ) => {
                     result = Err(error);
                     break;
                 }
+                Err(_) => failed = true,
             }
+        }
+        if failed && result.as_ref().is_ok_and(Vec::is_empty) {
+            result = Err(ExecutionError::Unavailable);
         }
         if matches!(result, Err(ExecutionError::LaunchUncertain)) {
             // The daemon may still receive an old start request; stop alone is not proof.
@@ -260,8 +269,29 @@ impl ConversationRuntime {
         id: Uuid,
         operation: Uuid,
         model: String,
+        effort: Option<String>,
         input: String,
     ) -> Result<Run, ConversationError> {
+        let selection =
+            encode_selection(&model, effort.as_deref()).map_err(|_| ConversationError::Invalid)?;
+        if let Some(run) = self
+            .service
+            .find_turn(actor, id, operation, selection.clone(), input.clone())
+            .await?
+        {
+            return Ok(run);
+        }
+        // Only accept an effort actually advertised for this connected model.
+        // Discovery has its own durable process lease and releases the account gate
+        // before the run acquires it below.
+        if let Some(ref requested) = effort {
+            let models = self.models(actor).await?;
+            if !models.iter().any(|candidate| {
+                candidate.id == model && candidate.effort_levels.contains(requested)
+            }) {
+                return Err(ConversationError::Invalid);
+            }
+        }
         let gate = self.account_gates.for_user(actor.user_id)?;
         let _gate = gate.lock().await;
         let history = self.service.history(actor, id).await?;
@@ -290,7 +320,7 @@ impl ConversationRuntime {
         let prompt = provider_sessions::handoff(&history, provider.id, &input)?;
         let (env, run, fresh) = self
             .service
-            .begin_turn(actor, id, operation, model.clone(), input.clone())
+            .begin_turn(actor, id, operation, selection, input.clone())
             .await?;
         if !fresh {
             return Ok(run);
@@ -308,6 +338,7 @@ impl ConversationRuntime {
                     thread,
                     previous,
                     model: provider_model,
+                    effort,
                     input: prompt,
                     provider_id,
                 })
@@ -323,6 +354,7 @@ impl ConversationRuntime {
             thread,
             previous,
             model,
+            effort,
             input,
             provider_id,
         } = launch;
@@ -335,7 +367,7 @@ impl ConversationRuntime {
         };
         let session = match provider
             .runtime
-            .open(&env, thread.as_deref(), &model, &input)
+            .open(&env, thread.as_deref(), &model, effort.as_deref(), &input)
             .await
         {
             Ok(s) => s,

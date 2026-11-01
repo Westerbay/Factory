@@ -1,4 +1,5 @@
 //! Claude Code account state remains inside the owning environment.
+mod login;
 use crate::environments::{
     DockerEnvironmentRuntime,
     process::{DockerProcess, FixedProcess},
@@ -17,10 +18,14 @@ const LIMIT: usize = 64 * 1024;
 
 pub struct ClaudeAccountAdapter {
     runtime: Arc<DockerEnvironmentRuntime>,
+    logins: login::LoginManager,
 }
 impl ClaudeAccountAdapter {
     pub fn new(runtime: Arc<DockerEnvironmentRuntime>) -> Self {
-        Self { runtime }
+        Self {
+            runtime,
+            logins: login::LoginManager::default(),
+        }
     }
 
     async fn command(
@@ -75,27 +80,45 @@ impl ClaudeAccountAdapter {
 #[async_trait]
 impl AgentConnectionPort for ClaudeAccountAdapter {
     async fn read(&self, env: &Environment) -> Result<ConnectionSnapshot, AgentConnectionError> {
+        if let Some(snapshot) = self.logins.read(env.id).await? {
+            return Ok(snapshot);
+        }
         let (exit, bytes) = self.command(env, FixedProcess::ClaudeStatus).await?;
         account(exit, &bytes)
     }
-    // Claude sign-in runs in the member's terminal, directly through the native CLI.
     async fn begin_login(
         &self,
-        _env: &Environment,
-        _id: Uuid,
-        _expires: DateTime<Utc>,
+        env: &Environment,
+        id: Uuid,
+        expires: DateTime<Utc>,
     ) -> Result<ConnectionSnapshot, AgentConnectionError> {
-        Err(AgentConnectionError::UnsupportedMethod)
+        self.logins
+            .begin(self.runtime.clone(), env, id, expires)
+            .await
     }
     async fn cancel_login(
         &self,
-        _env: &Environment,
-        _id: Uuid,
+        env: &Environment,
+        id: Uuid,
     ) -> Result<ConnectionSnapshot, AgentConnectionError> {
-        Err(AgentConnectionError::UnsupportedMethod)
+        self.logins.cancel(env.id, id).await
+    }
+    async fn submit_login_code(
+        &self,
+        env: &Environment,
+        id: Uuid,
+        code: &str,
+    ) -> Result<ConnectionSnapshot, AgentConnectionError> {
+        self.logins.submit(env.id, id, code).await
     }
     async fn logout(&self, env: &Environment) -> Result<ConnectionSnapshot, AgentConnectionError> {
+        if self.logins.has_uncertain_cleanup(env.id).await? {
+            return Err(AgentConnectionError::CleanupUncertain);
+        }
         let (exit, _) = self.command(env, FixedProcess::ClaudeLogout).await?;
+        if exit == 75 {
+            return Err(AgentConnectionError::Conflict);
+        }
         if exit != 0 {
             return Err(AgentConnectionError::Unavailable);
         }

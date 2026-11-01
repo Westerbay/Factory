@@ -47,6 +47,54 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  "/api/agent-connections/claude/login": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post: operations["beginClaudeLogin"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/agent-connections/claude/login/cancel": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post: operations["cancelClaudeLogin"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/agent-connections/claude/login/code": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post: operations["submitClaudeLoginCode"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   "/api/agent-connections/claude/logout": {
     parameters: {
       query?: never
@@ -528,13 +576,13 @@ export interface components {
       | "connecting"
       | "connected"
       | "error"
-    /** @description Device authorization instructions, never provider credentials or a provider login ID. */
+    /** @description Short-lived, session-private authorization instructions; never provider account tokens. */
     AgentLoginChallenge: {
       /** Format: date-time */
       expiresAt: string
       /** Format: uuid */
       operationId: string
-      userCode: string
+      userCode?: string | null
       verificationUrl: string
     }
     /** @enum {string} */
@@ -622,8 +670,11 @@ export interface components {
       runId: string
     }
     ModelView: {
+      defaultEffort?: string | null
+      effortLevels: string[]
       id: string
       name: string
+      resolvedModel?: string | null
     }
     QuestionOptionView: {
       description: string
@@ -663,6 +714,7 @@ export interface components {
     RunView: {
       /** Format: uuid */
       conversationId: string
+      effort?: string | null
       /** Format: uuid */
       id: string
       model: string
@@ -684,8 +736,15 @@ export interface components {
       role: components["schemas"]["UserRole"]
     }
     StartBody: {
+      effort?: string | null
       input: string
       model: string
+      /** Format: uuid */
+      operationId: string
+    }
+    /** @description The one-time code is forwarded only to the native Claude process; never logged or persisted. */
+    SubmitClaudeCodeBody: {
+      code: string
       /** Format: uuid */
       operationId: string
     }
@@ -986,6 +1045,224 @@ export interface operations {
         }
       }
       /** @description Identity unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  beginClaudeLogin: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Session CSRF token; exact frontend Origin required */
+        "X-CSRF-Token": string
+      }
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      202: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["AgentConnectionResponse"]
+        }
+      }
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  cancelClaudeLogin: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Session CSRF token; exact frontend Origin required */
+        "X-CSRF-Token": string
+      }
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CancelAgentLoginBody"]
+      }
+    }
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["AgentConnectionResponse"]
+        }
+      }
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  submitClaudeLoginCode: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Session CSRF token; exact frontend Origin required */
+        "X-CSRF-Token": string
+      }
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SubmitClaudeCodeBody"]
+      }
+    }
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["AgentConnectionResponse"]
+        }
+      }
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
       503: {
         headers: {
           [name: string]: unknown

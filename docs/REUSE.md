@@ -151,7 +151,7 @@ Connection patterns were checked against the official
   also revalidate access against persistence and enforce exact session expiry; local
   notification alone is not an authorization guarantee.
 - [AgentConnectionPort](../crates/core/src/agent_connections/mod.rs) projects account
-  state and device challenges without provider credentials. The
+  state and login challenges and optionally forwards a browser-issued one-time code. The
   [application service](../crates/application/src/agent_connections/mod.rs) binds pending
   operations to the verified session and environment generation. Exact Factory operation
   IDs prevent a stale cancellation from cancelling a newer sign-in.
@@ -160,9 +160,9 @@ Connection patterns were checked against the official
   [fixed Docker process transport](../crates/adapters/src/environments/process.rs) with
   the terminal adapter. Account operations never start agent turns or expose provider
   tokens; the container home remains the credential source of truth.
-- [ClaudeAccountAdapter](../crates/adapters/src/claude_account/mod.rs) projects the
-  personal CLI sign-in and performs native logout. Sign-in runs directly in the private
-  terminal, rather than transferring credentials through the account API.
+- [ClaudeAccountAdapter](../crates/adapters/src/claude_account/mod.rs) owns the native
+  CLI sign-in process and logout. It forwards the one-time browser code without persisting
+  it; account tokens remain in the private container home.
 - [The account HTTP lifecycle](../apps/api/src/agent_connections/lifecycle.rs) owns
   detached request completion, pending-operation monitoring and revocation cleanup.
   Browser disconnection must not abandon an authorized process without an owner.
@@ -180,7 +180,9 @@ Connection patterns were checked against the official
 - [ExecutionRuntime](../crates/core/src/conversations/execution.rs) separates provider
   control from bounded events. The [Codex](../crates/adapters/src/codex_execution/mod.rs)
   and [Claude](../crates/adapters/src/claude_execution/mod.rs) adapters implement that
-  contract; native session references remain private.
+  contract; native session references remain private. Model results include the
+  provider-reported resolved model and supported effort levels; validated selections
+  carry an optional effort through the same durable idempotency boundary.
 - [Conversation coordinator](../crates/application/src/conversations/coordinator.rs)
   owns durable claims, provider registration, model routing, lifecycle and session checks.
   Its [provider session mapping](../crates/application/src/conversations/provider_sessions.rs)

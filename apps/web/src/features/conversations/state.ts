@@ -1,4 +1,13 @@
-import type { Conversation, History } from "./api"
+import type { Conversation, History, Model } from "./api"
+
+/** Select only an advertised effort, keeping an explicit choice when possible. */
+export function selectedEffort(model: Model | undefined, requested: string) {
+  if (!model) return ""
+  for (const value of [requested, model.defaultEffort, "medium"]) {
+    if (value && model.effortLevels.includes(value)) return value
+  }
+  return model.effortLevels[0] ?? ""
+}
 
 /** Only the latest issued read may update a conversation snapshot. */
 export function latestReader<T>(

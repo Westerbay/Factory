@@ -270,10 +270,12 @@ shares one environment controller across preparation, profile actions and depend
 The provider authorization view and account settings share the connection controller;
 opening settings or resuming the page never begins a new device authorization.
 Codex logout is blocked when a conversation run is active or cleanup remains uncertain.
-The [Claude account adapter](../crates/adapters/src/claude_account/mod.rs) reads a bounded
-projection from the native CLI and signs out through that CLI. Claude sign-in itself runs
-in the member's terminal; Factory does not handle its credentials. Claude logout uses the
-same active-run guard as Codex.
+The [Claude account adapter](../crates/adapters/src/claude_account/mod.rs) starts the native
+CLI in a private, echo-disabled PTY, validates its official sign-in URL, and forwards the
+browser-issued one-time code without persisting it. The operation is bound to the initiating
+session and environment generation. Cancellation interrupts the CLI and checks process exit;
+only a successful account read confirms sign-in. A lock and watchdog bound abandoned logins.
+Claude logout uses the same active-run guard as Codex.
 
 ## Conversations and execution
 
@@ -290,6 +292,14 @@ registers each provider's account service and execution runtime together. It dis
 provider-qualified models to the [Codex](../crates/adapters/src/codex_execution/mod.rs)
 or [Claude](../crates/adapters/src/claude_execution/mod.rs) adapter, persists private
 provider session references before starting a turn and delivers bounded event updates.
+Model discovery retains provider-reported resolved identifiers and supported reasoning
+efforts. Explicit effort selections are checked against a fresh discovery before launch;
+an authorized existing receipt is recovered first, and its durable model selection includes
+the effort so idempotent retries cannot change it. A conclusively failed provider discovery
+does not hide models from other providers; uncertain process cleanup still retains its lease
+and blocks discovery.
+Claude receives `--effort`; Codex receives the turn's `effort` field. An omitted effort
+leaves provider defaults in control.
 Both adapters use the bounded [JSON-lines process transport](../crates/adapters/src/json_stream.rs)
 while owning their respective protocol correlation. Account and model
 operations use per-user gates. Each conversation
@@ -299,8 +309,11 @@ a durable lease before starting a provider process, with at most one lease per u
 unconfirmed cleanup retains it across API restart. Overlapping discoveries for the same
 user and environment share one in-flight result; each caller validates its own session
 and environment, and completed results are not cached on the server. The web client
-keeps each user's last successful model list in session memory and clears it on account
-or session changes. Stale reads refresh after five minutes. Conflict responses use
+keeps each user's last successful model list in session memory without refetching on tab
+changes; confirmed provider connection changes refresh it and session changes clear it.
+When a connected provider has no returned models, the interface offers a retry while keeping
+the other providers usable. Sending waits until the selected model is available in the catalog.
+Conflict responses use
 progressive retries, slowing to one attempt per minute while visible; unavailability
 cancels pending reads and retries without discarding cached models.
 The [API host](../apps/api/src/conversations/runtime.rs) supplies

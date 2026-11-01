@@ -282,7 +282,7 @@ pnpm environments:prepare
 This operator command builds the pinned [workspace image](../infra/environments/Dockerfile)
 and [egress proxy](../infra/egress/Dockerfile), so initial preparation requires network
 access and may take several minutes. The workspace contains zsh with Oh My Zsh, tmux,
-Neofetch, native Codex 0.160.0 and Claude Code 2.1.268. The Claude binary's initialization and
+Neofetch, native Codex 0.160.0 and Claude Code 2.1.284. The Claude binary's initialization and
 model-list response are checked during a build step with an empty home. No host
 provider installation or credentials are imported. Preparation
 stores the stable installation UUID in `.factory/environments/installation.json` and
@@ -396,14 +396,15 @@ session remains unexpired. The shell remains independent of this browser lifecyc
 
 Choose **Codex** on the provider screen to request a device code. Copy it and open the displayed official
 OpenAI link in a separate tab, then authorize your personal ChatGPT/Codex account there.
-Do not paste a password, API key or credentials into Factory. Keep the code private and
+Do not paste a password or API key into Factory. Keep the code private and
 cancel it if it is no longer needed. The connection controller polls pending authorization every two
 seconds while visible and shows Connected only after provider confirmation and account
 verification. The reported plan does not guarantee access to a particular model.
 
-Choose **Claude Code** to open the private terminal. Run `claude auth login --claudeai`
-and complete Anthropic's own sign-in. Factory checks `claude auth status` and retains
-only a bounded account projection. The profile settings can connect the other provider
+Choose **Claude Code** to start the native CLI sign-in. Open its official link, complete
+Anthropic's sign-in, and enter the returned one-time code in Factory. The code is sent to
+that CLI process without persistence; Factory confirms the result with `claude auth status`.
+The profile settings can connect the other provider
 later. A saved local CLI sign-in does not prove the subscription can use every model.
 
 Only the initiating Factory session can retrieve a pending code. Reloading that page

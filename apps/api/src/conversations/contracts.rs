@@ -37,15 +37,18 @@ pub struct RunView {
     pub conversation_id: Uuid,
     pub operation_id: Uuid,
     pub model: String,
+    pub effort: Option<String>,
     pub status: String,
 }
 impl From<factory_core::conversations::Run> for RunView {
     fn from(r: factory_core::conversations::Run) -> Self {
+        let (model, effort) = factory_core::conversations::execution::decode_selection(&r.model);
         Self {
             id: r.id,
             conversation_id: r.conversation_id,
             operation_id: r.operation_id,
-            model: r.model,
+            model: model.to_owned(),
+            effort: effort.map(str::to_owned),
             status: match r.status {
                 RunStatus::Active => "active",
                 RunStatus::Completed => "completed",
@@ -156,15 +159,20 @@ impl TryFrom<ConversationHistory> for HistoryView {
     }
 }
 #[derive(Clone, Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelView {
     pub id: String,
     pub name: String,
+    pub resolved_model: Option<String>,
+    pub effort_levels: Vec<String>,
+    pub default_effort: Option<String>,
 }
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StartBody {
     pub operation_id: Uuid,
     pub model: String,
+    pub effort: Option<String>,
     pub input: String,
 }
 #[derive(Debug, Deserialize, ToSchema)]

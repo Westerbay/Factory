@@ -46,14 +46,21 @@
   text-align: left;
 }
 
-.provider-connection .terminal-pane {
-  height: min(45vh, 24rem);
-  min-height: 15rem;
-  margin-block: 1.25rem;
+.provider-auth-form {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
 }
 
-.provider-connection .terminal-header-actions > .ui-icon-button:first-child {
-  display: none;
+.provider-auth-form input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.75rem;
+  color: var(--text);
+  background: var(--surface-sidebar);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  font: inherit;
 }
 
 .provider-device-code > p,

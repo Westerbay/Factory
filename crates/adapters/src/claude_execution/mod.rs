@@ -81,6 +81,7 @@ impl ExecutionRuntime for ClaudeExecutionAdapter {
         env: &Environment,
         provider_thread: Option<&str>,
         model: &str,
+        effort: Option<&str>,
         input: &str,
     ) -> Result<ExecutionSession, ExecutionError> {
         if input.trim().is_empty() || input.len() > MAX_TEXT || input.contains('\0') {
@@ -90,7 +91,7 @@ impl ExecutionRuntime for ClaudeExecutionAdapter {
             Some(value) => Uuid::parse_str(value).map_err(|_| ExecutionError::Invalid)?,
             None => Uuid::new_v4(),
         };
-        let launch = ClaudeLaunch::new(model, session, provider_thread.is_some())
+        let launch = ClaudeLaunch::new(model, effort, session, provider_thread.is_some())
             .ok_or(ExecutionError::Invalid)?;
         let (id, stream) = self
             .process(env, FixedProcess::ClaudeExecution(launch))
@@ -151,13 +152,37 @@ fn parse_models(response: &Value) -> Result<Vec<ExecutionModel>, ExecutionError>
     for model in models {
         let id = text(&model["value"], 256)?;
         let name = text(&model["displayName"], 512)?;
-        if ClaudeLaunch::new(id, Uuid::from_u128(1), false).is_none() {
+        if ClaudeLaunch::new(id, None, Uuid::from_u128(1), false).is_none() {
             return Err(ExecutionError::Protocol);
         }
         if seen.insert(id.to_owned()) {
+            let resolved_model = model
+                .get("resolvedModel")
+                .filter(|value| !value.is_null())
+                .map(|value| text(value, 256).map(str::to_owned))
+                .transpose()?;
+            let effort_levels = match model.get("supportedEffortLevels") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Array(levels)) if levels.len() <= 20 => levels
+                    .iter()
+                    .map(|value| {
+                        text(value, 32).and_then(|level| {
+                            if valid_effort(level) {
+                                Ok(level.to_owned())
+                            } else {
+                                Err(ExecutionError::Protocol)
+                            }
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+                _ => return Err(ExecutionError::Protocol),
+            };
             result.push(ExecutionModel {
                 id: id.to_owned(),
                 name: name.to_owned(),
+                resolved_model,
+                effort_levels,
+                default_effort: None,
             });
         }
     }
@@ -617,9 +642,12 @@ mod tests {
 
     #[test]
     fn catalog_rejects_invalid_models_and_deduplicates() {
-        let models = parse_models(&json!({"models":[{"value":"sonnet","displayName":"Sonnet"},{"value":"sonnet","displayName":"Duplicate"},{"value":"opus[1m]","displayName":"Opus"}]})).unwrap();
+        let models = parse_models(&json!({"models":[{"value":"sonnet","displayName":"Sonnet"},{"value":"sonnet","displayName":"Duplicate"},{"value":"opus[1m]","displayName":"Opus","resolvedModel":"claude-opus-5-5","supportedEffortLevels":["low","high","max"]}]})).unwrap();
         assert_eq!(models.len(), 2);
         assert_eq!(models[1].id, "opus[1m]");
+        assert_eq!(models[1].resolved_model.as_deref(), Some("claude-opus-5-5"));
+        assert_eq!(models[1].effort_levels, ["low", "high", "max"]);
+        assert!(parse_models(&json!({"models":[{"value":"opus","displayName":"Opus","supportedEffortLevels":["--bad"]}]})).is_err());
         assert!(
             parse_models(&json!({"models":[{"value":"--help","displayName":"Wrong"}]})).is_err()
         );

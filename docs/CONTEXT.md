@@ -34,9 +34,9 @@ fresh environment inspection is required, and interrupted turns are never replay
 Members can open a persistent xterm terminal through the Rust API and Docker exec.
 tmux owns the shell independently of browser and API connections. Explicit takeover
 allows only one attached writer. Members connect a personal Codex account with device
-authorization or a personal Claude account through Claude Code in the terminal. A member
+authorization or a personal Claude account through Claude Code's browser sign-in. A member
 can connect both providers and use web conversations with Markdown-rendered streamed output,
-model selection, questions and a terminal
+model and reasoning-effort selection, questions and a terminal
 side panel. The graphite interface uses self-hosted Space Mono, a conversation sidebar
 and a bottom-left GitHub profile menu. The chats sidebar can collapse. A terminal icon
 toggles the panel; its separator resizes it by pointer or keyboard and its header can
@@ -59,7 +59,7 @@ use one initial database schema; no previous database upgrade is supported.
 Local PostgreSQL ownership checks support Linux Docker Engine and Windows Docker Desktop
 using exact checkout paths and the local socket or named pipe. Windows database support
 alone does not establish live Codex execution. The workspace image pins native Codex
-0.160.0 and Claude Code 2.1.268. The web runtime uses Codex app-server and Claude Code's
+0.160.0 and Claude Code 2.1.284. The web runtime uses Codex app-server and Claude Code's
 streaming process protocol in the member's environment.
 Routine checks use synthetic credentials and do not call a model; live provider access
 and a complete conversation still require human acceptance.

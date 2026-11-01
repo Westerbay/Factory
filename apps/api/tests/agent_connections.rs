@@ -177,6 +177,7 @@ impl EnvironmentRuntime for NoEnvironmentRuntime {
 
 #[derive(Default)]
 struct Runtime {
+    claude: bool,
     starts: AtomicUsize,
     hold_start: AtomicBool,
     release_start: Notify,
@@ -187,6 +188,9 @@ struct Runtime {
     hold_read: AtomicBool,
     reads: AtomicUsize,
     release_read: Notify,
+    codes: AtomicUsize,
+    hold_code: AtomicBool,
+    release_code: Notify,
 }
 #[async_trait]
 impl AgentConnectionPort for Runtime {
@@ -218,10 +222,15 @@ impl AgentConnectionPort for Runtime {
         let snapshot = ConnectionSnapshot {
             status: ConnectionStatus::Connecting,
             account: None,
-            challenge: Some(DeviceChallenge {
+            challenge: Some(LoginChallenge {
                 operation_id,
-                verification_url: "https://auth.openai.com/codex/device".into(),
-                user_code: "FIXTURE-ONLY".into(),
+                verification_url: if self.claude {
+                    "https://claude.com/cai/oauth/authorize?redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&response_type=code&code_challenge_method=S256&state=fixture&code_challenge=fixture"
+                } else {
+                    "https://auth.openai.com/codex/device"
+                }
+                .into(),
+                user_code: (!self.claude).then(|| "FIXTURE-ONLY".into()),
                 expires_at,
             }),
             error: None,
@@ -238,6 +247,33 @@ impl AgentConnectionPort for Runtime {
         self.cancelled.lock().unwrap().push(operation_id);
         let snapshot = ConnectionSnapshot::failure(AgentConnectionError::Cancelled, Utc::now());
         *self.snapshot.lock().unwrap() = Some(snapshot.clone());
+        Ok(snapshot)
+    }
+    async fn submit_login_code(
+        &self,
+        _: &Environment,
+        operation_id: Uuid,
+        code: &str,
+    ) -> Result<ConnectionSnapshot, AgentConnectionError> {
+        let snapshot = self
+            .snapshot
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or(AgentConnectionError::Conflict)?;
+        if !self.claude
+            || snapshot
+                .challenge
+                .as_ref()
+                .is_none_or(|challenge| challenge.operation_id != operation_id)
+            || code != "fixture-code"
+        {
+            return Err(AgentConnectionError::Conflict);
+        }
+        self.codes.fetch_add(1, Ordering::SeqCst);
+        if self.hold_code.load(Ordering::SeqCst) {
+            self.release_code.notified().await;
+        }
         Ok(snapshot)
     }
     async fn logout(&self, _: &Environment) -> Result<ConnectionSnapshot, AgentConnectionError> {
@@ -327,7 +363,10 @@ impl Fixture {
             environments.clone(),
             runtime.clone(),
         ));
-        let claude_runtime = Arc::new(Runtime::default());
+        let claude_runtime = Arc::new(Runtime {
+            claude: true,
+            ..Runtime::default()
+        });
         let claude_service = Arc::new(AgentConnectionService::new(
             environments,
             claude_runtime.clone(),
@@ -748,4 +787,110 @@ async fn claude_connection_is_private_and_disconnects_independently() {
     let (status, codex) = fixture.call("GET", "", "").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(codex["status"], "connected");
+}
+
+#[tokio::test]
+async fn claude_browser_code_is_session_scoped_and_requires_csrf() {
+    let fixture = Fixture::new(ChronoDuration::minutes(5)).await;
+    let request = |path: &str, body: &str| {
+        let mut request = fixture.request("POST", "", body);
+        *request.uri_mut() = path.parse().unwrap();
+        request
+    };
+    let (status, started) = response(
+        fixture
+            .router
+            .clone()
+            .oneshot(request("/api/agent-connections/claude/login", ""))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(started["status"], "connecting");
+    assert!(started["challenge"]["userCode"].is_null());
+    let id = started["challenge"]["operationId"].as_str().unwrap();
+    let body = json!({"operationId": id, "code": "fixture-code"}).to_string();
+    let mut unauthorized = request("/api/agent-connections/claude/login/code", &body);
+    unauthorized.headers_mut().insert(
+        "cookie",
+        format!("factory_session={}", fixture.second_session(false))
+            .parse()
+            .unwrap(),
+    );
+    assert_eq!(
+        response(fixture.router.clone().oneshot(unauthorized).await.unwrap())
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let mut wrong_csrf = request("/api/agent-connections/claude/login/code", &body);
+    wrong_csrf
+        .headers_mut()
+        .insert("x-csrf-token", "wrong".parse().unwrap());
+    assert_eq!(
+        response(fixture.router.clone().oneshot(wrong_csrf).await.unwrap())
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(fixture.claude_runtime.codes.load(Ordering::SeqCst), 0);
+    let (status, result) = response(
+        fixture
+            .router
+            .clone()
+            .oneshot(request("/api/agent-connections/claude/login/code", &body))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!result.to_string().contains("fixture-code"));
+    assert_eq!(fixture.claude_runtime.codes.load(Ordering::SeqCst), 1);
+    let cancel = json!({"operationId": id}).to_string();
+    assert_eq!(
+        response(
+            fixture
+                .router
+                .clone()
+                .oneshot(request(
+                    "/api/agent-connections/claude/login/cancel",
+                    &cancel
+                ))
+                .await
+                .unwrap()
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn revoked_session_never_receives_the_claude_challenge_after_submitting_a_code() {
+    let fixture = Fixture::new(ChronoDuration::minutes(5)).await;
+    let mut start = fixture.request("POST", "", "");
+    *start.uri_mut() = "/api/agent-connections/claude/login".parse().unwrap();
+    let (_, started) = response(fixture.router.clone().oneshot(start).await.unwrap()).await;
+    let id = started["challenge"]["operationId"].as_str().unwrap();
+    fixture
+        .claude_runtime
+        .hold_code
+        .store(true, Ordering::SeqCst);
+    let body = json!({"operationId": id, "code": "fixture-code"}).to_string();
+    let mut submit = fixture.request("POST", "", &body);
+    *submit.uri_mut() = "/api/agent-connections/claude/login/code".parse().unwrap();
+    let router = fixture.router.clone();
+    let pending =
+        tokio::spawn(async move { response(router.oneshot(submit).await.unwrap()).await });
+    wait_for(
+        || fixture.claude_runtime.codes.load(Ordering::SeqCst) == 1,
+        3,
+    )
+    .await;
+    fixture.store.sessions.lock().unwrap().remove(&fixture.hash);
+    fixture.claude_runtime.release_code.notify_one();
+    let (status, value) = pending.await.unwrap();
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(value.get("challenge").is_none());
 }

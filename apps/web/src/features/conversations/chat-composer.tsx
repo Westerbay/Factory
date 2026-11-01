@@ -8,29 +8,34 @@ export function ChatComposer({
   input,
   model,
   models,
+  effort,
   disabled,
   sendDisabled,
   running,
   stopDisabled,
   onInput,
   onModel,
+  onEffort,
   onSend,
   onStop,
 }: {
   input: string
   model: string
   models: Model[]
+  effort: string
   disabled: boolean
   sendDisabled: boolean
   running: boolean
   stopDisabled: boolean
   onInput: (value: string) => void
   onModel: (value: string) => void
+  onEffort: (value: string) => void
   onSend: () => void
   onStop: () => void
 }) {
   const inputId = useId()
   const composing = useRef(false)
+  const selected = models.find((item) => item.id === model)
   return (
     <form
       className="chat-composer"
@@ -86,6 +91,22 @@ export function ChatComposer({
             ))}
           </select>
         </label>
+        {selected && selected.effortLevels.length > 0 && (
+          <label className="chat-effort">
+            <span className="sr-only">Reasoning effort</span>
+            <select
+              value={effort}
+              onChange={(event) => onEffort(event.target.value)}
+              disabled={disabled}
+            >
+              {selected.effortLevels.map((level) => (
+                <option key={level} value={level}>
+                  {level === "ultra" ? "Ultra (automatic delegation)" : level}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <details className="chat-access">
           <summary
             aria-label="Assistant access information"

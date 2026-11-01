@@ -142,6 +142,35 @@ impl AgentConnectionService {
         *pending = None;
         result
     }
+    pub async fn submit_login_code(
+        &self,
+        actor: EnvironmentActor,
+        operation_id: Uuid,
+        code: &str,
+    ) -> Result<ConnectionSnapshot, AgentConnectionError> {
+        if code.is_empty()
+            || code.len() > 768
+            || code
+                .chars()
+                .any(|character| character.is_control() || character.is_whitespace())
+        {
+            return Err(AgentConnectionError::Protocol);
+        }
+        let slot = self.slot(actor.user_id)?;
+        let pending = slot.lock().await;
+        let environment = self.environments.require_running(actor).await?;
+        let current = pending
+            .as_ref()
+            .filter(|pending| pending.operation_id == operation_id && pending.completed.is_none())
+            .ok_or(AgentConnectionError::Conflict)?;
+        validate(current, actor, &environment)?;
+        if current.expires_at <= Utc::now() {
+            return Err(AgentConnectionError::Expired);
+        }
+        self.port
+            .submit_login_code(&current.environment, operation_id, code)
+            .await
+    }
     pub async fn logout(
         &self,
         actor: EnvironmentActor,

@@ -64,7 +64,7 @@ test("repeated preparation preserves installation and changes only the prepared 
   const directory = await mkdtemp(join(tmpdir(), "factory-prepare-test-"))
   let image = "a"
   let policy = "5"
-  let claudeVersion = "2.1.268"
+  let claudeVersion = "2.1.284"
   let proxyFailure = false
   const commands = []
   const docker = (args) => {
@@ -151,7 +151,7 @@ test("repeated preparation preserves installation and changes only the prepared 
       JSON.parse(await readFile(join(directory, "prepared.json"), "utf8")),
       second
     )
-    claudeVersion = "2.1.268"
+    claudeVersion = "2.1.284"
     policy = "3"
     await assert.rejects(prepare(directory, docker), /does not satisfy/)
     assert.deepEqual(

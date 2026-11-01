@@ -184,6 +184,12 @@ pub trait ConversationStore: Send + Sync {
         generation: i64,
         id: Uuid,
     ) -> Result<ConversationHistory, ConversationError>;
+    /// Find an authorized receipt and reject reuse of its operation with different inputs.
+    async fn find_turn(
+        &self,
+        actor: EnvironmentActor,
+        turn: StartTurn,
+    ) -> Result<Option<Run>, ConversationError>;
     /// Repeating an operation with identical inputs returns its original run, never re-executes it.
     async fn begin_turn(
         &self,

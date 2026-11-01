@@ -25,16 +25,16 @@ RUN set -eu; \
 # Official, unmodified native Claude Code release. Pin both architectures independently.
 RUN set -eu; \
     case "$(dpkg --print-architecture)" in \
-      amd64) platform=linux-x64; checksum=9691a2b7bd796712ca8cffb8e32e54ff7fc45b662540233171a16a94a0425653 ;; \
-      arm64) platform=linux-arm64; checksum=116fd031f939ef1e09edf170d62c489e1cc28ed6bfbda49f948773ba168c8f62 ;; \
+      amd64) platform=linux-x64; checksum=5cd90aabd83f8a15136c35aa37bb1d92b348993573316643dc3fe4e04afbf88f ;; \
+      arm64) platform=linux-arm64; checksum=3dd0f96d7ada463152d20300186f6cfc6ab94b57e218f49e3ac86db42ac695a6 ;; \
       *) echo 'Unsupported Claude Code architecture' >&2; exit 1 ;; \
     esac; \
     mkdir /opt/claude; \
     curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
-      "https://downloads.claude.ai/claude-code-releases/2.1.268/${platform}/claude" -o /opt/claude/claude; \
+      "https://downloads.claude.ai/claude-code-releases/2.1.284/${platform}/claude" -o /opt/claude/claude; \
     echo "$checksum  /opt/claude/claude" | sha256sum --check --strict; \
     chmod 0555 /opt/claude/claude; \
-    /opt/claude/claude --version | grep -Fx '2.1.268 (Claude Code)'
+    /opt/claude/claude --version | grep -Fx '2.1.284 (Claude Code)'
 
 # Verify the pinned CLI's initialization and model catalog with an empty home.
 RUN set -eu; \
@@ -55,7 +55,7 @@ RUN curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
 FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
 LABEL io.factory.environment.image="5"
 LABEL io.factory.codex.version="0.160.0"
-LABEL io.factory.claude.version="2.1.268"
+LABEL io.factory.claude.version="2.1.284"
 RUN printf '%s\n' 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261027T000000Z bookworm main' \
       'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20261027T000000Z bookworm-security main' > /etc/apt/sources.list \
     && rm /etc/apt/sources.list.d/debian.sources \

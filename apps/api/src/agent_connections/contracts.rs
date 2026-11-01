@@ -27,13 +27,13 @@ pub struct AgentAccount {
     pub plan: String,
 }
 
-/// Device authorization instructions, never provider credentials or a provider login ID.
+/// Short-lived, session-private authorization instructions; never provider account tokens.
 #[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentLoginChallenge {
     pub operation_id: Uuid,
     pub verification_url: String,
-    pub user_code: String,
+    pub user_code: Option<String>,
     pub expires_at: DateTime<Utc>,
 }
 
@@ -105,4 +105,12 @@ impl From<ConnectionSnapshot> for AgentConnectionResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CancelAgentLoginBody {
     pub operation_id: Uuid,
+}
+
+/// The one-time code is forwarded only to the native Claude process; never logged or persisted.
+#[derive(Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SubmitClaudeCodeBody {
+    pub operation_id: Uuid,
+    pub code: String,
 }

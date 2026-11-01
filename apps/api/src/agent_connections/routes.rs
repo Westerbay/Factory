@@ -89,6 +89,9 @@ pub(crate) fn documented_router(
         .routes(routes!(cancel))
         .routes(routes!(logout))
         .routes(routes!(read_claude))
+        .routes(routes!(login_claude))
+        .routes(routes!(cancel_claude))
+        .routes(routes!(submit_claude_code))
         .routes(routes!(logout_claude))
         .layer(DefaultBodyLimit::max(1024))
         .layer(axum::middleware::from_fn(crate::http::response_headers))
@@ -130,6 +133,92 @@ async fn read_claude(
             ConnectionSnapshot::failure(problem, chrono::Utc::now()),
         ))),
     }
+}
+
+#[utoipa::path(post, path = "/api/agent-connections/claude/login", operation_id = "beginClaudeLogin",
+    security(("sessionCookie" = [])),
+    params(("X-CSRF-Token" = String, Header, description = "Session CSRF token; exact frontend Origin required")),
+    responses((status = 202, body = AgentConnectionResponse), (status = 400, body = ApiError), (status = 401, body = ApiError), (status = 403, body = ApiError), (status = 409, body = ApiError), (status = 429, body = ApiError), (status = 503, body = ApiError))
+)]
+async fn login_claude(
+    State(state): State<ConnectionState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<(StatusCode, Json<AgentConnectionResponse>), Response> {
+    let (auth, authenticated) = state.authenticate(&headers, Some(false)).await?;
+    require_empty(body).map_err(IntoResponse::into_response)?;
+    let service = state
+        .claude
+        .ok_or_else(|| error(AgentConnectionError::Unavailable))?;
+    let guard = state
+        .disconnect
+        .ok_or_else(|| error(AgentConnectionError::Unavailable))?;
+    let held = guard
+        .acquire_login(actor(&authenticated))
+        .await
+        .map_err(error)?;
+    let snapshot = lifecycle::begin(auth, service, authenticated, held)
+        .await
+        .map_err(error)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(AgentConnectionResponse::claude(snapshot)),
+    ))
+}
+
+#[utoipa::path(post, path = "/api/agent-connections/claude/login/cancel", operation_id = "cancelClaudeLogin",
+    security(("sessionCookie" = [])), request_body = CancelAgentLoginBody,
+    params(("X-CSRF-Token" = String, Header, description = "Session CSRF token; exact frontend Origin required")),
+    responses((status = 200, body = AgentConnectionResponse), (status = 400, body = ApiError), (status = 401, body = ApiError), (status = 403, body = ApiError), (status = 409, body = ApiError), (status = 429, body = ApiError), (status = 503, body = ApiError))
+)]
+async fn cancel_claude(
+    State(state): State<ConnectionState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<Json<AgentConnectionResponse>, Response> {
+    let (_, authenticated) = state.authenticate(&headers, Some(true)).await?;
+    let bytes = body.map_err(|_| AuthError::invalid().into_response())?;
+    let request: CancelAgentLoginBody =
+        serde_json::from_slice(&bytes).map_err(|_| AuthError::invalid().into_response())?;
+    let service = state
+        .claude
+        .ok_or_else(|| error(AgentConnectionError::Unavailable))?;
+    let actor = actor(&authenticated);
+    lifecycle::settle(async move { service.cancel_login(actor, request.operation_id).await })
+        .await
+        .map(|snapshot| Json(AgentConnectionResponse::claude(snapshot)))
+        .map_err(error)
+}
+
+#[utoipa::path(post, path = "/api/agent-connections/claude/login/code", operation_id = "submitClaudeLoginCode",
+    security(("sessionCookie" = [])), request_body = SubmitClaudeCodeBody,
+    params(("X-CSRF-Token" = String, Header, description = "Session CSRF token; exact frontend Origin required")),
+    responses((status = 200, body = AgentConnectionResponse), (status = 400, body = ApiError), (status = 401, body = ApiError), (status = 403, body = ApiError), (status = 409, body = ApiError), (status = 429, body = ApiError), (status = 503, body = ApiError))
+)]
+async fn submit_claude_code(
+    State(state): State<ConnectionState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<Json<AgentConnectionResponse>, Response> {
+    let (auth, authenticated) = state.authenticate(&headers, Some(true)).await?;
+    let bytes = body.map_err(|_| AuthError::invalid().into_response())?;
+    let request: SubmitClaudeCodeBody =
+        serde_json::from_slice(&bytes).map_err(|_| AuthError::invalid().into_response())?;
+    let service = state
+        .claude
+        .ok_or_else(|| error(AgentConnectionError::Unavailable))?;
+    let actor = actor(&authenticated);
+    let snapshot = lifecycle::settle(async move {
+        service
+            .submit_login_code(actor, request.operation_id, &request.code)
+            .await
+    })
+    .await
+    .map_err(error)?;
+    auth.authenticate(&headers)
+        .await
+        .map_err(IntoResponse::into_response)?;
+    Ok(Json(AgentConnectionResponse::claude(snapshot)))
 }
 
 #[utoipa::path(post, path = "/api/agent-connections/claude/logout", operation_id = "logoutClaude",

@@ -10,12 +10,19 @@ export type Answer = components["schemas"]["AnswerView"]
 const id = z.uuid()
 const text = z.string()
 const conversation = z.object({ id, createdAt: text })
-const model = z.object({ id: text, name: text })
+const model = z.object({
+  id: text,
+  name: text,
+  resolvedModel: text.nullable(),
+  effortLevels: z.array(text),
+  defaultEffort: text.nullable(),
+})
 const run = z.object({
   id,
   conversationId: id,
   operationId: id,
   model: text,
+  effort: text.nullable(),
   status: z.enum(["active", "completed", "failed", "interrupted", "uncertain"]),
 })
 const question = z.object({

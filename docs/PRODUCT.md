@@ -108,9 +108,10 @@ Disconnect does not guarantee interruption of Codex processes launched from the 
 Stop environment is the explicit way to end all its processes. If an account controller
 is abandoned during API failure, its watchdog bounds recovery to at most ten minutes.
 
-A member can connect Claude Code by running `claude auth login --claudeai` in the
-private terminal and completing Anthropic's sign-in flow. Factory checks the CLI's
-account status and does not receive the sign-in credentials. Settings can add either
+A member can connect Claude Code using the CLI's official sign-in link. After authorizing
+with Anthropic, the member enters the browser-issued one-time code in Factory, which
+forwards it to the same CLI process without persisting it. The CLI must confirm the
+account before Factory marks it connected. Settings can add either
 provider after the first connection or disconnect one while retaining the other. Claude
 logout, like Codex logout, is blocked while a Factory run is active or uncertain.
 
@@ -121,19 +122,22 @@ to the active-run guard. Members can also deliberately run either CLI in the ter
 ## Provider conversations
 
 After at least one provider connection, a member can create and select conversations,
-choose from models reported by the connected providers, send messages, view streamed output, answer questions and request
+choose from models reported by the connected providers, see and choose an advertised reasoning effort
+for models that support it, send messages, view streamed output, answer questions and request
 cancellation. Completed messages and run states are retained for that user; reading
 history does not replay a message or start tools. The conversation list loads older
 pages on request. Each conversation shows a bounded recent history and indicates when older runs, messages or requests are omitted. A submitted
 question answer can remain pending or uncertain until its receipt is confirmed; it is
 not automatically resent. The last successful model list stays in browser memory for the
-current session and is refreshed when stale after five minutes; account and session
-changes clear it. Concurrent discovery requests share one provider operation. Temporary
+current session, including when changing tabs. Confirmed provider connection changes
+refresh it; session changes clear it. Concurrent discovery requests share one provider operation. Temporary
+provider discovery failures leave other providers' models usable and offer a retry for missing models. Temporary
 model conflicts recover in the background with progressively slower retries, retaining
 the current model selection. A prolonged conflict without a loaded list shows a small
 status message and continues checking while the workspace is available and visible.
 Models and conversations have no permanent refresh buttons; other failures offer
-contextual retry. A listed model is not a guarantee that
+contextual retry. The model selector shows the resolved version when the provider reports it;
+aliases and provider fallbacks can still change the actual model used. A listed model is not a guarantee that
 the account can use it. Provider failures and interrupted or uncertain work remain visible.
 
 Enter sends a message, Shift+Enter inserts a line, and IME composition does not send.

@@ -29,6 +29,7 @@ import {
   runOutcome,
   questionReceipt,
   mergeOlderConversations,
+  selectedEffort,
 } from "./state"
 import "./conversations.css"
 
@@ -36,6 +37,7 @@ type PendingSend = {
   operationId: string
   input: string
   model: string
+  effort: string
   conversation: string
 }
 
@@ -47,10 +49,12 @@ type ChatLayout = {
 
 export function Chat({
   available,
+  connectedProviders,
   resuming = false,
   renderLayout,
 }: {
   available: boolean
+  connectedProviders: { id: string; name: string }[]
   resuming?: boolean
   renderLayout: (parts: ChatLayout) => ReactNode
 }) {
@@ -66,6 +70,7 @@ export function Chat({
   const [history, setHistory] = useState<api.History>()
   const [verifiedHistory, setVerifiedHistory] = useState<string>()
   const [model, setModel] = useState("")
+  const [efforts, setEfforts] = useState<Record<string, string>>({})
   const [input, setInput] = useState("")
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState("")
@@ -98,8 +103,16 @@ export function Chat({
     enabled: available && Boolean(userId),
   })
   const models = modelQuery.data ?? []
+  const selectedModel = models.find((item) => item.id === model)
+  const effort = selectedEffort(selectedModel, efforts[model] ?? "")
   // A refetch can retain the previous failure while recovering successfully.
   const modelError = modelQuery.isError && modelQuery.fetchStatus === "idle"
+  const missingProviders = modelQuery.data
+    ? connectedProviders.filter(
+        (provider) =>
+          !models.some((item) => item.id.startsWith(`factory:${provider.id}:`))
+      )
+    : []
   useEffect(() => {
     // Disabling a query alone does not stop a retry already in progress.
     if (!available)
@@ -350,7 +363,7 @@ export function Chat({
       !currentHistory ||
       verifiedHistory !== selected ||
       !input.trim() ||
-      !model ||
+      !selectedModel ||
       activeRun ||
       uncertain ||
       !available
@@ -361,12 +374,14 @@ export function Chat({
       previous &&
       previous.conversation === selected &&
       previous.input === input &&
-      previous.model === model
+      previous.model === model &&
+      previous.effort === effort
         ? previous
         : {
             operationId: crypto.randomUUID(),
             input,
             model,
+            effort,
             conversation: selected,
           }
     pendingSend.current = operation
@@ -377,6 +392,7 @@ export function Chat({
           operationId: operation.operationId,
           input: operation.input,
           model: operation.model,
+          effort: operation.effort || null,
         },
         csrf,
         lifetime.current!.signal
@@ -537,7 +553,7 @@ export function Chat({
   const submitDisabled =
     !selected ||
     !historyReady ||
-    !model ||
+    !selectedModel ||
     !input.trim() ||
     busy ||
     !available ||
@@ -767,6 +783,24 @@ export function Chat({
               </Button>
             </div>
           )}
+          {!modelError && missingProviders.length > 0 && (
+            <div className="chat-notice" role="status">
+              <p>
+                Models from{" "}
+                {missingProviders.map((provider) => provider.name).join(", ")}{" "}
+                could not be loaded.
+              </p>
+              <Button
+                variant="ghost"
+                disabled={!available || modelQuery.isFetching}
+                onClick={() =>
+                  void modelQuery.refetch({ cancelRefetch: false })
+                }
+              >
+                Retry models
+              </Button>
+            </div>
+          )}
           {message && (
             <div className="chat-notice" role="status">
               <p>{message}</p>
@@ -805,12 +839,16 @@ export function Chat({
             input={input}
             model={model}
             models={models}
+            effort={effort}
             disabled={!selected || !historyReady || !available || busy}
             sendDisabled={submitDisabled}
             running={Boolean(activeRun)}
             stopDisabled={busy || !available}
             onInput={setInput}
             onModel={setModel}
+            onEffort={(value) =>
+              setEfforts((current) => ({ ...current, [model]: value }))
+            }
             onSend={send}
             onStop={stop}
           />

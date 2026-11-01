@@ -65,10 +65,12 @@ export function ClaudeSettings({
             ? "Checking the account…"
             : connected
               ? "Connected"
-              : connection.data?.status === "disconnected"
-                ? "Not connected"
-                : (claudeConnectionProblem(connection.data) ??
-                  "The account status could not be confirmed.")}
+              : connection.data?.status === "connecting"
+                ? "Waiting for authorization"
+                : connection.data?.status === "disconnected"
+                  ? "Not connected"
+                  : (claudeConnectionProblem(connection.data) ??
+                    "The account status could not be confirmed.")}
       </p>
       {connection.data?.account && (
         <dl className="provider-account">
@@ -120,6 +122,10 @@ export function ClaudeSettings({
             Disconnect Claude
           </Button>
         )
+      ) : connection.data?.status === "connecting" ? (
+        <Button variant="secondary" disabled={!available} onClick={onConnect}>
+          Continue sign-in
+        </Button>
       ) : connection.data?.status === "disconnected" ? (
         <Button variant="secondary" disabled={!available} onClick={onConnect}>
           Connect Claude
