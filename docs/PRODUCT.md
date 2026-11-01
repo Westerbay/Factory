@@ -19,10 +19,11 @@ After GitHub sign-in, workspace preparation starts automatically. An unconnected
 chooses Codex or Claude Code; a saved connected account opens the workspace
 directly. The workspace has conversation history on the left, chat in the center and a
 collapsible terminal on the right. The GitHub profile at the bottom left exposes Settings,
-Stop environment and Sign out, plus User access for administrators. Provider account
+Stop environment, a light/dark theme choice and Sign out, plus User access for administrators.
+The initial theme follows the browser preference and the choice is stored on the device;
+there is no separate system mode. Provider account
 details, additional connections and disconnect actions belong in Settings. GitHub sign-in
-requests repository access as well as identity. Global skills are not available. The shared
-graphite interface uses Space Mono and concise
+requests repository access as well as identity. Global skills are not available. The interface uses Space Mono and concise
 contextual status instead of an environment dashboard or permanent refresh controls.
 
 ## GitHub projects

@@ -10,6 +10,7 @@ import { FitAddon } from "@xterm/addon-fit"
 import { Maximize2, Minimize2, Settings2, TerminalSquare } from "lucide-react"
 
 import { Button, IconButton } from "../../components/ui/button"
+import { useTheme } from "../../lib/theme/theme"
 import { useSession } from "../../lib/auth/session-context"
 import { openTerminalSocket, requestAttachment } from "./api"
 import { TerminalController } from "./terminal-controller"
@@ -32,6 +33,7 @@ export default function TerminalSession({
   onExpandedChange: (expanded: boolean) => void
 }) {
   const { controller: session } = useSession()
+  const theme = useTheme()
   const host = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
   const controls = useRef<HTMLDivElement>(null)
@@ -76,6 +78,7 @@ export default function TerminalSession({
       cursorBlink: true,
       scrollback: 10_000,
       fontSize: 14,
+      minimumContrastRatio: 4.5,
       fontFamily: style.fontFamily,
       theme: {
         background: style.backgroundColor,
@@ -160,6 +163,25 @@ export default function TerminalSession({
       terminal.current = null
     }
   }, [controller])
+
+  useEffect(() => {
+    if (!host.current || !terminal.current) return
+    const style = getComputedStyle(host.current)
+    terminal.current.options.theme = {
+      background: style.backgroundColor,
+      foreground: style.color,
+      cursor: style.color,
+      scrollbarSliderBackground: style
+        .getPropertyValue("--scrollbar-thumb")
+        .trim(),
+      scrollbarSliderHoverBackground: style
+        .getPropertyValue("--scrollbar-thumb-hover")
+        .trim(),
+      scrollbarSliderActiveBackground: style
+        .getPropertyValue("--scrollbar-thumb-active")
+        .trim(),
+    }
+  }, [theme])
 
   useEffect(() => {
     if (terminal.current)

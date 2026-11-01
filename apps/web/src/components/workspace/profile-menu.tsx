@@ -1,7 +1,8 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useId, useRef } from "react"
 import { Link } from "@tanstack/react-router"
 import { ChevronUp, LogOut, Power, Settings, Users } from "lucide-react"
 
+import { setTheme, useTheme } from "../../lib/theme/theme"
 import { useSession } from "../../lib/auth/session-context"
 import { Button } from "../ui/button"
 
@@ -15,6 +16,8 @@ export function ProfileMenu({
   onStop: () => void
 }) {
   const { state, controller } = useSession()
+  const theme = useTheme()
+  const themeGroup = useId()
   const ref = useRef<HTMLDetailsElement>(null)
   useEffect(() => {
     function dismiss(event: PointerEvent) {
@@ -68,6 +71,22 @@ export function ProfileMenu({
           <Power aria-hidden="true" />
           Stop environment
         </Button>
+        <div className="profile-menu-divider" />
+        <fieldset className="profile-theme">
+          <legend>Theme</legend>
+          {(["light", "dark"] as const).map((choice) => (
+            <label key={choice}>
+              <input
+                type="radio"
+                name={themeGroup}
+                value={choice}
+                checked={theme === choice}
+                onChange={() => setTheme(choice)}
+              />
+              {choice === "light" ? "Light" : "Dark"}
+            </label>
+          ))}
+        </fieldset>
         <div className="profile-menu-divider" />
         <Button variant="ghost" onClick={() => void controller.logout()}>
           <LogOut aria-hidden="true" />

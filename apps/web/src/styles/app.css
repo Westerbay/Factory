@@ -60,6 +60,8 @@
   --scrollbar-thumb-hover: #80828a;
   --scrollbar-thumb-active: #9799a0;
   --negative: oklch(0.77 0.12 28);
+  --selection: oklch(0.4 0.02 265);
+  --active-chat: orange;
   --font-ui: "Space Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
   --font-code: var(--font-ui);
   --radius-control: 6px;
@@ -74,6 +76,22 @@
   background: var(--surface);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --surface: oklch(0.985 0.002 265);
+  --surface-sidebar: oklch(0.955 0.003 265);
+  --surface-raised: oklch(1 0 0);
+  --surface-hover: oklch(0.91 0.004 265);
+  --border: oklch(0.82 0.005 265);
+  --text: oklch(0.22 0.005 265);
+  --text-muted: oklch(0.43 0.006 265);
+  --scrollbar-thumb: #858790;
+  --scrollbar-thumb-hover: #676972;
+  --scrollbar-thumb-active: #50525a;
+  --negative: oklch(0.52 0.16 28);
+  --selection: oklch(0.82 0.02 265);
+  --active-chat: oklch(0.48 0.13 55);
 }
 * {
   box-sizing: border-box;
@@ -141,7 +159,7 @@ summary {
 }
 ::selection {
   color: var(--text);
-  background: oklch(0.4 0.02 265);
+  background: var(--selection);
 }
 h1 {
   font-size: clamp(1.5rem, 3vw, 1.85rem);
