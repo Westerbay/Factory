@@ -37,7 +37,7 @@ allows only one attached writer. Members connect a personal Codex account with d
 authorization or a personal Claude account through Claude Code's browser sign-in. A member
 can connect both providers and use web conversations with Markdown-rendered streamed output,
 model and reasoning-effort selection, questions and a terminal
-side panel. The graphite interface uses self-hosted Space Mono, a conversation sidebar
+side panel. The interface offers light and graphite themes, uses self-hosted Space Mono, a conversation sidebar
 and a bottom-left GitHub profile menu. The chats sidebar can collapse. A terminal icon
 toggles the panel; its separator resizes it by pointer or keyboard and its header can
 maximize it across the app without reattaching. Setup and account details appear only when needed,

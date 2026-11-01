@@ -3,8 +3,9 @@
 ## Direction
 
 Factory is a private developer workspace for sustained conversations with a coding
-agent and a persistent terminal. The approved direction is graphite: flat, nearly
-neutral dark surfaces, quiet navigation and readable messages. Chat is the primary
+agent and a persistent terminal. The interface uses flat, nearly neutral surfaces, quiet navigation and readable messages
+in light and graphite themes. The initial theme follows the browser preference; the profile
+menu offers a direct light or dark choice, stored locally on the device. Chat is the primary
 work surface. Operational details appear when they require a decision.
 
 Sign-in, provider authorization, workspace, settings and administration share this
@@ -21,7 +22,7 @@ design decision, not an unfinished product preference picker.
 [app.css](../apps/web/src/styles/app.css) owns the semantic tokens. Components use
 these roles rather than repeating visual literals.
 
-| Role                         | Direction                                                          |
+| Role                         | Graphite direction                                                 |
 | ---------------------------- | ------------------------------------------------------------------ |
 | Canvas                       | Graphite, `oklch(0.208 0.003 265)`                                 |
 | Sidebar and terminal         | `oklch(0.174 0.003 265)`                                           |
@@ -36,13 +37,15 @@ these roles rather than repeating visual literals.
 | Spacing                      | 4px base; 8/12px control gaps, 16/24px content gutters             |
 | Shape                        | 6px controls, 8px composer/dialog, circular account avatar         |
 
+The light theme provides corresponding neutral surfaces and contrasting text through the same semantic roles.
+
 Keep prose within roughly 65 characters per line. Meaningful text is at least 12px.
 Pointer targets are at least 24px and touch targets at least 44px. Keyboard focus is
 visible and distinct from selection. Use one outline icon family; provider identity
 uses an unmodified brand asset or its written name.
 
 Scrollbars remain native and thin with a transparent track, a muted thumb and clearer
-hover feedback. Shared scrollbar colors also feed xterm's theme. Keep scrolling
+hover feedback. Shared scrollbar colors also feed xterm's theme. ANSI terminal text uses a minimum 4.5:1 contrast against its background. Keep scrolling
 available to pointer, touch and keyboard; forced-color mode uses system scrollbars.
 
 ## Reusable components
@@ -56,7 +59,7 @@ cross-application abstractions in `packages/ui`.
 | Button / IconButton | Native semantics, primary/secondary/ghost/danger variants, accessible labels for icon actions                  |
 | Modal               | Native dialog, named heading, safe initial focus, Escape/cancel and focus restoration; shutdown and suspension |
 | LoadingState        | Concise status and reduced-motion-safe indicator; session, environment and provider preparation                |
-| Brand               | Plain wordmark with real home/workspace navigation                                                             |
+| Brand               | Terminal prompt symbol and wordmark with real home/workspace navigation                                        |
 | SplitPane           | Pointer and keyboard resizing, one terminal toggle, no separate width toolbar                                  |
 
 Conversation rows, composer, device authorization and account options stay
@@ -167,8 +170,8 @@ supported, or the first supported level.
 
 ## Account and destructive actions
 
-The profile menu contains Settings, administrator-only User access, Stop environment
-and Sign out. Provider details, additional connections and disconnect actions belong in Settings. Disconnect
+The profile menu contains Settings, administrator-only User access, Stop environment,
+a light/dark theme choice and Sign out. Provider details, additional connections and disconnect actions belong in Settings. Disconnect
 retains active/uncertain-run guards and explains its consequences when invoked.
 
 Stop opens **Stop your environment?** The confirmation explains that running tasks

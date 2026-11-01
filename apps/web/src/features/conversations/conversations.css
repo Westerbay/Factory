@@ -45,7 +45,7 @@
 }
 .conversation-list .conversation-row[aria-current="page"],
 .conversation-list .conversation-row[aria-current="page"]:hover:not(:disabled) {
-  color: orange;
+  color: var(--active-chat);
   background: transparent;
 }
 .conversation-older {

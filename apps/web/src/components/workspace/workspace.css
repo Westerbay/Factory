@@ -163,6 +163,9 @@
   filter: invert(1);
   opacity: 0.9;
 }
+:root[data-theme="light"] .profile-avatar img {
+  filter: none;
+}
 .profile-handle {
   flex: 1;
   min-width: 0;
@@ -309,4 +312,28 @@
   .workspace-body {
     animation: none;
   }
+}
+
+.profile-theme {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border: 0;
+  font-size: 0.8125rem;
+}
+.profile-theme legend {
+  float: left;
+  margin-right: auto;
+}
+.profile-theme label {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  cursor: pointer;
+}
+.profile-theme input {
+  accent-color: var(--text);
 }

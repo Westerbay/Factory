@@ -6,6 +6,7 @@
     <meta name="color-scheme" content="dark" />
     <meta name="theme-color" content="#17181a" />
     <meta name="robots" content="noindex, nofollow" />
+    <link rel="icon" href="/brand/factory.svg" type="image/svg+xml" />
     <title>Factory — Offline</title>
     <style>
       @font-face {
@@ -42,11 +43,18 @@
         width: min(100%, 30rem);
       }
       .brand {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
         margin: 0 0 2.5rem;
         color: inherit;
         font-size: 1.125rem;
         font-weight: 700;
         letter-spacing: -0.05em;
+      }
+      .brand svg {
+        width: 1.375rem;
+        height: 1.375rem;
       }
       h1 {
         margin: 0 0 1rem;
@@ -87,7 +95,18 @@
   </head>
   <body>
     <main>
-      <p class="brand">factory</p>
+      <p class="brand">
+        <svg viewBox="0 0 80 80" aria-hidden="true">
+          <path
+            d="M12 17 34 39 12 61M40 62h28"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="8"
+            stroke-linecap="square"
+            stroke-linejoin="miter"
+          /></svg
+        >factory
+      </p>
       <h1>You are offline</h1>
       <p>
         Connect to the internet to open your workspace. Account and workspace
