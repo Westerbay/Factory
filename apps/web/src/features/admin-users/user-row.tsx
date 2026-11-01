@@ -1,4 +1,5 @@
-import { useTranslation } from "react-i18next"
+import * as m from "@workspace/i18n/messages"
+import { useLocale, translateMessage } from "../../lib/i18n"
 import { useRef, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 
@@ -16,7 +17,7 @@ export function UserRow({
   csrfToken: string
   onNotice: (message: string, focus?: boolean) => void
 }) {
-  const { t: translate } = useTranslation()
+  useLocale()
   const [confirming, setConfirming] = useState(false)
   const suspendButton = useRef<HTMLButtonElement>(null)
   const queryClient = useQueryClient()
@@ -54,23 +55,21 @@ export function UserRow({
       </div>
       <dl className="admin-details">
         <div>
-          <dt>{translate("Provider")}</dt>
+          <dt>{m.provider()}</dt>
           <dd>{user.provider}</dd>
         </div>
         <div>
-          <dt>{translate("Role")}</dt>
-          <dd>{translate(user.role)}</dd>
+          <dt>{m.role()}</dt>
+          <dd>{translateMessage(user.role)}</dd>
         </div>
         <div>
-          <dt>{translate("Status")}</dt>
-          <dd>{translate(user.status)}</dd>
+          <dt>{m.status()}</dt>
+          <dd>{translateMessage(user.status)}</dd>
         </div>
       </dl>
       <div className="admin-actions">
         {user.role === "admin" ? (
-          <span className="admin-protected">
-            {translate("Protected administrator")}
-          </span>
+          <span className="admin-protected">{m.protected_administrator()}</span>
         ) : (
           <>
             {user.status !== "active" && (
@@ -78,9 +77,9 @@ export function UserRow({
                 type="button"
                 disabled={change.isPending}
                 onClick={() => change.mutate("active")}
-                aria-label={translate("Activate {{name}}", { name })}
+                aria-label={m.activate_name({ name })}
               >
-                {translate("Activate")}{" "}
+                {m.activate()}{" "}
               </Button>
             )}
             {user.status !== "suspended" && (
@@ -89,16 +88,14 @@ export function UserRow({
                 type="button"
                 disabled={change.isPending}
                 onClick={() => setConfirming(true)}
-                aria-label={translate("Suspend {{name}}", { name })}
+                aria-label={m.suspend_name({ name })}
               >
-                {translate("Suspend")}{" "}
+                {m.suspend()}{" "}
               </Button>
             )}
           </>
         )}
-        {change.isPending && (
-          <span role="status">{translate("Saving access…")}</span>
-        )}
+        {change.isPending && <span role="status">{m.saving_access()}</span>}
       </div>
       {confirming && (
         <SuspendDialog

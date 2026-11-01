@@ -1,4 +1,5 @@
-import { useTranslation } from "react-i18next"
+import * as m from "@workspace/i18n/messages"
+import { useLocale } from "../lib/i18n"
 import { Link } from "@tanstack/react-router"
 
 import { Brand } from "./ui/brand"
@@ -6,22 +7,22 @@ import { Button } from "./ui/button"
 import { useSession } from "../lib/auth/session-context"
 
 export function AppHeader() {
-  const { t: translate } = useTranslation()
+  useLocale()
   const { state, controller } = useSession()
   if (state.status !== "active") return null
 
   return (
     <header className="admin-header">
       <Brand />
-      <nav className="admin-account-controls" aria-label={translate("Account")}>
+      <nav className="admin-account-controls" aria-label={m.account()}>
         <span className="admin-account-name">
           {state.session.user.displayName || state.session.user.handle}
         </span>
         <Link className="ui-button ui-button-ghost" to="/app">
-          {translate("Workspace")}{" "}
+          {m.workspace()}{" "}
         </Link>
         <Button variant="ghost" onClick={() => void controller.logout()}>
-          {translate("Sign out")}{" "}
+          {m.sign_out()}{" "}
         </Button>
       </nav>
     </header>

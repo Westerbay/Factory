@@ -151,6 +151,11 @@ pnpm preview:web
 pnpm start:api
 ```
 
+The web scripts compile the Paraglide catalogs in `packages/i18n/messages/` before
+starting, testing, typechecking or building the frontend. Restart the web development
+server after changing a catalog; the compiler uses the locally installed message-format
+plugin and does not fetch it at build time.
+
 The frontend output is `apps/web/dist`. Vite preview is local inspection tooling,
 not a production server. Development mode does not register the service worker; use
 the built preview for installation, offline and update acceptance.

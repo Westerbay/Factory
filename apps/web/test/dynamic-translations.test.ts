@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import i18n from "../src/lib/i18n"
+import { setLanguage, translateMessage } from "../src/lib/i18n"
 import { connectionProblem } from "../src/features/agent-connections/api"
 import { environmentProblem } from "../src/features/environments/api"
 import { terminalProblem } from "../src/features/terminal/api"
@@ -59,10 +59,15 @@ describe("French runtime messages", () => {
       questionReceipt("uncertain", false).message,
       questionReceipt("claimed", false).message,
     ]
-    expect(
-      messages.every(
-        (message) => message && i18n.exists(message, { lng: "fr" })
-      )
-    ).toBe(true)
+    setLanguage("fr")
+    try {
+      expect(
+        messages.every(
+          (message) => message && translateMessage(message) !== message
+        )
+      ).toBe(true)
+    } finally {
+      setLanguage("en")
+    }
   })
 })

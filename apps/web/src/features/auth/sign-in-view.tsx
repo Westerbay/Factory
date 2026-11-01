@@ -1,4 +1,5 @@
-import { useTranslation } from "react-i18next"
+import * as m from "@workspace/i18n/messages"
+import { useLocale, translateMessage } from "../../lib/i18n"
 import { Brand } from "../../components/ui/brand"
 import { API_ORIGIN } from "../../lib/api/client"
 import "./auth.css"
@@ -27,20 +28,18 @@ export function signInReason(value: unknown): keyof typeof reasons | undefined {
 }
 
 export function SignInView({ reason }: { reason?: keyof typeof reasons }) {
-  const { t } = useTranslation()
+  useLocale()
   return (
     <section className="auth-page" aria-labelledby="sign-in-title">
       <Brand />
       <div className="auth-content">
-        <h1 id="sign-in-title">{t("Sign in to Factory")}</h1>
+        <h1 id="sign-in-title">{m.sign_in_to_factory()}</h1>
         <p>
-          {t(
-            "GitHub access lets Factory read and write your private repositories and some organization resources, add a workspace SSH key, and read your email for Git commits."
-          )}
+          {m.github_access_lets_factory_read_and_write_your_private_repositori()}
         </p>
         {reason && (
           <p className="auth-notice" role="status">
-            {t(reasons[reason])}
+            {translateMessage(reasons[reason])}
           </p>
         )}
         <a
@@ -48,7 +47,7 @@ export function SignInView({ reason }: { reason?: keyof typeof reasons }) {
           href={`${API_ORIGIN}/api/auth/github/start`}
         >
           <img src="/brand/github.svg" width="20" height="20" alt="" />
-          {t("Continue with GitHub")}
+          {m.continue_with_github()}
         </a>
       </div>
     </section>

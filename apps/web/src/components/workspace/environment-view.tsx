@@ -1,4 +1,5 @@
-import { useTranslation } from "react-i18next"
+import * as m from "@workspace/i18n/messages"
+import { useLocale, translateMessage } from "../../lib/i18n"
 import { Recovery } from "../../features/conversations/recovery"
 import { environmentProblem } from "../../features/environments/api"
 import type {
@@ -15,7 +16,7 @@ export function EnvironmentView({
   state: EnvironmentState
   controller: EnvironmentController
 }) {
-  const { t: translate } = useTranslation()
+  useLocale()
   const environment = state.environment
   const message = state.message ?? environmentProblem(environment?.errorCode)
   const stopping =
@@ -28,9 +29,7 @@ export function EnvironmentView({
     return (
       <LoadingState
         title={
-          stopping
-            ? translate("Stopping your workspace…")
-            : translate("Starting your workspace…")
+          stopping ? m.stopping_your_workspace() : m.starting_your_workspace()
         }
       />
     )
@@ -41,17 +40,15 @@ export function EnvironmentView({
       aria-labelledby="environment-state-title"
     >
       <h1 id="environment-state-title">
-        {stopped
-          ? translate("Workspace stopped")
-          : translate("Workspace unavailable")}
+        {stopped ? m.workspace_stopped() : m.workspace_unavailable()}
       </h1>
-      {message && <p role="status">{translate(message)}</p>}
+      {message && <p role="status">{translateMessage(message)}</p>}
       <Button
         variant="primary"
         disabled={state.pending !== null || state.paused}
         onClick={() => void (stopped ? controller.start() : controller.retry())}
       >
-        {stopped ? translate("Return to workspace") : translate("Try again")}
+        {stopped ? m.return_to_workspace() : m.try_again()}
       </Button>
       {stopped && <Recovery />}
     </section>

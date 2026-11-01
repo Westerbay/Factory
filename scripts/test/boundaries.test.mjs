@@ -32,12 +32,18 @@ async function violations(t, files) {
       },
     }),
     ...Object.fromEntries(
-      ["core", "application", "database", "adapters", "contracts", "ui"].map(
-        (name) => [
-          `packages/${name}/src/index.ts`,
-          "export interface Entry { id: string }\n",
-        ]
-      )
+      [
+        "core",
+        "application",
+        "database",
+        "adapters",
+        "contracts",
+        "ui",
+        "i18n",
+      ].map((name) => [
+        `packages/${name}/src/index.ts`,
+        "export interface Entry { id: string }\n",
+      ])
     ),
     "node_modules/electron/package.json": JSON.stringify({
       name: "electron",
@@ -179,6 +185,9 @@ test("web rejects backend, execution-reference and Node imports including type-o
       'export type { System } from "@workspace/execution-reference/runtime/system"',
     "apps/web/src/node.ts": 'export { readFile } from "fs"',
     "apps/web/src/electron.ts": 'export type { App } from "electron"',
+    "apps/web/src/i18n.ts":
+      'export type { Entry } from "../../../packages/i18n/src/index.js"',
+    "packages/i18n/src/bad.ts": 'export { readFile } from "node:fs"',
     "apps/web/src/ui.ts": 'export type { Entry } from "@workspace/ui"',
   })
   for (const file of [
@@ -190,6 +199,8 @@ test("web rejects backend, execution-reference and Node imports including type-o
   ])
     hasRule(found, "web-browser-only", `apps/web/src/${file}.ts`)
   hasRule(found, "web-no-node-builtins", "apps/web/src/node.ts")
+  hasRule(found, "i18n-browser-only", "packages/i18n/src/bad.ts")
+  assert.ok(!found.some((item) => item.from === "apps/web/src/i18n.ts"))
   assert.ok(!found.some((item) => item.from === "apps/web/src/ui.ts"))
 })
 

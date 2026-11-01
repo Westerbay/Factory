@@ -1,0 +1,22 @@
+{
+  "name": "@workspace/i18n",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "build": "node compile.mjs",
+    "dev": "node compile.mjs --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "exports": {
+    "./messages": "./src/generated/messages.js",
+    "./runtime": "./src/generated/runtime.js"
+  },
+  "devDependencies": {
+    "@inlang/paraglide-js": "2.23.1",
+    "@inlang/plugin-message-format": "4.5.6",
+    "typescript": "5.9.3",
+    "@workspace/config": "workspace:*"
+  }
+}

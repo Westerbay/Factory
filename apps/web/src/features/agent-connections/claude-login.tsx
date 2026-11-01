@@ -1,4 +1,5 @@
-import { useTranslation } from "react-i18next"
+import * as m from "@workspace/i18n/messages"
+import { useLocale, translateMessage } from "../../lib/i18n"
 import { useId, useRef, type FormEvent, type RefObject } from "react"
 import { ArrowUpRight } from "lucide-react"
 
@@ -15,7 +16,7 @@ export function ClaudeLogin({
   onClose: () => void
   headingRef?: RefObject<HTMLHeadingElement | null>
 }) {
-  const { t: translate, i18n } = useTranslation()
+  const locale = useLocale()
   const inputId = useId()
   const input = useRef<HTMLInputElement>(null)
   const challenge = connection.data?.challenge
@@ -35,22 +36,20 @@ export function ClaudeLogin({
   return (
     <section
       className="provider-connection"
-      aria-label={headingRef ? undefined : translate("Claude sign-in")}
+      aria-label={headingRef ? undefined : m.claude_sign_in()}
     >
       {headingRef && (
         <h1 ref={headingRef} tabIndex={-1}>
-          {translate("Connect Claude Code")}{" "}
+          {m.connect_claude_code()}{" "}
         </h1>
       )}
       {connection.pending === "login" && (
-        <p role="status">{translate("Starting Claude sign-in…")}</p>
+        <p role="status">{m.starting_claude_sign_in()}</p>
       )}
       {challenge && (
         <div className="provider-device-code">
           <p>
-            {translate(
-              "Open Claude, sign in, then paste the code Claude gives you below."
-            )}{" "}
+            {m.open_claude_sign_in_then_paste_the_code_claude_gives_you_below()}{" "}
           </p>
           <a
             className="ui-button ui-button-primary provider-continue"
@@ -58,13 +57,12 @@ export function ClaudeLogin({
             target="_blank"
             rel="noopener noreferrer"
           >
-            {translate("Continue to Claude")}{" "}
-            <ArrowUpRight aria-hidden="true" />
-            <span className="sr-only"> {translate("(opens a new tab)")}</span>
+            {m.continue_to_claude()} <ArrowUpRight aria-hidden="true" />
+            <span className="sr-only"> {m.opens_a_new_tab()}</span>
           </a>
           {!connection.submitted ? (
             <form className="provider-auth-form" onSubmit={submit}>
-              <label htmlFor={inputId}>{translate("Code from Claude")}</label>
+              <label htmlFor={inputId}>{m.code_from_claude()}</label>
               <input
                 ref={input}
                 id={inputId}
@@ -76,30 +74,28 @@ export function ClaudeLogin({
                 disabled={busy}
               />
               <Button type="submit" variant="secondary" disabled={busy}>
-                {translate("Connect Claude")}{" "}
+                {m.connect_claude()}{" "}
               </Button>
             </form>
           ) : (
-            <p role="status">
-              {translate("Waiting for Claude to confirm sign-in…")}
-            </p>
+            <p role="status">{m.waiting_for_claude_to_confirm_sign_in()}</p>
           )}
           <p className="provider-expiry">
-            {translate("Expires at")}{" "}
+            {m.expires_at()}{" "}
             <time dateTime={challenge.expiresAt}>
-              {new Date(challenge.expiresAt).toLocaleTimeString(i18n.language)}
+              {new Date(challenge.expiresAt).toLocaleTimeString(locale)}
             </time>
           </p>
         </div>
       )}
       {problem && (
         <p className="provider-status" role="alert">
-          {translate(problem)}
+          {translateMessage(problem)}
         </p>
       )}
       {!challenge && !busy && (
         <Button variant="secondary" onClick={() => void connection.begin()}>
-          {translate("Try again")}{" "}
+          {m.try_again()}{" "}
         </Button>
       )}
       <Button
@@ -108,7 +104,7 @@ export function ClaudeLogin({
         disabled={busy}
         onClick={() => void close()}
       >
-        {translate("Back")}{" "}
+        {m.back()}{" "}
       </Button>
     </section>
   )

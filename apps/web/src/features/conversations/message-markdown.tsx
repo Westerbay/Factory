@@ -1,4 +1,5 @@
-import { useTranslation } from "react-i18next"
+import * as m from "@workspace/i18n/messages"
+import { useLocale } from "../../lib/i18n"
 import { memo, type ReactNode } from "react"
 import Markdown, { type Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -49,21 +50,21 @@ const components: Components = {
 }
 
 function CodeBlock({ children }: { children?: ReactNode }) {
-  const { t } = useTranslation()
+  useLocale()
   return (
-    <pre tabIndex={0} aria-label={t("Code block")}>
+    <pre tabIndex={0} aria-label={m.code_block()}>
       {children}
     </pre>
   )
 }
 
 function AccessibleTable({ children }: { children?: ReactNode }) {
-  const { t } = useTranslation()
+  useLocale()
   return (
     <div
       className="message-markdown-table"
       role="region"
-      aria-label={t("Table")}
+      aria-label={m.table()}
       tabIndex={0}
     >
       <table>{children}</table>

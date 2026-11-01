@@ -8,13 +8,19 @@ export default {
       severity: "error",
       from: { path: "^apps/web/src/" },
       to: {
-        path: "^(?:apps/(?!web/)|crates/|packages/(?!ui/)|@workspace/(?!ui(?:/|$)))|^(?:node:|electron$)|(^|/)node_modules/electron/",
+        path: "^(?:apps/(?!web/)|crates/|packages/(?!(?:ui|i18n)/)|@workspace/(?!(?:ui|i18n)(?:/|$)))|^(?:node:|electron$)|(^|/)node_modules/electron/",
       },
     },
     {
       name: "web-no-node-builtins",
       severity: "error",
       from: { path: "^apps/web/src/" },
+      to: { dependencyTypes: ["core"] },
+    },
+    {
+      name: "i18n-browser-only",
+      severity: "error",
+      from: { path: "^packages/i18n/src/(?!generated/server\\.js$)" },
       to: { dependencyTypes: ["core"] },
     },
     { name: "no-cycles", severity: "error", from: {}, to: { circular: true } },

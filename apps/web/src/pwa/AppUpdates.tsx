@@ -1,4 +1,5 @@
-import { useTranslation } from "react-i18next"
+import * as m from "@workspace/i18n/messages"
+import { useLocale } from "../lib/i18n"
 import { useState } from "react"
 
 import { Button } from "../components/ui/button"
@@ -6,7 +7,7 @@ import { useAppUpdate } from "./use-app-update"
 import "./updates.css"
 
 export function AppUpdates() {
-  const { t: translate } = useTranslation()
+  useLocale()
   const { available, error, applyUpdate } = useAppUpdate()
   const [dismissed, setDismissed] = useState(false)
 
@@ -18,7 +19,7 @@ export function AppUpdates() {
           type="button"
           onClick={() => setDismissed(false)}
         >
-          {translate("Update available")}{" "}
+          {m.update_available()}{" "}
         </Button>
       )
     }
@@ -28,19 +29,15 @@ export function AppUpdates() {
         aria-labelledby="update-title"
         aria-live="polite"
       >
-        <h2 id="update-title">{translate("An update is ready")}</h2>
+        <h2 id="update-title">{m.an_update_is_ready()}</h2>
         <p>
-          {translate(
-            "Reload when you are ready. Unsaved changes on this page may be lost."
-          )}{" "}
+          {m.reload_when_you_are_ready_unsaved_changes_on_this_page_may_be_los()}{" "}
         </p>
         <div className="update-actions">
           <Button variant="primary" onClick={applyUpdate}>
-            {translate("Reload to update")}{" "}
+            {m.reload_to_update()}{" "}
           </Button>
-          <Button onClick={() => setDismissed(true)}>
-            {translate("Later")}
-          </Button>
+          <Button onClick={() => setDismissed(true)}>{m.later()}</Button>
         </div>
       </aside>
     )
@@ -49,9 +46,7 @@ export function AppUpdates() {
   if (error) {
     return (
       <p className="update-error" role="status">
-        {translate(
-          "App updates could not be checked. Reload this page when you are online to try again."
-        )}{" "}
+        {m.app_updates_could_not_be_checked_reload_this_page_when_you_are_on()}{" "}
       </p>
     )
   }

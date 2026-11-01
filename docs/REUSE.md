@@ -245,6 +245,8 @@ provider credentials or global configuration.
 
 ## Web interface language
 
-The web localization runtime in [`apps/web/src/lib/i18n`](../apps/web/src/lib/i18n/)
-provides supported languages, browser preference matching, and the locally stored choice.
-Use its message catalog for Factory interface copy; provider output remains user content.
+The [`@workspace/i18n`](../packages/i18n/) package owns the English and French
+Paraglide message catalogs and generated, typed browser runtime. The web locale adapter
+in [`apps/web/src/lib/i18n`](../apps/web/src/lib/i18n/) selects the browser language
+when available and persists explicit choices locally. Use generated messages for interface
+copy; provider output remains user content.

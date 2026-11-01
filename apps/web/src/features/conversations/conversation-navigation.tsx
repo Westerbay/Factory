@@ -1,11 +1,11 @@
-import { useTranslation } from "react-i18next"
-import i18n from "../../lib/i18n"
+import * as m from "@workspace/i18n/messages"
+import { useLocale, getLanguage } from "../../lib/i18n"
 import { Button } from "../../components/ui/button"
 import type { Conversation } from "./api"
 
 export function conversationLabel(conversation: Conversation): string {
-  return `${i18n.t("Chat")} · ${new Date(conversation.createdAt).toLocaleString(
-    i18n.language,
+  return `${m.chat()} · ${new Date(conversation.createdAt).toLocaleString(
+    getLanguage(),
     {
       month: "short",
       day: "numeric",
@@ -38,16 +38,13 @@ export function ConversationNavigation({
   onLoadOlder: () => void
   onRetry: () => void
 }) {
-  const { t: translate } = useTranslation()
+  useLocale()
   return (
     <div className="conversation-navigation">
       {(conversations.length > 0 || hasOlder || failed) && (
-        <p className="conversation-list-label">{translate("Other chats")}</p>
+        <p className="conversation-list-label">{m.other_chats()}</p>
       )}
-      <nav
-        className="conversation-list"
-        aria-label={translate("Conversations")}
-      >
+      <nav className="conversation-list" aria-label={m.conversations()}>
         {conversations.map((conversation) => {
           const label = conversationLabel(conversation)
           return (
@@ -71,15 +68,15 @@ export function ConversationNavigation({
             disabled={!available || loadingMore}
             onClick={onLoadOlder}
           >
-            {loadingMore ? translate("Loading…") : translate("Older chats")}
+            {loadingMore ? m.loading() : m.older_chats()}
           </Button>
         )}
       </nav>
       {failed && (
         <div className="conversation-list-error" role="status">
-          <p>{translate("Chats could not be loaded.")}</p>
+          <p>{m.chats_could_not_be_loaded()}</p>
           <Button variant="ghost" disabled={!available} onClick={onRetry}>
-            {translate("Retry")}{" "}
+            {m.retry()}{" "}
           </Button>
         </div>
       )}

@@ -1,4 +1,5 @@
-import { useTranslation } from "react-i18next"
+import * as m from "@workspace/i18n/messages"
+import { useLocale, translateMessage } from "../../lib/i18n"
 import { useEffect, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
@@ -18,15 +19,15 @@ type Props = {
 }
 
 export function AdminUsersPage(props: Props) {
-  const { t: translate } = useTranslation()
+  useLocale()
   const { state } = useSession()
   if (state.status !== "active") return null
   if (state.session.user.role !== "admin")
     return (
       <section>
-        <h1>{translate("Administrator access required")}</h1>
-        <p>{translate("Your account cannot manage other users.")}</p>
-        <Link to="/app">{translate("Return to your workspace")}</Link>
+        <h1>{m.administrator_access_required()}</h1>
+        <p>{m.your_account_cannot_manage_other_users()}</p>
+        <Link to="/app">{m.return_to_your_workspace()}</Link>
       </section>
     )
   return <AdminUsersList {...props} session={state.session} />
@@ -39,7 +40,7 @@ function AdminUsersList({
   onPage,
   session,
 }: Props & { session: Session }) {
-  const { t: translate } = useTranslation()
+  useLocale()
   const [notice, setNotice] = useState<{ message: string; focus: boolean }>()
   const noticeRef = useRef<HTMLParagraphElement>(null)
   useEffect(() => {
@@ -55,17 +56,15 @@ function AdminUsersList({
   return (
     <section className="admin-users" aria-labelledby="users-title">
       <p className="eyebrow">Administration</p>
-      <h1 id="users-title">{translate("User access")}</h1>
+      <h1 id="users-title">{m.user_access()}</h1>
       <p className="introduction">
-        {translate(
-          "Review requests and manage access to Factory. Activating an account requires the member to sign in again."
-        )}{" "}
+        {m.review_requests_and_manage_access_to_factory_activating_an_accoun()}{" "}
       </p>
       <div className="admin-toolbar">
         <div
           className="admin-filters"
           role="group"
-          aria-label={translate("Filter users by access status")}
+          aria-label={m.filter_users_by_access_status()}
         >
           {(["pending", "active", "suspended"] as const).map((filter) => (
             <Button
@@ -77,7 +76,9 @@ function AdminUsersList({
                 onFilter(filter)
               }}
             >
-              {translate(filter.charAt(0).toUpperCase() + filter.slice(1))}
+              {translateMessage(
+                filter.charAt(0).toUpperCase() + filter.slice(1)
+              )}
             </Button>
           ))}
         </div>
@@ -86,21 +87,19 @@ function AdminUsersList({
           disabled={users.isFetching}
           onClick={() => void users.refetch()}
         >
-          {translate("Refresh list")}{" "}
+          {m.refresh_list()}{" "}
         </Button>
       </div>
       {notice && (
         <p className="admin-notice" role="status" ref={noticeRef} tabIndex={-1}>
-          {translate(notice.message)}
+          {translateMessage(notice.message)}
         </p>
       )}
       {users.isPending ? (
-        <p role="status">{translate("Loading users…")}</p>
+        <p role="status">{m.loading_users()}</p>
       ) : users.isError ? (
         <p className="admin-notice" role="alert">
-          {translate(
-            "The user list could not be loaded. Use Refresh list to try again."
-          )}{" "}
+          {m.the_user_list_could_not_be_loaded_use_refresh_list_to_try_again()}{" "}
         </p>
       ) : (
         <>
@@ -117,26 +116,23 @@ function AdminUsersList({
             </ul>
           ) : (
             <p className="admin-empty">
-              {translate("No {{status}} users on this page.", {
-                status: translate(
+              {m.no_status_users_on_this_page({
+                status: translateMessage(
                   status.charAt(0).toUpperCase() + status.slice(1)
                 ),
               })}
             </p>
           )}
-          <nav
-            className="admin-pagination"
-            aria-label={translate("User list pages")}
-          >
+          <nav className="admin-pagination" aria-label={m.user_list_pages()}>
             <Button
               type="button"
               disabled={!cursor || users.isFetching}
               onClick={() => onPage()}
             >
-              {translate("First page")}{" "}
+              {m.first_page()}{" "}
             </Button>
             <span>
-              {translate("{{count}} shown · Up to 20 per page", {
+              {m.count_shown_up_to_20_per_page({
                 count: users.data.items.length,
               })}
             </span>
@@ -147,7 +143,7 @@ function AdminUsersList({
                 if (users.data.nextCursor) onPage(users.data.nextCursor)
               }}
             >
-              {translate("Next page")}{" "}
+              {m.next_page()}{" "}
             </Button>
           </nav>
         </>

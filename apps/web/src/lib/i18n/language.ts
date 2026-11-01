@@ -1,6 +1,8 @@
-export const supportedLanguages = ["en", "fr"] as const
-export type Language = (typeof supportedLanguages)[number]
-export const defaultLanguage: Language = "en"
+import { baseLocale, locales, type Locale } from "@workspace/i18n/runtime"
+
+export const supportedLanguages = locales
+export type Language = Locale
+export const defaultLanguage: Language = baseLocale
 
 export function resolveLanguage(
   preference: string | null,

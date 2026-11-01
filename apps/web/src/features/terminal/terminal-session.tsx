@@ -1,4 +1,5 @@
-import { useTranslation } from "react-i18next"
+import * as m from "@workspace/i18n/messages"
+import { useLocale, translateMessage } from "../../lib/i18n"
 import {
   useEffect,
   useMemo,
@@ -13,7 +14,6 @@ import { Maximize2, Minimize2, Settings2, TerminalSquare } from "lucide-react"
 import { Button, IconButton } from "../../components/ui/button"
 import { useTheme } from "../../lib/theme/theme"
 import { useSession } from "../../lib/auth/session-context"
-import i18n from "../../lib/i18n"
 import { openTerminalSocket, requestAttachment } from "./api"
 import { TerminalController } from "./terminal-controller"
 import "@xterm/xterm/css/xterm.css"
@@ -34,7 +34,7 @@ export default function TerminalSession({
   expanded: boolean
   onExpandedChange: (expanded: boolean) => void
 }) {
-  const { t: translate } = useTranslation()
+  const locale = useLocale()
   const { controller: session } = useSession()
   const theme = useTheme()
   const host = useRef<HTMLDivElement>(null)
@@ -143,9 +143,7 @@ export default function TerminalSession({
       widget.open(element)
       widget.textarea?.setAttribute(
         "aria-label",
-        i18n.t(
-          "Private terminal. Press Control Shift M to return to terminal controls."
-        )
+        m.private_terminal_press_control_shift_m_to_return_to_terminal_cont()
       )
       observer.observe(element)
       window.visualViewport?.addEventListener("resize", fitView)
@@ -191,11 +189,9 @@ export default function TerminalSession({
   useEffect(() => {
     terminal.current?.textarea?.setAttribute(
       "aria-label",
-      translate(
-        "Private terminal. Press Control Shift M to return to terminal controls."
-      )
+      m.private_terminal_press_control_shift_m_to_return_to_terminal_cont()
     )
-  }, [translate])
+  }, [locale])
 
   useEffect(() => {
     if (terminal.current)
@@ -232,7 +228,7 @@ export default function TerminalSession({
         tabIndex={-1}
         className="terminal-header"
         role="group"
-        aria-label={translate("Terminal controls")}
+        aria-label={m.terminal_controls()}
       >
         <h2>
           <TerminalSquare size={15} aria-hidden="true" />
@@ -241,11 +237,7 @@ export default function TerminalSession({
         <div className="terminal-header-actions">
           <IconButton
             ref={expandToggle}
-            label={
-              expanded
-                ? translate("Restore terminal size")
-                : translate("Maximize terminal")
-            }
+            label={expanded ? m.restore_terminal_size() : m.maximize_terminal()}
             aria-pressed={expanded}
             aria-keyshortcuts={expanded ? "Escape" : undefined}
             onClick={() => onExpandedChange(!expanded)}
@@ -266,8 +258,8 @@ export default function TerminalSession({
             }}
           >
             <summary
-              aria-label={translate("Terminal settings")}
-              title={translate("Terminal settings")}
+              aria-label={m.terminal_settings()}
+              title={m.terminal_settings()}
             >
               <Settings2 size={16} aria-hidden="true" />
             </summary>
@@ -278,11 +270,10 @@ export default function TerminalSession({
                   checked={screenReader}
                   onChange={(event) => setScreenReader(event.target.checked)}
                 />
-                {translate("Screen reader mode")}{" "}
+                {m.screen_reader_mode()}{" "}
               </label>
               <p>
-                <kbd>Ctrl+Shift+M</kbd>{" "}
-                {translate("returns to terminal controls.")}
+                <kbd>Ctrl+Shift+M</kbd> {m.returns_to_terminal_controls()}
               </p>
             </div>
           </details>
@@ -293,29 +284,27 @@ export default function TerminalSession({
         role="status"
         aria-live="polite"
       >
-        {(state.message && translate(state.message)) ||
-          (connected
-            ? translate("Terminal connected.")
-            : translate("Loading terminal…"))}
+        {(state.message && translateMessage(state.message)) ||
+          (connected ? m.terminal_connected() : m.loading_terminal())}
       </p>
       {(state.status === "error" || state.status === "disconnected") && (
         <div className="terminal-recovery">
-          <Button onClick={open}>{translate("Reconnect")}</Button>
+          <Button onClick={open}>{m.reconnect()}</Button>
         </div>
       )}
       {state.status === "conflict" && (
         <div className="terminal-recovery">
-          <Button onClick={takeOver}>{translate("Take over terminal")}</Button>
+          <Button onClick={takeOver}>{m.take_over_terminal()}</Button>
         </div>
       )}
       <div
         ref={host}
         className="terminal-screen"
-        aria-label={translate("Terminal display")}
+        aria-label={m.terminal_display()}
       />
       <div
         className="terminal-keys"
-        aria-label={translate("Terminal keyboard shortcuts")}
+        aria-label={m.terminal_keyboard_shortcuts()}
       >
         <Button
           variant="ghost"

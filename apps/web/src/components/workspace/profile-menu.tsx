@@ -1,5 +1,6 @@
+import * as m from "@workspace/i18n/messages"
+import { useLocale } from "../../lib/i18n"
 import { useEffect, useId, useRef } from "react"
-import { useTranslation } from "react-i18next"
 import { Link } from "@tanstack/react-router"
 import { ChevronUp, LogOut, Power, Settings, Users } from "lucide-react"
 
@@ -16,7 +17,7 @@ export function ProfileMenu({
   onSettings: () => void
   onStop: () => void
 }) {
-  const { t } = useTranslation()
+  useLocale()
   const { state, controller } = useSession()
   const theme = useTheme()
   const themeGroup = useId()
@@ -52,7 +53,7 @@ export function ProfileMenu({
   return (
     <details className="profile-menu" ref={ref}>
       <summary
-        aria-label={t("Profile options for {{handle}}", {
+        aria-label={m.profile_options_for_handle({
           handle: user.handle,
         })}
       >
@@ -65,21 +66,21 @@ export function ProfileMenu({
       <div className="profile-options">
         <Button variant="ghost" onClick={onSettings}>
           <Settings aria-hidden="true" />
-          {t("Settings")}
+          {m.settings()}
         </Button>
         {user.role === "admin" && (
           <Link to="/admin/users">
             <Users size={16} aria-hidden="true" />
-            {t("User access")}
+            {m.user_access()}
           </Link>
         )}
         <Button variant="ghost" disabled={!canStop} onClick={onStop}>
           <Power aria-hidden="true" />
-          {t("Stop environment")}
+          {m.stop_environment()}
         </Button>
         <div className="profile-menu-divider" />
         <fieldset className="profile-theme">
-          <legend>{t("Theme")}</legend>
+          <legend>{m.theme()}</legend>
           {(["light", "dark"] as const).map((choice) => (
             <label key={choice}>
               <input
@@ -89,14 +90,14 @@ export function ProfileMenu({
                 checked={theme === choice}
                 onChange={() => setTheme(choice)}
               />
-              {choice === "light" ? t("Light") : t("Dark")}
+              {choice === "light" ? m.light() : m.dark()}
             </label>
           ))}
         </fieldset>
         <div className="profile-menu-divider" />
         <Button variant="ghost" onClick={() => void controller.logout()}>
           <LogOut aria-hidden="true" />
-          {t("Sign out")}
+          {m.sign_out()}
         </Button>
       </div>
     </details>

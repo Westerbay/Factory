@@ -1,4 +1,5 @@
-import { useTranslation } from "react-i18next"
+import * as m from "@workspace/i18n/messages"
+import { useLocale, translateMessage } from "../../lib/i18n"
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 
 import { Button } from "../../components/ui/button"
@@ -20,7 +21,7 @@ import "./recovery.css"
 
 /** A stopped environment can expose runs to recover even after a page reload. */
 export function Recovery() {
-  const { t: translate } = useTranslation()
+  useLocale()
   const { state: session } = useSession()
   const [entries, setEntries] = useState<Recoverable[]>([])
   const [imports, setImports] = useState<RecoverableImport[]>([])
@@ -176,28 +177,23 @@ export function Recovery() {
   return (
     <section
       className="workspace-recovery"
-      aria-label={translate("Workspace recovery")}
+      aria-label={m.workspace_recovery()}
       aria-busy={busy || checking}
     >
       {entries.length > 0 && (
         <div className="workspace-recovery-tasks">
           <h2>
             {entries.length === 1
-              ? translate("A task needs recovery")
-              : translate("Tasks need recovery")}
+              ? m.a_task_needs_recovery()
+              : m.tasks_need_recovery()}
           </h2>
-          <p>
-            {translate(
-              "Recover previous tasks before returning to your workspace."
-            )}
-          </p>
+          <p>{m.recover_previous_tasks_before_returning_to_your_workspace()}</p>
           <ul>
             {entries.map((entry, index) => (
               <li key={entry.runId}>
                 {!entry.launchSettled && (
                   <p>
-                    {translate(
-                      "Task {{number}} could not be confirmed as launched. Safe recovery requires administrator help.",
+                    {m.task_number_could_not_be_confirmed_as_launched_safe_recovery_requ(
                       { number: index + 1 }
                     )}
                   </p>
@@ -208,7 +204,7 @@ export function Recovery() {
                     void run(entry)
                   }}
                 >
-                  {translate("Recover task")} {index + 1}
+                  {m.recover_task()} {index + 1}
                 </Button>
               </li>
             ))}
@@ -219,13 +215,11 @@ export function Recovery() {
         <div className="workspace-recovery-tasks">
           <h2>
             {imports.length === 1
-              ? translate("An import needs recovery")
-              : translate("Imports need recovery")}
+              ? m.an_import_needs_recovery()
+              : m.imports_need_recovery()}
           </h2>
           <p>
-            {translate(
-              "Recover interrupted imports before returning to your workspace."
-            )}
+            {m.recover_interrupted_imports_before_returning_to_your_workspace()}
           </p>
           <ul>
             {imports.map((entry, index) => (
@@ -237,7 +231,7 @@ export function Recovery() {
                     void runImport(entry, event.currentTarget)
                   }
                 >
-                  {translate("Recover import")} {index + 1}
+                  {m.recover_import()} {index + 1}
                 </Button>
               </li>
             ))}
@@ -250,15 +244,13 @@ export function Recovery() {
         className="workspace-recovery-status"
         role="status"
       >
-        {translate(message)}
+        {translateMessage(message)}
       </p>
       <details className="workspace-recovery-options">
-        <summary>{translate("Recovery options")}</summary>
+        <summary>{m.recovery_options()}</summary>
         <div className="workspace-recovery-options-body">
           <p>
-            {translate(
-              "Restore model access if it remains unavailable after a retry."
-            )}
+            {m.restore_model_access_if_it_remains_unavailable_after_a_retry()}
           </p>
           <Button
             disabled={busy || checking || !csrf}
@@ -266,7 +258,7 @@ export function Recovery() {
               void restoreModels()
             }}
           >
-            {translate("Restore model access")}{" "}
+            {m.restore_model_access()}{" "}
           </Button>
           {(retryNeeded || entries.some((entry) => !entry.launchSettled)) && (
             <Button
@@ -274,9 +266,7 @@ export function Recovery() {
               disabled={busy || checking}
               onClick={() => setVersion((n) => n + 1)}
             >
-              {checking
-                ? translate("Checking…")
-                : translate("Check recovery status")}
+              {checking ? m.checking() : m.check_recovery_status()}
             </Button>
           )}
         </div>

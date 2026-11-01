@@ -1,4 +1,5 @@
-import { useTranslation } from "react-i18next"
+import * as m from "@workspace/i18n/messages"
+import { useLocale } from "../../lib/i18n"
 import {
   useEffect,
   useRef,
@@ -37,7 +38,7 @@ export function WorkspaceSidebar({
   terminalVisible: boolean
   onCollapse: () => void
 }) {
-  const { t: translate } = useTranslation()
+  useLocale()
   const viewport = useSyncExternalStore(subscribeViewport, viewportWidth)
   const [requestedWidth, setRequestedWidth] = useState(DEFAULT_WIDTH)
   const [resizing, setResizing] = useState(false)
@@ -83,7 +84,7 @@ export function WorkspaceSidebar({
           id="workspace-sidebar"
           className="workspace-sidebar"
           style={{ width }}
-          aria-label={translate("Workspace navigation")}
+          aria-label={m.workspace_navigation()}
         >
           {children}
         </aside>
@@ -93,7 +94,7 @@ export function WorkspaceSidebar({
           className="split-pane-separator workspace-sidebar-separator"
           data-resizing={resizing ? "" : undefined}
           role="separator"
-          aria-label={translate("Chats sidebar size")}
+          aria-label={m.chats_sidebar_size()}
           aria-controls="workspace-sidebar"
           aria-orientation="vertical"
           aria-valuemin={MIN_WIDTH}

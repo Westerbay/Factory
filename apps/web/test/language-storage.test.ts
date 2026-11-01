@@ -12,8 +12,8 @@ describe("language preference across tabs", () => {
     vi.stubGlobal("navigator", { language: "fr-FR", languages: ["fr-FR"] })
     const storage = { getItem: () => "en", setItem: vi.fn() }
     vi.stubGlobal("localStorage", storage)
-    const { default: i18n } = await import("../src/lib/i18n")
-    expect(i18n.language).toBe("en")
+    const { getLanguage } = await import("../src/lib/i18n")
+    expect(getLanguage()).toBe("en")
 
     function notify(
       key: string | null,
@@ -29,13 +29,13 @@ describe("language preference across tabs", () => {
       otherTab.dispatchEvent(event)
     }
     notify("factory.language", "fr")
-    await vi.waitFor(() => expect(i18n.language).toBe("fr"))
+    await vi.waitFor(() => expect(getLanguage()).toBe("fr"))
     notify("another-key", "en")
     notify("factory.language", "en", {})
-    expect(i18n.language).toBe("fr")
+    expect(getLanguage()).toBe("fr")
     notify("factory.language", "en")
-    await vi.waitFor(() => expect(i18n.language).toBe("en"))
+    await vi.waitFor(() => expect(getLanguage()).toBe("en"))
     notify(null, null)
-    await vi.waitFor(() => expect(i18n.language).toBe("fr"))
+    await vi.waitFor(() => expect(getLanguage()).toBe("fr"))
   })
 })

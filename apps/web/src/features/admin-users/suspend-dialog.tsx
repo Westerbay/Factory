@@ -1,4 +1,5 @@
-import { useTranslation } from "react-i18next"
+import * as m from "@workspace/i18n/messages"
+import { useLocale } from "../../lib/i18n"
 import { useId } from "react"
 
 import { Button } from "../../components/ui/button"
@@ -13,27 +14,25 @@ export function SuspendDialog({
   onCancel: () => void
   onConfirm: () => void
 }) {
-  const { t: translate } = useTranslation()
+  useLocale()
   const descriptionId = useId()
 
   return (
     <Modal
       open
       onClose={onCancel}
-      title={translate("Suspend {{name}}?", { name })}
+      title={m.suspend_name_2391b905({ name })}
       descriptionId={descriptionId}
     >
       <p id={descriptionId}>
-        {translate(
-          "All of this user's sessions will be revoked immediately. They will not be able to sign in until you reactivate their access."
-        )}{" "}
+        {m.all_of_this_user_s_sessions_will_be_revoked_immediately_they_will()}{" "}
       </p>
       <div className="ui-modal-actions">
         <Button data-autofocus onClick={onCancel}>
-          {translate("Cancel")}{" "}
+          {m.cancel()}{" "}
         </Button>
         <Button variant="danger" onClick={onConfirm}>
-          {translate("Suspend access")}{" "}
+          {m.suspend_access()}{" "}
         </Button>
       </div>
     </Modal>

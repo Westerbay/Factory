@@ -1,14 +1,11 @@
-import { useTranslation } from "react-i18next"
+import * as m from "@workspace/i18n/messages"
+import { useLocale } from "../../lib/i18n"
 import { Link } from "@tanstack/react-router"
 
 export function Brand() {
-  const { t: translate } = useTranslation()
+  useLocale()
   return (
-    <Link
-      to="/app"
-      className="ui-brand"
-      aria-label={translate("Factory workspace")}
-    >
+    <Link to="/app" className="ui-brand" aria-label={m.factory_workspace()}>
       <svg viewBox="0 0 80 80" aria-hidden="true" focusable="false">
         <path
           d="M12 17 34 39 12 61M40 62h28"
