@@ -59,7 +59,7 @@ LABEL io.factory.claude.version="2.1.268"
 RUN printf '%s\n' 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261027T000000Z bookworm main' \
       'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20261027T000000Z bookworm-security main' > /etc/apt/sources.list \
     && rm /etc/apt/sources.list.d/debian.sources \
-    && apt-get update && apt-get install -y --no-install-recommends bash zsh tmux git ca-certificates util-linux \
+    && apt-get update && apt-get install -y --no-install-recommends bash zsh tmux git neofetch ca-certificates util-linux \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 10000 factory \
     && useradd -u 10000 -g factory -d /home/factory -s /bin/zsh factory \

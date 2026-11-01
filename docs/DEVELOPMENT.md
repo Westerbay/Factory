@@ -282,7 +282,7 @@ pnpm environments:prepare
 This operator command builds the pinned [workspace image](../infra/environments/Dockerfile)
 and [egress proxy](../infra/egress/Dockerfile), so initial preparation requires network
 access and may take several minutes. The workspace contains zsh with Oh My Zsh, tmux,
-native Codex 0.160.0 and Claude Code 2.1.268. The Claude binary's initialization and
+Neofetch, native Codex 0.160.0 and Claude Code 2.1.268. The Claude binary's initialization and
 model-list response are checked during a build step with an empty home. No host
 provider installation or credentials are imported. Preparation
 stores the stable installation UUID in `.factory/environments/installation.json` and
@@ -380,7 +380,8 @@ Wait for automatic workspace preparation and connect a provider. The header's te
 opens or folds the panel; opening loads xterm and attaches to its zsh tmux shell in
 `/home/factory/Documents`. Folding preserves the attached display and shell. Drag the
 separator to resize, or focus it and use arrow keys; Enter folds the terminal. Narrow
-screens switch between chat and terminal. The current image provides a colored prompt
+screens switch between chat and terminal. New terminal shells show Neofetch; reconnecting
+to an existing shell does not start it again. The current image provides a colored prompt
 without overwriting user dotfiles. Transport failure offers **Reconnect**. A second tab
 must choose **Take over terminal** before it can type. Closing the browser or restarting
 the API does not stop the shell; stopping the environment or Docker does. Files survive
