@@ -9,6 +9,12 @@ const reasons = {
     "Your access has been suspended. Contact your administrator before trying again.",
   denied: "GitHub sign-in was cancelled. You can try again when you are ready.",
   unavailable: "Sign-in is temporarily unavailable. Please try again later.",
+  "email-unavailable":
+    "GitHub did not provide a verified primary email. Verify your email on GitHub, then try again.",
+  "github-forbidden":
+    "GitHub denied access. Check your account or organization permissions, then try again.",
+  "github-rate-limited":
+    "GitHub is temporarily rate limiting requests. Try signing in again later.",
   "invalid-login":
     "This sign-in attempt expired or could not be verified. Start a new sign-in below.",
 } as const
@@ -25,6 +31,11 @@ export function SignInView({ reason }: { reason?: keyof typeof reasons }) {
       <Brand />
       <div className="auth-content">
         <h1 id="sign-in-title">Sign in to Factory</h1>
+        <p>
+          GitHub access lets Factory read and write your private repositories
+          and some organization resources, add a workspace SSH key, and read
+          your email for Git commits.
+        </p>
         {reason && (
           <p className="auth-notice" role="status">
             {reasons[reason]}

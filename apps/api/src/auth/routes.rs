@@ -44,6 +44,7 @@ async fn protect(
     };
     let login = request.uri().path().starts_with("/api/auth/github/");
     let callback = request.uri().path() == "/api/auth/github/callback";
+    let repository_callback = callback && is_repository_callback(request.uri());
     let mut response = match state.check_quota(login) {
         Ok(()) if request.uri().to_string().len() <= 8192 => next.run(request).await,
         Ok(()) => AuthError::invalid().into_response(),
@@ -56,7 +57,7 @@ async fn protect(
         header::REFERRER_POLICY,
         HeaderValue::from_static("no-referrer"),
     );
-    if callback && response.status().is_client_error() {
+    if callback && !repository_callback && response.status().is_client_error() {
         response.headers_mut().append(
             header::SET_COOKIE,
             clear_cookie(LOGIN_COOKIE, state.secure_cookie),
@@ -126,8 +127,28 @@ struct Callback {
 async fn callback(
     RequiredIdentity(state): RequiredIdentity,
     headers: HeaderMap,
+    uri: axum::http::Uri,
     query: Result<Query<Callback>, QueryRejection>,
 ) -> Response {
+    // State type remains recognizable after expiration, disconnect or replay.
+    let repository_state = is_repository_callback(&uri);
+    if repository_state {
+        let state_for_task = state.clone();
+        let task = tokio::spawn(async move {
+            complete_repository_callback(&state_for_task, &headers, query).await
+        });
+        let reason = match task.await {
+            Ok(Ok(reason)) => reason,
+            Ok(Err(reason)) => reason,
+            Err(_) => "unavailable",
+        };
+        let mut response = redirect(&format!("{}/app?github={reason}", state.web_origin));
+        response.headers_mut().append(
+            header::SET_COOKIE,
+            clear_cookie(crate::projects::CONNECT_COOKIE, state.secure_cookie),
+        );
+        return response;
+    }
     let outcome = complete_callback(&state, &headers, query).await;
     let mut response = match outcome {
         Ok(response) => response,
@@ -145,6 +166,62 @@ async fn callback(
         clear_cookie(LOGIN_COOKIE, state.secure_cookie),
     );
     response
+}
+
+async fn complete_repository_callback(
+    state: &AuthState,
+    headers: &HeaderMap,
+    query: Result<Query<Callback>, QueryRejection>,
+) -> Result<&'static str, &'static str> {
+    let Query(query) = query.map_err(|_| "authorization-invalid")?;
+    let state_hash = repository_state_hash(query.state.as_deref().ok_or("authorization-invalid")?)
+        .map_err(|_| "authorization-invalid")?;
+    let binding = credential(headers, crate::projects::CONNECT_COOKIE)
+        .map_err(|_| "authorization-invalid")?
+        .ok_or("authorization-invalid")?;
+    let authenticated = state
+        .authenticate(headers)
+        .await
+        .map_err(|_| "unavailable")?;
+    let runtime = state.projects.as_ref().ok_or("unavailable")?;
+    let access = runtime.access().map_err(|_| "unavailable")?;
+    if query.error.is_some() {
+        access
+            .cancel(state_hash, binding, authenticated.token_hash)
+            .await
+            .map_err(repository_callback_reason)?;
+        return Ok("denied");
+    }
+    let code = query.code.as_deref().ok_or("authorization-invalid")?;
+    access
+        .complete(state_hash, binding, authenticated.token_hash, code)
+        .await
+        .map_err(repository_callback_reason)?;
+    // The same Factory session and environment are revalidated by ensure_identity.
+    let actor = factory_core::environments::EnvironmentActor {
+        user_id: authenticated.session.user.id,
+        session_hash: authenticated.token_hash,
+    };
+    runtime
+        .ensure_identity(actor)
+        .await
+        .map_err(repository_callback_reason)?;
+    Ok("connected")
+}
+
+fn repository_callback_reason(
+    error: factory_core::identity::RepositoryAccessError,
+) -> &'static str {
+    use factory_core::identity::RepositoryAccessError;
+    match error {
+        RepositoryAccessError::InvalidLogin => "authorization-invalid",
+        RepositoryAccessError::IdentityMismatch => "identity-mismatch",
+        RepositoryAccessError::ProviderForbidden => "forbidden",
+        RepositoryAccessError::ProviderUnauthorized => "expired",
+        RepositoryAccessError::RateLimited => "rate-limited",
+        RepositoryAccessError::EmailUnavailable => "email-unavailable",
+        _ => "unavailable",
+    }
 }
 
 async fn complete_callback(
@@ -168,19 +245,59 @@ async fn complete_callback(
     let code = query.code.ok_or(IdentityError::InvalidLogin)?;
     let previous = credential(headers, SESSION_COOKIE).map_err(|_| IdentityError::InvalidLogin)?;
     let raw_session = random_token()?;
-    let outcome = state
+    let session_hash = hash_token(&raw_session)?;
+    let (outcome, repository_token) = state
         .service()
         .complete_login(
             state_hash,
             binding_hash,
             &code,
             NewSession {
-                token_hash: hash_token(&raw_session)?,
+                token_hash: session_hash,
                 csrf_token: random_token()?,
                 previous_token_hash: previous,
             },
         )
         .await?;
+    if let (AdmissionOutcome::Active(active), Some((identity, token))) =
+        (&outcome, repository_token)
+    {
+        let result = match state
+            .projects
+            .as_ref()
+            .and_then(|runtime| runtime.access.as_ref())
+        {
+            Some(access) => {
+                access
+                    .save_login(
+                        factory_core::environments::EnvironmentActor {
+                            user_id: active.user.id,
+                            session_hash,
+                        },
+                        &identity,
+                        token,
+                    )
+                    .await
+            }
+            None => Err(factory_core::identity::RepositoryAccessError::Unavailable),
+        };
+        if let Err(error) = result {
+            state.service().logout(session_hash).await?;
+            use factory_core::identity::RepositoryAccessError;
+            let reason = match error {
+                RepositoryAccessError::EmailUnavailable => "email-unavailable",
+                RepositoryAccessError::ProviderForbidden => "github-forbidden",
+                RepositoryAccessError::RateLimited => "github-rate-limited",
+                _ => "unavailable",
+            };
+            let mut response = callback_redirect(state, reason);
+            response.headers_mut().append(
+                header::SET_COOKIE,
+                clear_cookie(SESSION_COOKIE, state.secure_cookie),
+            );
+            return Ok(response);
+        }
+    }
     let mut response = match outcome {
         AdmissionOutcome::Active(_) => {
             let mut response = redirect(&format!("{}/app", state.web_origin));
@@ -271,4 +388,21 @@ async fn logout(
         clear_cookie(SESSION_COOKIE, state.secure_cookie),
     );
     Ok(response)
+}
+
+#[cfg(test)]
+mod repository_callback_tests {
+    use super::*;
+    #[test]
+    fn only_confirmed_identity_mismatch_has_the_specific_reason() {
+        use factory_core::identity::RepositoryAccessError;
+        assert_eq!(
+            repository_callback_reason(RepositoryAccessError::InvalidLogin),
+            "authorization-invalid"
+        );
+        assert_eq!(
+            repository_callback_reason(RepositoryAccessError::IdentityMismatch),
+            "identity-mismatch"
+        );
+    }
 }

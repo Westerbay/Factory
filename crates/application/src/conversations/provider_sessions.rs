@@ -184,6 +184,7 @@ mod tests {
             conversation: Conversation {
                 id: conversation,
                 user_id: Uuid::new_v4(),
+                project_id: None,
                 provider_thread: Some("legacy-thread".into()),
                 created_at: Utc::now(),
             },

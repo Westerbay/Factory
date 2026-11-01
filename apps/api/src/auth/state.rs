@@ -21,6 +21,7 @@ pub struct AuthState {
     pub(super) web_origin: String,
     pub(super) secure_cookie: bool,
     quotas: Arc<Mutex<[Window; 2]>>,
+    pub(crate) projects: Option<Arc<crate::projects::runtime::ProjectsRuntime>>,
 }
 
 pub struct Authenticated {
@@ -60,11 +61,23 @@ impl AuthState {
                 start: Instant::now(),
                 count: 0,
             }))),
+            projects: None,
         }
     }
 
     pub fn service(&self) -> &IdentityService {
         &self.service
+    }
+
+    pub(crate) fn with_projects(
+        mut self,
+        projects: Option<Arc<crate::projects::runtime::ProjectsRuntime>>,
+    ) -> Self {
+        self.projects = projects;
+        self
+    }
+    pub(crate) fn secure_cookie(&self) -> bool {
+        self.secure_cookie
     }
 
     pub async fn authenticate(&self, headers: &HeaderMap) -> Result<Authenticated, AuthError> {

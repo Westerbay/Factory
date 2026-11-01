@@ -8,4 +8,5 @@ pub mod egress;
 pub mod environments;
 pub mod identity;
 mod json_stream;
+pub mod projects;
 pub mod terminals;

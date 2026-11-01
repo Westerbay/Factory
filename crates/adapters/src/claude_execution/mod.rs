@@ -5,9 +5,14 @@ use crate::{
         process::{ClaudeLaunch, DockerProcess, FixedProcess, ProcessStartError},
     },
     json_stream::JsonStream,
+    projects::{DockerProjectRuntime, ProjectDirectory},
 };
 use async_trait::async_trait;
-use factory_core::{conversations::execution::*, environments::Environment};
+use factory_core::{
+    conversations::execution::*,
+    environments::Environment,
+    projects::{Project, ProjectState},
+};
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet},
@@ -84,6 +89,19 @@ impl ExecutionRuntime for ClaudeExecutionAdapter {
         effort: Option<&str>,
         input: &str,
     ) -> Result<ExecutionSession, ExecutionError> {
+        self.open_project(env, None, provider_thread, model, effort, input)
+            .await
+    }
+
+    async fn open_project(
+        &self,
+        env: &Environment,
+        project: Option<&Project>,
+        provider_thread: Option<&str>,
+        model: &str,
+        effort: Option<&str>,
+        input: &str,
+    ) -> Result<ExecutionSession, ExecutionError> {
         if input.trim().is_empty() || input.len() > MAX_TEXT || input.contains('\0') {
             return Err(ExecutionError::Invalid);
         }
@@ -91,8 +109,19 @@ impl ExecutionRuntime for ClaudeExecutionAdapter {
             Some(value) => Uuid::parse_str(value).map_err(|_| ExecutionError::Invalid)?,
             None => Uuid::new_v4(),
         };
-        let launch = ClaudeLaunch::new(model, effort, session, provider_thread.is_some())
+        let mut launch = ClaudeLaunch::new(model, effort, session, provider_thread.is_some())
             .ok_or(ExecutionError::Invalid)?;
+        if let Some(project) = project {
+            if project.state != ProjectState::Ready
+                || DockerProjectRuntime::new(self.runtime.clone())
+                    .inspect_project(env, project)
+                    .await
+                    != Ok(ProjectDirectory::Ready)
+            {
+                return Err(ExecutionError::PreflightUnavailable);
+            }
+            launch = launch.with_cwd(format!("/home/factory/Documents/{}", project.directory));
+        }
         let (id, stream) = self
             .process(env, FixedProcess::ClaudeExecution(launch))
             .await?;

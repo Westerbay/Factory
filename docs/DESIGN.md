@@ -63,6 +63,17 @@ Conversation rows, composer, device authorization and account options stay
 feature-owned. Share their real behavior rather than a universal card. Controls
 cover hover, focus, pressed, disabled, pending and error. Links remain links.
 
+The workspace navigation groups chats under independently expandable projects, with a
+new-chat and delete actions on each project. The active chat uses
+orange text without a selection background; keyboard focus remains visible. The project picker uses the
+shared modal, a labelled search over loaded GitHub pages and explicit loading,
+empty, unavailable and retry states. Import progress remains in the modal until confirmed,
+with an option to continue in the background. Already imported repositories are omitted.
+Show the selected project's name on its chat and terminal; switching chats detaches
+the terminal display while preserving each chat's shell. Explain GitHub permissions
+and commit email visibility before the explicit connection action. An interrupted
+import exposes recovery rather than an indefinite progress indicator.
+
 ## Entry and environment lifecycle
 
 1. Sign-in shows Factory and **Continue with GitHub**. Pending, suspended, denied,
@@ -92,8 +103,10 @@ shutdown/recovery, not a permanent Start control. Failed starts do not loop.
 
 ## Workspace
 
-Desktop has a 208–240px sidebar, flexible chat and optional right terminal. The
-sidebar holds the wordmark, New chat, history and GitHub profile at bottom left.
+Desktop has a sidebar starting at 280px, flexible chat and an optional right terminal.
+Drag the sidebar separator or use its keyboard controls to resize it; its width remains
+when the sidebar is hidden or the layout switches to compact mode. The sidebar holds
+the wordmark, New chat, history and GitHub profile at bottom left.
 Conversation labels use available data; never invent names or introduce a data
 migration just to match example content. Older history pages remain reachable.
 The header's chats toggle collapses and restores the desktop sidebar without resetting

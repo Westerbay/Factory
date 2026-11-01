@@ -1,10 +1,18 @@
-.conversation-navigation {
+.workspace-navigation {
   display: flex;
   flex: 1;
   flex-direction: column;
   min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
-.conversation-navigation .conversation-new {
+.conversation-navigation {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  min-height: 0;
+}
+.workspace-navigation > .conversation-new {
   justify-content: flex-start;
   width: 100%;
 }
@@ -16,8 +24,7 @@
 .conversation-list {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  overflow: visible;
 }
 .conversation-list .conversation-row {
   justify-content: flex-start;
@@ -32,9 +39,14 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.conversation-list .conversation-row[aria-current="page"] {
+.conversation-list .conversation-row:hover:not(:disabled) {
   color: var(--text);
-  background: var(--surface-hover);
+  background: transparent;
+}
+.conversation-list .conversation-row[aria-current="page"],
+.conversation-list .conversation-row[aria-current="page"]:hover:not(:disabled) {
+  color: orange;
+  background: transparent;
 }
 .conversation-older {
   width: 100%;
@@ -54,6 +66,13 @@
   height: 100%;
   min-height: 0;
   overflow: hidden;
+}
+.chat-project-warning {
+  margin: 0;
+  padding: 0.75rem 1.5rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
 }
 .chat-messages {
   flex: 1;

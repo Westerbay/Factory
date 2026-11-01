@@ -13,6 +13,7 @@ use factory_core::environments::{DesiredState, Environment, EnvironmentError, Vo
 use futures_util::Stream;
 use std::{pin::Pin, time::Duration};
 use tokio::io::AsyncWrite;
+use uuid::Uuid;
 
 pub(crate) type ProcessOutput = Pin<Box<dyn Stream<Item = Result<LogOutput, Error>> + Send>>;
 pub(crate) type ProcessInput = Pin<Box<dyn AsyncWrite + Send>>;
@@ -45,6 +46,13 @@ impl From<ProcessStartError> for EnvironmentError {
 pub(crate) enum FixedProcess {
     TerminalAttach,
     TerminalDetach,
+    TerminalAttachConversation {
+        conversation: Uuid,
+        project: Option<String>,
+    },
+    TerminalDetachConversation {
+        conversation: Uuid,
+    },
     CodexAccount,
     CodexExecution,
     ClaudeStatus,
@@ -52,6 +60,8 @@ pub(crate) enum FixedProcess {
     ClaudeLogin,
     ClaudeProbe,
     ClaudeExecution(ClaudeLaunch),
+    /// Fixed, immutable controller; its bounded JSON input never selects an executable.
+    ProjectController,
     #[cfg(test)]
     CodexSchema,
 }
@@ -63,6 +73,7 @@ pub(crate) struct ClaudeLaunch {
     effort: Option<String>,
     session: uuid::Uuid,
     resume: bool,
+    cwd: Option<String>,
 }
 
 impl ClaudeLaunch {
@@ -89,13 +100,45 @@ impl ClaudeLaunch {
             effort: effort.map(str::to_owned),
             session,
             resume,
+            cwd: None,
         })
+    }
+
+    pub(crate) fn with_cwd(mut self, cwd: String) -> Self {
+        self.cwd = Some(cwd);
+        self
     }
 }
 
 impl FixedProcess {
     fn options(self) -> CreateExecOptions<String> {
-        let terminal = matches!(self, Self::TerminalAttach | Self::ClaudeLogin);
+        let working_dir = match &self {
+            Self::ClaudeExecution(launch) => {
+                launch.cwd.as_deref().unwrap_or("/home/factory/Documents")
+            }
+            _ => "/home/factory/Documents",
+        }
+        .to_owned();
+        let terminal = matches!(
+            self,
+            Self::TerminalAttach | Self::TerminalAttachConversation { .. } | Self::ClaudeLogin
+        );
+        let (session, cwd) = match &self {
+            Self::TerminalAttachConversation {
+                conversation,
+                project,
+            } => (
+                format!("factory-{conversation}"),
+                project.as_ref().map_or_else(
+                    || "/home/factory/Documents".to_owned(),
+                    |name| format!("/home/factory/Documents/{name}"),
+                ),
+            ),
+            Self::TerminalDetachConversation { conversation } => {
+                (format!("factory-{conversation}"), String::new())
+            }
+            _ => (String::new(), String::new()),
+        };
         let mut cmd: Vec<String> = match &self {
             Self::TerminalAttach => vec![
                 "/usr/bin/tmux",
@@ -119,7 +162,30 @@ impl FixedProcess {
                 "-s",
                 "factory",
             ],
+            Self::TerminalAttachConversation { .. } => vec![
+                "/usr/bin/tmux",
+                "-f",
+                "/etc/factory/tmux.conf",
+                "-S",
+                "/tmp/factory-tmux.sock",
+                "new-session",
+                "-A",
+                "-D",
+                "-s",
+                &session,
+                "-c",
+                &cwd,
+            ],
+            Self::TerminalDetachConversation { .. } => vec![
+                "/usr/bin/tmux",
+                "-S",
+                "/tmp/factory-tmux.sock",
+                "detach-client",
+                "-s",
+                &session,
+            ],
             Self::CodexAccount => vec!["/usr/local/bin/factory-auth-controller"],
+            Self::ProjectController => vec!["/usr/local/bin/factory-project-controller"],
             // The fixed executable and fixed arguments are never selected by the browser.
             // A watchdog bounds orphan lifetime; it does not prove descendant cleanup.
             Self::CodexExecution => vec![
@@ -192,7 +258,7 @@ impl FixedProcess {
             tty: Some(terminal),
             privileged: Some(false),
             user: Some("10000:10000".into()),
-            working_dir: Some("/home/factory/Documents".into()),
+            working_dir: Some(working_dir),
             env: Some(vec![
                 "HOME=/home/factory".into(),
                 "CODEX_HOME=/home/factory/.codex".into(),
@@ -354,6 +420,37 @@ fn map_error(error: Error) -> EnvironmentError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn terminal_commands_are_scoped_to_each_conversation() {
+        let one = uuid::Uuid::new_v4();
+        let two = uuid::Uuid::new_v4();
+        let project = "repo".to_owned();
+        let args = super::FixedProcess::TerminalAttachConversation {
+            conversation: one,
+            project: Some(project.clone()),
+        }
+        .options()
+        .cmd
+        .unwrap();
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["-s", &format!("factory-{one}")])
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["-c", &format!("/home/factory/Documents/{project}")])
+        );
+        let detach = super::FixedProcess::TerminalDetachConversation { conversation: two }
+            .options()
+            .cmd
+            .unwrap();
+        assert!(
+            detach
+                .windows(2)
+                .any(|pair| pair == ["-s", &format!("factory-{two}")])
+        );
+        assert!(!detach.iter().any(|arg| arg == &format!("factory-{one}")));
+    }
     use super::*;
     use crate::environments::{POLICY_VERSION, PreparationMetadata};
     use chrono::Utc;
@@ -407,6 +504,25 @@ mod tests {
                 .unwrap()
                 .contains(&"--effort".to_owned())
         );
+    }
+
+    #[test]
+    fn claude_project_launch_uses_project_directory() {
+        let cwd = format!("/home/factory/Documents/project-{}", Uuid::new_v4());
+        for resume in [false, true] {
+            let launch = ClaudeLaunch::new("opus", Some("high"), Uuid::new_v4(), resume)
+                .unwrap()
+                .with_cwd(cwd.clone());
+            let options = FixedProcess::ClaudeExecution(launch).options();
+            assert_eq!(options.working_dir.as_deref(), Some(cwd.as_str()));
+            assert!(
+                options
+                    .cmd
+                    .unwrap()
+                    .windows(2)
+                    .any(|part| part == ["--effort", "high"])
+            );
+        }
     }
 
     #[tokio::test]

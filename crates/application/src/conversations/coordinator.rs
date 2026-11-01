@@ -365,9 +365,33 @@ impl ConversationRuntime {
         else {
             return;
         };
+        let project = match self.service.context(actor, run.conversation_id).await {
+            Ok((current, _, project))
+                if current.id == env.id && current.generation == env.generation =>
+            {
+                project
+            }
+            _ => {
+                if self.service.settle_run_launch(run.id, &env).await.is_ok() {
+                    let _ = self
+                        .service
+                        .finish_turn(actor, &env, run.id, RunStatus::Failed)
+                        .await;
+                }
+                self.inflight.lock().await.remove(&run.id);
+                return;
+            }
+        };
         let session = match provider
             .runtime
-            .open(&env, thread.as_deref(), &model, effort.as_deref(), &input)
+            .open_project(
+                &env,
+                project.as_ref(),
+                thread.as_deref(),
+                &model,
+                effort.as_deref(),
+                &input,
+            )
             .await
         {
             Ok(s) => s,

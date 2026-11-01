@@ -1,3 +1,6 @@
+mod repository_access;
+pub use repository_access::RepositoryAccessService;
+
 use factory_core::identity::*;
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -68,13 +71,20 @@ impl IdentityService {
         Ok(())
     }
 
+    /// The optional provider token is returned only to trusted server composition.
     pub async fn complete_login(
         &self,
         state_hash: CredentialHash,
         binding_hash: CredentialHash,
         code: &str,
         session: NewSession,
-    ) -> Result<AdmissionOutcome, IdentityError> {
+    ) -> Result<
+        (
+            AdmissionOutcome,
+            Option<(VerifiedIdentity, RepositoryAccessToken)>,
+        ),
+        IdentityError,
+    > {
         if code.is_empty()
             || code.len() > 4096
             || session.csrf_token.len() < 32
@@ -87,7 +97,10 @@ impl IdentityService {
             .take_login_attempt(state_hash, binding_hash)
             .await?;
         // The attempt is consumed even when the exchange fails. Never retry a code.
-        let identity = self.provider.exchange(code, &attempt.pkce_verifier).await?;
+        let (identity, token) = self
+            .provider
+            .exchange_login(code, &attempt.pkce_verifier)
+            .await?;
         identity.validate()?;
         if identity.provider != self.provider.provider()
             || identity.issuer != self.provider.issuer()
@@ -98,7 +111,7 @@ impl IdentityService {
         let outcome = self
             .store
             .admit(LoginAdmission {
-                identity,
+                identity: identity.clone(),
                 login_started_at: attempt.created_at,
                 session,
             })
@@ -108,7 +121,12 @@ impl IdentityService {
         {
             let _ = self.revocations.send(IdentityRevocation::Session(previous));
         }
-        Ok(outcome)
+        let token = if matches!(outcome, AdmissionOutcome::Active(_)) {
+            token.map(|token| (identity, token))
+        } else {
+            None
+        };
+        Ok((outcome, token))
     }
 
     pub async fn session(&self, hash: CredentialHash) -> Result<ActiveSession, IdentityError> {

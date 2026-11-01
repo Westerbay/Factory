@@ -1,5 +1,6 @@
 mod admission;
 mod attempts;
+mod repository_access;
 mod sessions;
 mod setup;
 mod users;
@@ -50,10 +51,31 @@ impl IdentityDatabase {
             pool: self.pool.clone(),
         }
     }
+    /// Prevent replacing a missing installation key while encrypted credentials exist.
+    pub async fn has_repository_credentials(&self) -> Result<bool, IdentityError> {
+        with_connection(
+            &self.pool,
+            || IdentityError::Unavailable,
+            |connection| {
+                Box::pin(async move {
+                    sqlx::query_scalar(
+                        "SELECT EXISTS(SELECT 1 FROM factory_identity.github_credentials)",
+                    )
+                    .fetch_one(connection)
+                    .await
+                    .map_err(unavailable)
+                })
+            },
+        )
+        .await
+    }
     pub fn conversation_store(&self) -> crate::conversations::PgConversationStore {
         crate::conversations::PgConversationStore {
             pool: self.pool.clone(),
         }
+    }
+    pub fn project_store(&self) -> crate::projects::PgProjectStore {
+        crate::projects::PgProjectStore::new(self.pool.clone())
     }
     pub fn environment_store(&self) -> crate::environments::PgEnvironmentStore {
         crate::environments::PgEnvironmentStore {

@@ -38,7 +38,8 @@ is required. Shadcn primitives remain deferred until an actual interaction needs
 - [SplitPane](../apps/web/src/components/ui/split-pane.tsx) owns pointer and keyboard
   resizing for the chat and terminal panes and an expanded secondary pane. Visibility
   and expansion preserve mounted content and the requested split width; hidden content
-  is inert. The component does not start or stop a terminal process.
+  is inert. Its exported minimum widths let surrounding layout preserve usable panes.
+  The component does not start or stop a terminal process.
 - [MessageMarkdown](../apps/web/src/features/conversations/message-markdown.tsx) renders
   completed assistant messages and live deltas with the same scoped typography and
   overflow behavior. The MIT-licensed `react-markdown` and `remark-gfm` packages supply
@@ -82,6 +83,14 @@ are public static resources; loading the interface does not require a remote fon
   scope keys private UI by user, session token and role; it never authorizes a request.
   Hard invalidation or expiry destroys it. Transient connection notices do not reset
   an unexpired workspace.
+
+- [Repository access contracts](../crates/core/src/identity/repository_access.rs) and
+  [service](../crates/application/src/identity/repository_access.rs) define a
+  session-bound provider capability authorized at sign-in; adapters implement provider I/O and token encryption.
+- [Project contracts](../crates/core/src/projects/mod.rs) own stable repository identity,
+  bounded import reservations and stopped-state recovery. The
+  [project adapter](../crates/adapters/src/projects/mod.rs) owns typed container operations;
+  the API never accepts browser-selected filesystem paths or clone URLs.
 
 ## Persistence and ownership
 

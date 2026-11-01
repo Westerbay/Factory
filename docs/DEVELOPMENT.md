@@ -85,16 +85,26 @@ Routine installation and checks neither read the real `.env` nor register an OAu
 
 ### GitHub OAuth setup
 
-The current adapter uses a GitHub **OAuth App** for identity with the `read:user`
-scope. Repository access and GitHub App installations are not implemented yet.
+The current adapter uses a GitHub **OAuth App** and requests `read:user`, `repo`,
+`write:public_key` and `user:email` together at sign-in; GitHub App installations are
+not implemented. After environment
+preparation, the API automatically creates a random encryption key in
+`.factory/environments/repository-token.key` and reuses it across restarts and database
+resets. It is a secret, separate from the SSH key: preserve the ignored `.factory`
+directory and never share or commit this file. On Unix the key has owner-only permissions.
+If the key is missing while encrypted credentials exist, invalid, or inaccessible, Factory
+does not replace it: repository access is disabled until the original key is restored. A
+fresh database without stored credentials permits creation of a new key. These failures do
+do not invalidate existing identity sessions, but a new sign-in requiring repository access
+cannot complete until the key is available. Never put the key in logs or client-side configuration.
 
 1. In GitHub, open **Settings > Developer settings > OAuth Apps > New OAuth App**
    ([registration page](https://github.com/settings/applications/new)).
 2. Set **Application name** to `Factory Local`, **Homepage URL** to
    `http://localhost:3000`, and **Authorization callback URL** to
    `http://localhost:3001/api/auth/github/callback`. Leave device flow and callback
-   wildcard matching disabled. Token expiration can remain enabled: the current
-   adapter uses the token immediately for identity lookup, then discards it.
+   wildcard matching disabled. Sign-in retains an encrypted token for repository operations
+   only for an admitted active member; the workspace registers its SSH key when ready.
 3. Register the application. Copy its **Client ID** into `FACTORY_GITHUB_CLIENT_ID`.
    Generate a **client secret** and put it only in `FACTORY_GITHUB_CLIENT_SECRET`
    in the local `.env`.
@@ -219,7 +229,8 @@ These regressions do not replace human acceptance or prove live OAuth behavior.
 For the PostgreSQL subset, run `pnpm db:build` followed by
 `node scripts/database/identity-integration.mjs`. Its disposable database covers
 supervisor connection loss and competing ownership, including recovery through the
-same HTTP router without restarting the API.
+same HTTP router without restarting the API. It also exercises project imports, deletion
+and associated conversations against PostgreSQL.
 
 ## Local PostgreSQL
 
@@ -315,9 +326,10 @@ Containers retain a fixed non-root user, read-only root, bounded tmpfs/logs, dro
 capabilities, no-new-privileges, isolated per-user internal networks and no published
 ports. They receive neither
 host bind mounts, platform credentials nor the Docker socket. Named volumes have no
-portable disk quota. Only the approved OpenAI and Anthropic HTTPS destinations pass through
-the shared proxy; direct Internet, host/LAN and other-user access remain blocked. Package downloads,
-GitHub cloning and development-server publishing are not enabled in this increment.
+portable disk quota. The approved OpenAI and Anthropic destinations and GitHub SSH at
+`ssh.github.com:443` pass through the shared proxy; direct Internet, host/LAN and
+other-user access remain blocked. Package downloads and development-server publishing
+are not enabled. Full-access agents can use the SSH key with the member’s GitHub permissions.
 
 A prepared image with a different policy is not applied to existing containers. During
 local development, a fresh database creates new environments; existing Docker homes are
@@ -423,7 +435,7 @@ prove already-running manual Codex requests stopped;
 use **Stop environment** when all processes must end. Factory sign-out leaves an already
 connected Codex account saved in its owner's home.
 
-The proxy allows the OpenAI and Anthropic hosts listed in [squid.conf](../infra/egress/squid.conf)
+The proxy allows the OpenAI, Anthropic and GitHub SSH hosts listed in [squid.conf](../infra/egress/squid.conf)
 over HTTPS CONNECT on port 443. Direct egress and private destinations are refused. If the
 proxy is down, provider settings report unavailable while local terminal work continues;
 local account cancellation/logout does not require the proxy. No HTTP endpoint can

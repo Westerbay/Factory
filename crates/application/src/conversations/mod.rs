@@ -2,10 +2,11 @@
 pub mod coordinator;
 mod model_probes;
 mod provider_sessions;
-use crate::environments::EnvironmentService;
+use crate::{environments::EnvironmentService, projects::ProjectService};
 use factory_core::{
     conversations::*,
     environments::{DesiredState, Environment, EnvironmentActor, EnvironmentError, ObservedState},
+    projects::{Project, ProjectState},
 };
 use std::sync::Arc;
 use uuid::Uuid;
@@ -13,14 +14,60 @@ use uuid::Uuid;
 pub struct ConversationService {
     environments: Arc<EnvironmentService>,
     store: Arc<dyn ConversationStore>,
+    projects: Option<Arc<ProjectService>>,
 }
 impl ConversationService {
     pub fn new(environments: Arc<EnvironmentService>, store: Arc<dyn ConversationStore>) -> Self {
         Self {
             environments,
             store,
+            projects: None,
         }
     }
+    /// The project-aware constructor is required for project conversations.
+    pub fn new_with_projects(
+        environments: Arc<EnvironmentService>,
+        store: Arc<dyn ConversationStore>,
+        projects: Arc<ProjectService>,
+    ) -> Self {
+        Self {
+            environments,
+            store,
+            projects: Some(projects),
+        }
+    }
+
+    /// Resolves an owned conversation and project under the current environment.
+    pub async fn context(
+        &self,
+        actor: EnvironmentActor,
+        id: Uuid,
+    ) -> Result<(Environment, Conversation, Option<Project>), ConversationError> {
+        let env = self.current_environment(actor).await?;
+        let conversation = self.store.get(actor, env.id, env.generation, id).await?;
+        let project = if let Some(project_id) = conversation.project_id {
+            let projects = self
+                .projects
+                .as_ref()
+                .ok_or(ConversationError::Unavailable)?;
+            let project = projects
+                .get(actor, project_id)
+                .await
+                .map_err(|_| ConversationError::Unavailable)?;
+            if project.user_id != actor.user_id
+                || project.environment_id != env.id
+                || project.state != ProjectState::Ready
+            {
+                return Err(ConversationError::Conflict);
+            }
+            Some(project)
+        } else {
+            None
+        };
+        self.same_environment(actor, &env).await?;
+        Ok((env, conversation, project))
+    }
+
     pub async fn current_environment(
         &self,
         actor: EnvironmentActor,
@@ -42,6 +89,19 @@ impl ConversationService {
     pub async fn create(&self, actor: EnvironmentActor) -> Result<Conversation, ConversationError> {
         let env = self.current_environment(actor).await?;
         self.store.create(actor, env.id, env.generation).await
+    }
+    pub async fn create_in_project(
+        &self,
+        actor: EnvironmentActor,
+        project_id: Option<Uuid>,
+    ) -> Result<Conversation, ConversationError> {
+        if project_id.is_some() && self.projects.is_none() {
+            return Err(ConversationError::Unavailable);
+        }
+        let env = self.current_environment(actor).await?;
+        self.store
+            .create_in_project(actor, env.id, env.generation, project_id)
+            .await
     }
     pub async fn list(
         &self,

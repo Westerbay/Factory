@@ -1,5 +1,3 @@
-import { SquarePen } from "lucide-react"
-
 import { Button } from "../../components/ui/button"
 import type { Conversation } from "./api"
 
@@ -20,7 +18,6 @@ export function ConversationNavigation({
   hasOlder,
   loadingMore,
   failed,
-  onCreate,
   onSelect,
   onLoadOlder,
   onRetry,
@@ -32,23 +29,15 @@ export function ConversationNavigation({
   hasOlder: boolean
   loadingMore: boolean
   failed: boolean
-  onCreate: () => void
   onSelect: (id: string) => void
   onLoadOlder: () => void
   onRetry: () => void
 }) {
   return (
     <div className="conversation-navigation">
-      <Button
-        variant="ghost"
-        className="conversation-new"
-        onClick={onCreate}
-        disabled={!available || busy}
-      >
-        <SquarePen aria-hidden="true" size={16} />
-        New chat
-      </Button>
-      <p className="conversation-list-label">Chats</p>
+      {(conversations.length > 0 || hasOlder || failed) && (
+        <p className="conversation-list-label">Other chats</p>
+      )}
       <nav className="conversation-list" aria-label="Conversations">
         {conversations.map((conversation) => {
           const label = conversationLabel(conversation)

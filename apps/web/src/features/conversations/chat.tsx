@@ -9,10 +9,15 @@ import {
 } from "react"
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowDown } from "lucide-react"
+import { ArrowDown, SquarePen } from "lucide-react"
 
 import { Button } from "../../components/ui/button"
 import { LoadingState } from "../../components/ui/loading-state"
+import { ProjectNavigation } from "../projects/project-navigation"
+import type { ProjectWorkspace } from "../projects/use-projects"
+import { projectWarnings } from "../projects/state"
+import { useProjectVerification } from "../projects/use-project-verification"
+import * as projectApi from "../projects/api"
 import { ChatComposer } from "./chat-composer"
 import {
   ConversationNavigation,
@@ -45,26 +50,41 @@ type ChatLayout = {
   navigation: ReactNode
   conversation: ReactNode
   title: string
+  conversationId?: string
+  projectName?: string
+  projectWarnings?: string[]
 }
 
 export function Chat({
   available,
+  projectWorkspace,
   connectedProviders,
   resuming = false,
+  navigationVisible = true,
   renderLayout,
 }: {
   available: boolean
+  projectWorkspace: ProjectWorkspace
   connectedProviders: { id: string; name: string }[]
   resuming?: boolean
+  navigationVisible?: boolean
   renderLayout: (parts: ChatLayout) => ReactNode
 }) {
   const { state: session, controller: sessionController } = useSession()
   const queryClient = useQueryClient()
+  const closeProjectPicker = projectWorkspace.setPickerOpen
+  useEffect(() => {
+    if (!navigationVisible) closeProjectPicker(false)
+  }, [navigationVisible, closeProjectPicker])
   const [conversations, setConversations] = useState<api.Conversation[]>([])
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
   const listGeneration = useRef(0)
   const [selected, setSelected] = useState<string>()
+  const [referencedProject, setReferencedProject] = useState<{
+    project: projectApi.Project
+    version: number
+  }>()
   const selectedRef = useRef<string | undefined>(undefined)
   selectedRef.current = selected
   const [history, setHistory] = useState<api.History>()
@@ -345,9 +365,13 @@ export function Chat({
       if (!signal.aborted) setLoadingMore(false)
     }
   }
-  function newConversation() {
+  function newConversation(projectId?: string) {
     void perform(async () => {
-      const created = await api.create(csrf, lifetime.current!.signal)
+      const created = await api.create(
+        csrf,
+        lifetime.current!.signal,
+        projectId
+      )
       if (!lifetime.current || lifetime.current.signal.aborted) return
       setConversations((items) => [created, ...items])
       setSelected(created.id)
@@ -542,8 +566,52 @@ export function Chat({
   const selectedConversation = conversations.find(
     (item) => item.id === selected
   )
+  const projectId = selectedConversation?.projectId ?? undefined
+  const listedProject = projectWorkspace.projects.find(
+    (item) => item.id === projectId
+  )
+  const project =
+    listedProject ??
+    (referencedProject &&
+    referencedProject.project.id === projectId &&
+    referencedProject.version === projectWorkspace.refreshVersion
+      ? referencedProject.project
+      : undefined)
+  useEffect(() => {
+    if (listedProject?.id)
+      projectWorkspace.setSelectedProjectId(listedProject.id)
+  }, [listedProject?.id, projectWorkspace.setSelectedProjectId])
+  const projectVerification = useProjectVerification(
+    projectId,
+    available &&
+      projectWorkspace.connection?.status !== "disconnected" &&
+      project?.state === "ready",
+    selected
+  )
+  const warnings = projectWarnings(
+    projectId,
+    projectVerification,
+    project?.renamedSinceClone ?? false
+  )
+  useEffect(() => {
+    if (!projectId || listedProject || !available) return
+    const controller = new AbortController()
+    void projectApi
+      .get(projectId, controller.signal)
+      .then((value) => {
+        if (!controller.signal.aborted)
+          setReferencedProject({
+            project: value,
+            version: projectWorkspace.refreshVersion,
+          })
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setReferencedProject(undefined)
+      })
+    return () => controller.abort()
+  }, [projectId, listedProject, available, projectWorkspace.refreshVersion])
   const title = selectedConversation
-    ? conversationLabel(selectedConversation)
+    ? `${project?.fullName ? `${project.fullName} · ` : ""}${conversationLabel(selectedConversation)}`
     : "New chat"
   const outcome = resuming
     ? "Checking workspace…"
@@ -577,20 +645,62 @@ export function Chat({
 
   return renderLayout({
     title,
+    conversationId: selected,
+    projectName: project?.fullName,
+    projectWarnings: warnings,
     navigation: (
-      <ConversationNavigation
-        conversations={conversations}
-        selected={selected}
-        available={available}
-        busy={busy}
-        hasOlder={Boolean(nextCursor)}
-        loadingMore={loadingMore}
-        failed={listError}
-        onCreate={newConversation}
-        onSelect={selectConversation}
-        onLoadOlder={() => void loadOlder()}
-        onRetry={retryList}
-      />
+      <div className="workspace-navigation">
+        <Button
+          variant="ghost"
+          className="conversation-new"
+          onClick={() => newConversation()}
+          disabled={!available || busy}
+        >
+          <SquarePen aria-hidden="true" size={16} />
+          New chat
+        </Button>
+        <ProjectNavigation
+          workspace={projectWorkspace}
+          available={available}
+          busy={busy}
+          onNewChat={newConversation}
+          conversations={conversations}
+          selectedConversation={selected}
+          onSelectConversation={selectConversation}
+          onProjectRemoved={(id) => {
+            const removed = conversations.filter(
+              (item) => item.projectId === id
+            )
+            setConversations((items) =>
+              items.filter((item) => item.projectId !== id)
+            )
+            if (removed.some((item) => item.id === selectedRef.current)) {
+              setSelected(undefined)
+              setHistory(undefined)
+              setVerifiedHistory(undefined)
+              setInput("")
+            }
+          }}
+        />
+        <ConversationNavigation
+          conversations={conversations.filter(
+            (conversation) =>
+              !conversation.projectId ||
+              !projectWorkspace.projects.some(
+                (project) => project.id === conversation.projectId
+              )
+          )}
+          selected={selected}
+          available={available}
+          busy={busy}
+          hasOlder={Boolean(nextCursor)}
+          loadingMore={loadingMore}
+          failed={listError}
+          onSelect={selectConversation}
+          onLoadOlder={() => void loadOlder()}
+          onRetry={retryList}
+        />
+      </div>
     ),
     conversation: (
       <section
@@ -598,6 +708,11 @@ export function Chat({
         aria-label="Assistant conversation"
         aria-busy={resuming}
       >
+        {warnings.map((warning) => (
+          <p key={warning} className="chat-project-warning" role="status">
+            {warning}
+          </p>
+        ))}
         <div
           className="chat-messages"
           ref={observeMessages}
@@ -612,7 +727,7 @@ export function Chat({
                 <h2>What are we building?</h2>
                 <Button
                   variant="primary"
-                  onClick={newConversation}
+                  onClick={() => newConversation()}
                   disabled={!available || busy}
                 >
                   New chat

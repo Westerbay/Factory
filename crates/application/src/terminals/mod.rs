@@ -1,13 +1,17 @@
 //! One-use attachment authorization and serialized terminal ownership.
-use crate::environments::EnvironmentService;
+use crate::{conversations::ConversationService, environments::EnvironmentService};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use factory_core::{
+    conversations::ConversationError,
     environments::{Environment, EnvironmentActor},
     identity::CredentialHash,
+    projects::Project,
     terminals::*,
 };
 use std::{
     collections::HashMap,
+    future::Future,
+    pin::Pin,
     sync::{Arc, Mutex},
 };
 use tokio::sync::{Mutex as AsyncMutex, watch};
@@ -15,17 +19,57 @@ use uuid::Uuid;
 
 pub const TICKET_TTL_SECONDS: i64 = 30;
 type Slot = Arc<AsyncMutex<Option<Active>>>;
+type ProjectResolution<'a> =
+    Pin<Box<dyn Future<Output = Result<Option<Project>, TerminalError>> + Send + 'a>>;
+
+/// Resolves the conversation and validates its owner and environment for each attachment.
+trait TerminalConversationAccess: Send + Sync {
+    fn project<'a>(
+        &'a self,
+        actor: EnvironmentActor,
+        expected: &'a Environment,
+        conversation: Uuid,
+    ) -> ProjectResolution<'a>;
+}
+impl TerminalConversationAccess for ConversationService {
+    fn project<'a>(
+        &'a self,
+        actor: EnvironmentActor,
+        expected: &'a Environment,
+        conversation: Uuid,
+    ) -> ProjectResolution<'a> {
+        Box::pin(async move {
+            let (environment, _, project) =
+                self.context(actor, conversation)
+                    .await
+                    .map_err(|error| match error {
+                        ConversationError::Unauthorized => TerminalError::Unauthorized,
+                        ConversationError::Invalid => TerminalError::InvalidInput,
+                        ConversationError::NotFound | ConversationError::Conflict => {
+                            TerminalError::Conflict
+                        }
+                        ConversationError::Unavailable | ConversationError::ContextLimit => {
+                            TerminalError::Unavailable
+                        }
+                    })?;
+            require_same_environment(expected, &environment)?;
+            Ok(project)
+        })
+    }
+}
 
 struct Active {
     id: Uuid,
     environment: Environment,
     handle: String,
+    conversation: Option<Uuid>,
     replaced: watch::Sender<bool>,
 }
 
 struct Ticket {
     actor: EnvironmentActor,
     environment: Environment,
+    conversation: Option<Uuid>,
     expires_at: DateTime<Utc>,
     take_over: bool,
     previous: Option<Uuid>,
@@ -45,7 +89,8 @@ pub struct TerminalAttachment {
 pub struct TerminalService {
     environments: Arc<EnvironmentService>,
     runtime: Arc<dyn TerminalRuntime>,
-    slots: Mutex<HashMap<Uuid, Slot>>,
+    conversations: Option<Arc<dyn TerminalConversationAccess>>,
+    slots: Mutex<HashMap<(Uuid, Option<Uuid>), Slot>>,
     // This map is exclusively for terminal tickets: no cross-purpose consumption.
     tickets: Mutex<HashMap<CredentialHash, Ticket>>,
 }
@@ -55,12 +100,43 @@ impl TerminalService {
         Self {
             environments,
             runtime,
+            conversations: None,
             slots: Mutex::new(HashMap::new()),
             tickets: Mutex::new(HashMap::new()),
         }
     }
 
-    fn slot(&self, id: Uuid) -> Result<Slot, TerminalError> {
+    pub fn new_with_conversations(
+        environments: Arc<EnvironmentService>,
+        runtime: Arc<dyn TerminalRuntime>,
+        conversations: Arc<ConversationService>,
+    ) -> Self {
+        Self {
+            environments,
+            runtime,
+            conversations: Some(conversations),
+            slots: Mutex::new(HashMap::new()),
+            tickets: Mutex::new(HashMap::new()),
+        }
+    }
+
+    async fn conversation_project(
+        &self,
+        actor: EnvironmentActor,
+        expected: &Environment,
+        conversation: Uuid,
+    ) -> Result<Option<Project>, TerminalError> {
+        if conversation.is_nil() {
+            return Err(TerminalError::InvalidInput);
+        }
+        let service = self
+            .conversations
+            .as_ref()
+            .ok_or(TerminalError::Unavailable)?;
+        service.project(actor, expected, conversation).await
+    }
+
+    fn slot(&self, id: (Uuid, Option<Uuid>)) -> Result<Slot, TerminalError> {
         let mut slots = self.slots.lock().map_err(|_| TerminalError::Unavailable)?;
         slots.retain(|_, slot| {
             Arc::strong_count(slot) > 1 || slot.try_lock().map_or(true, |active| active.is_some())
@@ -80,8 +156,42 @@ impl TerminalService {
         take_over: bool,
         session_expires_at: DateTime<Utc>,
     ) -> Result<DateTime<Utc>, TerminalError> {
+        self.issue_inner(actor, hash, take_over, session_expires_at, None)
+            .await
+    }
+
+    /// Issue a ticket scoped to an owned conversation; never accepts a path from the client.
+    pub async fn issue_for_conversation(
+        &self,
+        actor: EnvironmentActor,
+        hash: CredentialHash,
+        take_over: bool,
+        session_expires_at: DateTime<Utc>,
+        conversation_id: Uuid,
+    ) -> Result<DateTime<Utc>, TerminalError> {
+        self.issue_inner(
+            actor,
+            hash,
+            take_over,
+            session_expires_at,
+            Some(conversation_id),
+        )
+        .await
+    }
+
+    async fn issue_inner(
+        &self,
+        actor: EnvironmentActor,
+        hash: CredentialHash,
+        take_over: bool,
+        session_expires_at: DateTime<Utc>,
+        conversation: Option<Uuid>,
+    ) -> Result<DateTime<Utc>, TerminalError> {
         let environment = self.environments.require_running(actor).await?;
-        let slot = self.slot(environment.id)?;
+        if let Some(id) = conversation {
+            self.conversation_project(actor, &environment, id).await?;
+        }
+        let slot = self.slot((environment.id, conversation))?;
         let active = slot.lock().await;
         if active.is_some() && !take_over {
             return Err(TerminalError::Conflict);
@@ -96,15 +206,17 @@ impl TerminalService {
             .tickets
             .lock()
             .map_err(|_| TerminalError::Unavailable)?;
-        // At most one pending ticket per user. Issuing again invalidates the old
-        // ticket; expired entries retain neither an environment lock nor secrets.
-        tickets
-            .retain(|_, ticket| ticket.expires_at > now && ticket.actor.user_id != actor.user_id);
+        // One pending ticket for this user and conversation; other chats remain valid.
+        tickets.retain(|_, ticket| {
+            ticket.expires_at > now
+                && !(ticket.actor.user_id == actor.user_id && ticket.conversation == conversation)
+        });
         tickets.insert(
             hash,
             Ticket {
                 actor,
                 environment,
+                conversation,
                 expires_at,
                 take_over,
                 previous: active.as_ref().map(|active| active.id),
@@ -137,6 +249,14 @@ impl TerminalService {
             return Err(TerminalError::InvalidTicket);
         }
         require_same_environment(&ticket.environment, &environment)?;
+        let project = if let Some(id) = ticket.conversation {
+            self.conversation_project(actor, &environment, id).await?
+        } else {
+            None
+        };
+        if ticket.expires_at <= Utc::now() {
+            return Err(TerminalError::InvalidTicket);
+        }
         if active.as_ref().map(|active| active.id) != ticket.previous {
             return Err(TerminalError::Conflict);
         }
@@ -145,18 +265,31 @@ impl TerminalService {
                 return Err(TerminalError::Conflict);
             }
             previous.replaced.send_replace(true);
-            self.runtime
-                .detach(&previous.environment, &previous.handle)
-                .await?;
+            if let Some(id) = previous.conversation {
+                self.runtime
+                    .detach_conversation(&previous.environment, id, &previous.handle)
+                    .await?;
+            } else {
+                self.runtime
+                    .detach(&previous.environment, &previous.handle)
+                    .await?;
+            }
         }
         *active = None;
-        let process = self.runtime.attach(&environment).await?;
+        let process = if let Some(id) = ticket.conversation {
+            self.runtime
+                .attach_conversation(&environment, id, project.as_ref())
+                .await?
+        } else {
+            self.runtime.attach(&environment).await?
+        };
         let id = Uuid::new_v4();
         let (replaced, receiver) = watch::channel(false);
         *active = Some(Active {
             id,
             environment: environment.clone(),
             handle: process.handle,
+            conversation: ticket.conversation,
             replaced,
         });
         Ok(TerminalAttachment {
@@ -192,7 +325,12 @@ impl TerminalService {
             return Err(TerminalError::Conflict);
         }
         let environment = self.environments.require_running(actor).await?;
-        require_same_environment(expected, &environment)
+        require_same_environment(expected, &environment)?;
+        if let Some(conversation) = active.and_then(|current| current.conversation) {
+            self.conversation_project(actor, &environment, conversation)
+                .await?;
+        }
+        Ok(())
     }
 
     pub async fn write(
@@ -250,9 +388,15 @@ impl TerminalService {
         let mut active = slot.lock().await;
         if let Some(current) = active.as_ref().filter(|current| current.id == id) {
             current.replaced.send_replace(true);
-            self.runtime
-                .detach(&current.environment, &current.handle)
-                .await?;
+            if let Some(id) = current.conversation {
+                self.runtime
+                    .detach_conversation(&current.environment, id, &current.handle)
+                    .await?;
+            } else {
+                self.runtime
+                    .detach(&current.environment, &current.handle)
+                    .await?;
+            }
             *active = None;
         }
         Ok(())

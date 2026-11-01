@@ -59,7 +59,7 @@ LABEL io.factory.claude.version="2.1.284"
 RUN printf '%s\n' 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261027T000000Z bookworm main' \
       'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20261027T000000Z bookworm-security main' > /etc/apt/sources.list \
     && rm /etc/apt/sources.list.d/debian.sources \
-    && apt-get update && apt-get install -y --no-install-recommends bash zsh tmux git neofetch ca-certificates util-linux \
+    && apt-get update && apt-get install -y --no-install-recommends bash zsh tmux git neofetch ca-certificates util-linux openssh-client netcat-openbsd python3 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 10000 factory \
     && useradd -u 10000 -g factory -d /home/factory -s /bin/zsh factory \
@@ -71,8 +71,15 @@ COPY --from=codex /opt/oh-my-zsh /opt/oh-my-zsh
 COPY tmux.conf /etc/factory/tmux.conf
 COPY zshrc /etc/factory/zshrc
 COPY auth-controller.sh /usr/local/bin/factory-auth-controller
+COPY project-controller.py /usr/local/bin/factory-project-controller
+COPY github-ssh-config /etc/factory/github-ssh-config
+COPY github-known-hosts /etc/factory/github-known-hosts
 # Avoid an interactive first-run wizard when the persistent home has no zsh files.
 RUN chmod 0555 /usr/local/bin/factory-auth-controller \
+    && chmod 0555 /usr/local/bin/factory-project-controller \
+    && mkdir -p /etc/ssh/ssh_config.d \
+    && cp /etc/factory/github-ssh-config /etc/ssh/ssh_config.d/10-factory-github.conf \
+    && git config --system include.path /home/factory/.factory/git-identity \
     && printf '\nsource /etc/factory/zshrc\n' >> /etc/zsh/zshrc \
     && : > "/usr/share/zsh/$(zsh -fc 'print -r -- $ZSH_VERSION')/scripts/newuser" \
     && ln -s /opt/codex/bin/codex /usr/local/bin/codex \
@@ -80,5 +87,5 @@ RUN chmod 0555 /usr/local/bin/factory-auth-controller \
 ENV HOME=/home/factory
 USER 10000:10000
 WORKDIR /home/factory/Documents
-ENTRYPOINT ["/bin/sleep"]
-CMD ["infinity"]
+ENTRYPOINT ["/usr/local/bin/factory-project-controller"]
+CMD ["--bootstrap"]

@@ -1,6 +1,6 @@
 //! Actual provider execution capabilities consumed by the application.
 //! Provider references are internal and must not be exposed in HTTP projections.
-use crate::environments::Environment;
+use crate::{environments::Environment, projects::Project};
 use async_trait::async_trait;
 use uuid::Uuid;
 
@@ -179,6 +179,22 @@ pub trait ExecutionRuntime: Send + Sync {
         effort: Option<&str>,
         input: &str,
     ) -> Result<ExecutionSession, ExecutionError>;
+    /// Implementations must reject project execution unless the directory was verified.
+    async fn open_project(
+        &self,
+        environment: &Environment,
+        project: Option<&Project>,
+        provider_thread: Option<&str>,
+        model: &str,
+        effort: Option<&str>,
+        input: &str,
+    ) -> Result<ExecutionSession, ExecutionError> {
+        if project.is_some() {
+            return Err(ExecutionError::PreflightUnavailable);
+        }
+        self.open(environment, provider_thread, model, effort, input)
+            .await
+    }
 }
 
 #[cfg(test)]

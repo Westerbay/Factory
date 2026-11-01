@@ -62,10 +62,14 @@ export function Modal({
       aria-labelledby={titleId}
       aria-describedby={descriptionId}
       onCancel={(event) => {
+        // Nested dialogs must handle their own Escape without closing this one.
+        if (event.target !== event.currentTarget) return
         event.preventDefault()
         onClose()
       }}
-      onClose={() => {
+      onClose={(event) => {
+        // React bubbles close from a nested dialog through this component.
+        if (event.target !== event.currentTarget) return
         if (controlledCloses.current > 0) {
           controlledCloses.current--
           return

@@ -10,14 +10,21 @@ use uuid::Uuid;
 pub struct ConversationView {
     pub id: Uuid,
     pub created_at: String,
+    pub project_id: Option<Uuid>,
 }
 impl From<Conversation> for ConversationView {
     fn from(c: Conversation) -> Self {
         Self {
             id: c.id,
             created_at: c.created_at.to_rfc3339(),
+            project_id: c.project_id,
         }
     }
+}
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateConversationBody {
+    pub project_id: Option<Uuid>,
 }
 #[derive(Clone, Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -203,6 +210,7 @@ mod tests {
         let view = ConversationView::from(Conversation {
             id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
+            project_id: None,
             provider_thread: Some("secret-native-thread".into()),
             created_at: chrono::Utc::now(),
         });
@@ -217,6 +225,7 @@ mod tests {
             conversation: Conversation {
                 id: Uuid::new_v4(),
                 user_id: Uuid::new_v4(),
+                project_id: None,
                 provider_thread: None,
                 created_at: chrono::Utc::now(),
             },

@@ -17,9 +17,17 @@ import "@xterm/xterm/css/xterm.css"
 import "./terminal.css"
 
 export default function TerminalSession({
+  conversationId,
+  projectName,
+  onOwnDetach,
+  consumeRecentOwnDetach,
   expanded,
   onExpandedChange,
 }: {
+  conversationId?: string
+  projectName?: string
+  onOwnDetach: () => void
+  consumeRecentOwnDetach: () => boolean
   expanded: boolean
   onExpandedChange: (expanded: boolean) => void
 }) {
@@ -36,6 +44,9 @@ export default function TerminalSession({
   const controller = useMemo(
     () =>
       new TerminalController({
+        conversationId,
+        onOwnDetach,
+        consumeRecentOwnDetach,
         session,
         request: requestAttachment,
         openSocket: openTerminalSocket,
@@ -48,7 +59,8 @@ export default function TerminalSession({
           },
         },
       }),
-    [session]
+    // The panel owns stable state; callbacks refer to the current terminal key.
+    [session, conversationId]
   )
   const state = useSyncExternalStore(
     controller.subscribe,
@@ -188,7 +200,7 @@ export default function TerminalSession({
       >
         <h2>
           <TerminalSquare size={15} aria-hidden="true" />
-          Terminal
+          Terminal{projectName ? ` · ${projectName}` : ""}
         </h2>
         <div className="terminal-header-actions">
           <IconButton

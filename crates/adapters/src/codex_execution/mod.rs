@@ -4,8 +4,13 @@ use crate::environments::{
     DockerEnvironmentRuntime,
     process::{DockerProcess, FixedProcess, ProcessStartError},
 };
+use crate::projects::{DockerProjectRuntime, ProjectDirectory};
 use async_trait::async_trait;
-use factory_core::{conversations::execution::*, environments::Environment};
+use factory_core::{
+    conversations::execution::*,
+    environments::Environment,
+    projects::{Project, ProjectState},
+};
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet},
@@ -141,6 +146,18 @@ impl ExecutionRuntime for CodexExecutionAdapter {
         effort: Option<&str>,
         input: &str,
     ) -> Result<ExecutionSession, ExecutionError> {
+        self.open_project(env, None, provider_thread, model, effort, input)
+            .await
+    }
+    async fn open_project(
+        &self,
+        env: &Environment,
+        project: Option<&Project>,
+        provider_thread: Option<&str>,
+        model: &str,
+        effort: Option<&str>,
+        input: &str,
+    ) -> Result<ExecutionSession, ExecutionError> {
         if !valid(model, 512)
             || !valid(input, MAX_TEXT)
             || provider_thread.is_some_and(|id| !valid(id, 512))
@@ -148,6 +165,19 @@ impl ExecutionRuntime for CodexExecutionAdapter {
         {
             return Err(ExecutionError::Invalid);
         }
+        let cwd = if let Some(project) = project {
+            if project.state != ProjectState::Ready
+                || DockerProjectRuntime::new(self.runtime.clone())
+                    .inspect_project(env, project)
+                    .await
+                    != Ok(ProjectDirectory::Ready)
+            {
+                return Err(ExecutionError::PreflightUnavailable);
+            }
+            format!("/home/factory/Documents/{}", project.directory)
+        } else {
+            "/home/factory/Documents".to_owned()
+        };
         let (process_id, transport) = self.process(env).await?;
         let (commands, receiver) = mpsc::channel(LIMIT);
         let (sender, events) = mpsc::channel(LIMIT);
@@ -158,6 +188,7 @@ impl ExecutionRuntime for CodexExecutionAdapter {
         let thread = provider_thread.map(str::to_owned);
         tokio::spawn(async move {
             let result = Worker::new(transport, receiver, sender.clone(), model, effort, input)
+                .with_cwd(cwd)
                 .run(thread)
                 .await;
             // Process exit is necessary, but never by itself proves descendant cleanup.
@@ -259,6 +290,7 @@ struct Worker {
     model: String,
     effort: Option<String>,
     input: String,
+    cwd: String,
     thread: String,
     turn: Option<String>,
     requests: HashMap<Uuid, Request>,
@@ -288,6 +320,7 @@ impl Worker {
             model,
             effort,
             input,
+            cwd: "/home/factory/Documents".to_owned(),
             thread: String::new(),
             turn: None,
             requests: HashMap::new(),
@@ -296,16 +329,17 @@ impl Worker {
             stopping: false,
         }
     }
+    fn with_cwd(mut self, cwd: String) -> Self {
+        self.cwd = cwd;
+        self
+    }
     async fn run(mut self, previous: Option<String>) -> Result<ExecutionEvent, ExecutionError> {
         self.transport.initialize().await?;
         let requested_thread = previous.clone();
         let (method, params) = if let Some(id) = previous {
-            (
-                "thread/resume",
-                json!({"threadId":id,"cwd":"/home/factory/Documents"}),
-            )
+            ("thread/resume", json!({"threadId":id,"cwd":&self.cwd}))
         } else {
-            ("thread/start", json!({"cwd":"/home/factory/Documents"}))
+            ("thread/start", json!({"cwd":&self.cwd}))
         };
         let started = self.transport.request(method, params).await?;
         self.thread = text(&started["thread"]["id"], 512)?;
@@ -769,6 +803,59 @@ mod protocol_tests {
         .await
         .unwrap();
     }
+    #[tokio::test]
+    async fn project_cwd_is_sent_for_thread_start_and_resume() {
+        for previous in [None, Some("existing-thread".to_owned())] {
+            let (client, server) = tokio::io::duplex(65536);
+            let (output_tx, output_rx) = mpsc::channel(8);
+            let output = stream::unfold(output_rx, |mut rx| async move {
+                rx.recv().await.map(|v| (v, rx))
+            });
+            let transport = Transport::new(Box::pin(client), Box::pin(output));
+            let (_command_tx, command_rx) = mpsc::channel(4);
+            let (event_tx, _event_rx) = mpsc::channel(4);
+            let requested = previous.clone();
+            let worker = tokio::spawn(
+                Worker::new(
+                    transport,
+                    command_rx,
+                    event_tx,
+                    "model".into(),
+                    None,
+                    "input".into(),
+                )
+                .with_cwd("/home/factory/Documents/project-fixture".into())
+                .run(previous),
+            );
+            let mut server = BufReader::new(server);
+            let init = read_request(&mut server).await;
+            write_frame(
+                &output_tx,
+                json!({"id":init["id"],"result":{"userAgent":"fixture"}}),
+            )
+            .await;
+            assert_eq!(read_request(&mut server).await["method"], "initialized");
+            let start = read_request(&mut server).await;
+            assert_eq!(
+                start["method"],
+                if requested.is_some() {
+                    "thread/resume"
+                } else {
+                    "thread/start"
+                }
+            );
+            assert_eq!(
+                start["params"]["cwd"],
+                "/home/factory/Documents/project-fixture"
+            );
+            if let Some(id) = requested {
+                assert_eq!(start["params"]["threadId"], id);
+            }
+            worker.abort();
+            let _ = worker.await;
+        }
+    }
+
     #[tokio::test]
     async fn observed_child_stays_active_until_its_terminal_event() {
         let output = stream::empty::<Result<LogOutput, bollard::errors::Error>>();

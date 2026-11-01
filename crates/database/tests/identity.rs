@@ -458,3 +458,380 @@ async fn owned_identity_transactions_cover_admission_revocation_and_races() {
     reopened.close().await;
     sql.close().await;
 }
+
+#[tokio::test]
+#[ignore = "requires the explicitly owned PostgreSQL integration fixture"]
+async fn repository_authorization_is_session_and_environment_bound() {
+    use factory_core::environments::EnvironmentActor;
+    let (target, db, sql) = fixture().await;
+    assert!(!db.has_repository_credentials().await.unwrap());
+    let user = Uuid::new_v4();
+    let env = Uuid::new_v4();
+    let subject = ((Uuid::new_v4().as_u128() % 9_000_000_000_000_000_000) + 1).to_string();
+    let mut session = [0; 32];
+    session[..16].copy_from_slice(Uuid::new_v4().as_bytes());
+    session[16..].copy_from_slice(Uuid::new_v4().as_bytes());
+    sqlx::query("INSERT INTO factory_identity.users(id,display_name,role,status,access_enabled_at) VALUES($1,'Repository owner','member','active',clock_timestamp())").bind(user).execute(&sql).await.unwrap();
+    sqlx::query("INSERT INTO factory_identity.external_identities(user_id,provider,issuer,subject,handle) VALUES($1,'github','https://github.com',$2,'fixture')").bind(user).bind(&subject).execute(&sql).await.unwrap();
+    sqlx::query("INSERT INTO factory_identity.sessions(token_hash,user_id,csrf_token,expires_at) VALUES($1,$2,$3,clock_timestamp()+interval '1 day')").bind(session.as_slice()).bind(user).bind("c".repeat(32)).execute(&sql).await.unwrap();
+    sqlx::query("INSERT INTO factory_identity.environments(id,user_id,installation_id,desired_state,observed_state,volume_name,container_name,image_id,policy_version) VALUES($1,$2,$3,'running','running',$4,$5,'image','1')").bind(env).bind(user).bind(Uuid::new_v4()).bind(format!("repo-v-{env}")).bind(format!("repo-c-{env}")).execute(&sql).await.unwrap();
+    let store = db.store();
+    let actor = RepositoryActor {
+        actor: EnvironmentActor {
+            user_id: user,
+            session_hash: CredentialHash(session),
+        },
+        environment_id: env,
+        generation: 1,
+    };
+    let state = CredentialHash(
+        *Uuid::new_v4()
+            .as_bytes()
+            .repeat(2)
+            .first_chunk::<32>()
+            .unwrap(),
+    );
+    let binding = CredentialHash(
+        *Uuid::new_v4()
+            .as_bytes()
+            .repeat(2)
+            .first_chunk::<32>()
+            .unwrap(),
+    );
+    store
+        .begin_repository_authorization(RepositoryAuthorizationAttempt {
+            state_hash: state,
+            binding_hash: binding,
+            verifier: "v".repeat(43),
+            actor,
+            authorization_epoch: 0,
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .take_repository_authorization(state, binding, CredentialHash([9; 32]))
+            .await,
+        Err(RepositoryAccessError::InvalidLogin)
+    ));
+    let consumed = store
+        .take_repository_authorization(state, binding, actor.actor.session_hash)
+        .await
+        .unwrap();
+    assert_eq!(consumed.actor.actor.user_id, user);
+    assert!(matches!(
+        store
+            .take_repository_authorization(state, binding, actor.actor.session_hash)
+            .await,
+        Err(RepositoryAccessError::InvalidLogin)
+    ));
+    let concurrent_state = CredentialHash(
+        *Uuid::new_v4()
+            .as_bytes()
+            .repeat(2)
+            .first_chunk::<32>()
+            .unwrap(),
+    );
+    let concurrent_binding = CredentialHash(
+        *Uuid::new_v4()
+            .as_bytes()
+            .repeat(2)
+            .first_chunk::<32>()
+            .unwrap(),
+    );
+    store
+        .begin_repository_authorization(RepositoryAuthorizationAttempt {
+            state_hash: concurrent_state,
+            binding_hash: concurrent_binding,
+            verifier: "v".repeat(43),
+            actor,
+            authorization_epoch: 0,
+        })
+        .await
+        .unwrap();
+    let (first, second) = tokio::join!(
+        store.take_repository_authorization(
+            concurrent_state,
+            concurrent_binding,
+            actor.actor.session_hash
+        ),
+        store.take_repository_authorization(
+            concurrent_state,
+            concurrent_binding,
+            actor.actor.session_hash
+        )
+    );
+    assert_ne!(first.is_ok(), second.is_ok());
+    let mut identity = VerifiedIdentity {
+        provider: "github".into(),
+        issuer: "https://github.com".into(),
+        subject: subject.clone(),
+        display_name: "Fixture".into(),
+        handle: "fixture".into(),
+    };
+    store
+        .verify_repository_identity(actor, &identity, 1)
+        .await
+        .unwrap();
+    identity.subject = if subject == "1" { "2" } else { "1" }.into();
+    assert!(matches!(
+        store.verify_repository_identity(actor, &identity, 1).await,
+        Err(RepositoryAccessError::IdentityMismatch)
+    ));
+    identity.subject = subject.clone();
+    store
+        .save_repository_credential(
+            actor,
+            &identity,
+            RepositoryCredential {
+                subject: subject.clone(),
+                authorization_epoch: 1,
+                login: "fixture".into(),
+                email: "fixture@example.test".into(),
+                encrypted: EncryptedRepositoryToken {
+                    key_id: "fixture".into(),
+                    nonce: vec![1; 12],
+                    ciphertext: vec![2; 16],
+                },
+            },
+        )
+        .await
+        .unwrap();
+    assert!(db.has_repository_credentials().await.unwrap());
+    assert_eq!(
+        store
+            .repository_credential(actor)
+            .await
+            .unwrap()
+            .unwrap()
+            .email,
+        "fixture@example.test"
+    );
+    // A consumed callback and a pending callback are both fenced by disconnect.
+    let delayed_state = CredentialHash([31; 32]);
+    let delayed_binding = CredentialHash([32; 32]);
+    store
+        .begin_repository_authorization(RepositoryAuthorizationAttempt {
+            state_hash: delayed_state,
+            binding_hash: delayed_binding,
+            verifier: "v".repeat(43),
+            actor,
+            authorization_epoch: 0,
+        })
+        .await
+        .unwrap();
+    let delayed = store
+        .take_repository_authorization(delayed_state, delayed_binding, actor.actor.session_hash)
+        .await
+        .unwrap();
+    assert_eq!(delayed.authorization_epoch, 2);
+    let pending_state = CredentialHash([33; 32]);
+    let pending_binding = CredentialHash([34; 32]);
+    store
+        .begin_repository_authorization(RepositoryAuthorizationAttempt {
+            state_hash: pending_state,
+            binding_hash: pending_binding,
+            verifier: "v".repeat(43),
+            actor,
+            authorization_epoch: 0,
+        })
+        .await
+        .unwrap();
+    store.delete_repository_credential(actor).await.unwrap();
+    assert!(!db.has_repository_credentials().await.unwrap());
+    assert!(matches!(
+        store
+            .take_repository_authorization(pending_state, pending_binding, actor.actor.session_hash)
+            .await,
+        Err(RepositoryAccessError::InvalidLogin)
+    ));
+    assert!(matches!(
+        store
+            .validate_repository_epoch(actor, delayed.authorization_epoch)
+            .await,
+        Err(RepositoryAccessError::ProviderUnauthorized)
+    ));
+    let stale = RepositoryCredential {
+        subject: subject.clone(),
+        login: "fixture".into(),
+        email: "fixture@example.test".into(),
+        authorization_epoch: delayed.authorization_epoch,
+        encrypted: EncryptedRepositoryToken {
+            key_id: "fixture".into(),
+            nonce: vec![1; 12],
+            ciphertext: vec![2; 16],
+        },
+    };
+    assert!(matches!(
+        store
+            .save_repository_credential(actor, &identity, stale)
+            .await,
+        Err(RepositoryAccessError::ProviderUnauthorized)
+    ));
+    assert!(store.repository_credential(actor).await.unwrap().is_none());
+    db.close().await;
+    let db = IdentityDatabase::connect(&target).await.unwrap();
+    let store = db.store();
+    assert!(matches!(
+        store
+            .validate_repository_epoch(actor, delayed.authorization_epoch)
+            .await,
+        Err(RepositoryAccessError::ProviderUnauthorized)
+    ));
+
+    // A supervisor change holding the environment row must serialize with use.
+    let mut env_change = sql.begin().await.unwrap();
+    sqlx::query("UPDATE factory_identity.environments SET observed_state='stopped' WHERE id=$1")
+        .bind(env)
+        .execute(&mut *env_change)
+        .await
+        .unwrap();
+    let waiter = {
+        let store = store.clone();
+        tokio::spawn(async move { store.validate_repository_epoch(actor, 3).await })
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let blocked: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%factory_identity.environments%FOR UPDATE%'").fetch_one(&sql).await.unwrap();
+            if blocked > 0 { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.expect("repository operation waited for the environment row");
+    env_change.commit().await.unwrap();
+    assert!(matches!(
+        waiter.await.unwrap(),
+        Err(RepositoryAccessError::Conflict)
+    ));
+    sqlx::query("UPDATE factory_identity.environments SET observed_state='running' WHERE id=$1")
+        .bind(env)
+        .execute(&sql)
+        .await
+        .unwrap();
+
+    // A logout that has removed the session but not yet committed must block the
+    // credential mutation; once logout commits, it must fail rather than save.
+    let mut logout = sql.begin().await.unwrap();
+    sqlx::query("DELETE FROM factory_identity.sessions WHERE token_hash=$1")
+        .bind(session.as_slice())
+        .execute(&mut *logout)
+        .await
+        .unwrap();
+    let credential = RepositoryCredential {
+        subject: subject.clone(),
+        login: "fixture".into(),
+        email: "fixture@example.test".into(),
+        authorization_epoch: 3,
+        encrypted: EncryptedRepositoryToken {
+            key_id: "fixture".into(),
+            nonce: vec![1; 12],
+            ciphertext: vec![2; 16],
+        },
+    };
+    let writer = {
+        let store = store.clone();
+        let identity = identity.clone();
+        tokio::spawn(async move {
+            store
+                .save_repository_credential(actor, &identity, credential)
+                .await
+        })
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let blocked: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%factory_identity.sessions%FOR UPDATE%'").fetch_one(&sql).await.unwrap();
+            if blocked > 0 { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.expect("repository mutation waited for the session row");
+    logout.commit().await.unwrap();
+    assert!(matches!(
+        writer.await.unwrap(),
+        Err(RepositoryAccessError::Unauthorized)
+    ));
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM factory_identity.github_credentials WHERE user_id=$1",
+    )
+    .bind(user)
+    .fetch_one(&sql)
+    .await
+    .unwrap();
+    assert_eq!(count, 0);
+    sql.close().await;
+    db.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires the explicitly owned PostgreSQL integration fixture"]
+async fn login_repository_credential_requires_live_matching_session_and_epoch() {
+    use factory_core::environments::EnvironmentActor;
+    let (_, db, sql) = fixture().await;
+    let user = Uuid::new_v4();
+    let hash = CredentialHash([67; 32]);
+    sqlx::query("INSERT INTO factory_identity.users(id,display_name,role,status,access_enabled_at) VALUES($1,'Fixture','member','active',clock_timestamp())").bind(user).execute(&sql).await.unwrap();
+    sqlx::query("INSERT INTO factory_identity.external_identities(user_id,provider,issuer,subject,handle) VALUES($1,'github','https://github.com','123456','fixture')").bind(user).execute(&sql).await.unwrap();
+    sqlx::query("INSERT INTO factory_identity.sessions(token_hash,user_id,csrf_token,expires_at) VALUES($1,$2,$3,clock_timestamp()+interval '1 day')").bind(hash.0.as_slice()).bind(user).bind("c".repeat(32)).execute(&sql).await.unwrap();
+    let actor = EnvironmentActor {
+        user_id: user,
+        session_hash: hash,
+    };
+    let store = db.store();
+    let identity = VerifiedIdentity {
+        provider: "github".into(),
+        issuer: "https://github.com".into(),
+        subject: "123456".into(),
+        display_name: "Fixture".into(),
+        handle: "fixture".into(),
+    };
+    let credential = |epoch| RepositoryCredential {
+        subject: "123456".into(),
+        login: "fixture".into(),
+        email: "fixture@example.test".into(),
+        authorization_epoch: epoch,
+        encrypted: EncryptedRepositoryToken {
+            key_id: "fixture".into(),
+            nonce: vec![1; 12],
+            ciphertext: vec![2; 16],
+        },
+    };
+    assert_eq!(store.login_credential_epoch(actor).await.unwrap(), 0);
+    let mut wrong = identity.clone();
+    wrong.subject = "654321".into();
+    assert!(
+        store
+            .save_login_credential(actor, &wrong, credential(0))
+            .await
+            .is_err()
+    );
+    store
+        .save_login_credential(actor, &identity, credential(0))
+        .await
+        .unwrap();
+    assert_eq!(store.login_credential_epoch(actor).await.unwrap(), 1);
+    assert!(matches!(
+        store
+            .save_login_credential(actor, &identity, credential(0))
+            .await,
+        Err(RepositoryAccessError::ProviderUnauthorized)
+    ));
+    sqlx::query("DELETE FROM factory_identity.sessions WHERE token_hash=$1")
+        .bind(hash.0.as_slice())
+        .execute(&sql)
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .save_login_credential(actor, &identity, credential(1))
+            .await,
+        Err(RepositoryAccessError::Unauthorized)
+    ));
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM factory_identity.github_credentials WHERE user_id=$1",
+    )
+    .bind(user)
+    .fetch_one(&sql)
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
+    sql.close().await;
+    db.close().await;
+}
