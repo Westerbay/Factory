@@ -85,7 +85,7 @@ fn error(e: ConversationError) -> Response {
     let status = match e {
         ConversationError::Unauthorized => StatusCode::UNAUTHORIZED,
         ConversationError::NotFound => StatusCode::NOT_FOUND,
-        ConversationError::Conflict => StatusCode::CONFLICT,
+        ConversationError::Conflict | ConversationError::ContextLimit => StatusCode::CONFLICT,
         ConversationError::Invalid => StatusCode::BAD_REQUEST,
         ConversationError::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
     };
@@ -180,6 +180,9 @@ async fn models(
             .map(|m| ModelView {
                 id: m.id,
                 name: m.name,
+                resolved_model: m.resolved_model,
+                effort_levels: m.effort_levels,
+                default_effort: m.default_effort,
             })
             .collect(),
     ))
@@ -195,7 +198,10 @@ async fn start(
     let Path(id) = path.map_err(|_| error(ConversationError::Invalid))?;
     let Json(b) = body.map_err(|_| error(ConversationError::Invalid))?;
     let rt = s.runtime().map_err(error)?;
-    let task = tokio::spawn(async move { rt.begin(a, id, b.operation_id, b.model, b.input).await });
+    let task = tokio::spawn(async move {
+        rt.begin(a, id, b.operation_id, b.model, b.effort, b.input)
+            .await
+    });
     let run = task
         .await
         .map_err(|_| error(ConversationError::Unavailable))?

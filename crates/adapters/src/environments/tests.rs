@@ -1118,7 +1118,9 @@ async fn codex_maps_process_phase_to_recoverable_or_uncertain_execution() {
     .await;
     let adapter = CodexExecutionAdapter::new(cloned_runtime(&fixture));
     assert!(matches!(
-        adapter.open(&env, None, "fixture-model", "hello").await,
+        adapter
+            .open(&env, None, "fixture-model", None, "hello")
+            .await,
         Err(ExecutionError::LaunchUncertain)
     ));
     assert_eq!(fixture.requests.load(Ordering::SeqCst), 3);

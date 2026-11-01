@@ -24,6 +24,7 @@ use uuid::Uuid;
 struct ConnectionState {
     auth: Option<AuthState>,
     service: Option<Arc<AgentConnectionService>>,
+    claude: Option<Arc<AgentConnectionService>>,
     disconnect: Option<Arc<dyn DisconnectGuard>>,
 }
 
@@ -56,7 +57,7 @@ impl DisconnectGuard for crate::conversations::runtime::ConversationRuntime {
 }
 
 pub fn router(auth: AuthState, service: Option<Arc<AgentConnectionService>>) -> Router {
-    documented_router(Some(auth), service, None).into()
+    documented_router(Some(auth), service, None, None).into()
 }
 
 pub fn router_with_disconnect_guard(
@@ -64,12 +65,22 @@ pub fn router_with_disconnect_guard(
     service: Option<Arc<AgentConnectionService>>,
     guard: Arc<dyn DisconnectGuard>,
 ) -> Router {
-    documented_router(Some(auth), service, Some(guard)).into()
+    documented_router(Some(auth), service, None, Some(guard)).into()
+}
+
+pub fn router_with_providers(
+    auth: AuthState,
+    codex: Option<Arc<AgentConnectionService>>,
+    claude: Option<Arc<AgentConnectionService>>,
+    guard: Arc<dyn DisconnectGuard>,
+) -> Router {
+    documented_router(Some(auth), codex, claude, Some(guard)).into()
 }
 
 pub(crate) fn documented_router(
     auth: Option<AuthState>,
     service: Option<Arc<AgentConnectionService>>,
+    claude: Option<Arc<AgentConnectionService>>,
     disconnect: Option<Arc<dyn DisconnectGuard>>,
 ) -> OpenApiRouter {
     OpenApiRouter::new()
@@ -77,13 +88,174 @@ pub(crate) fn documented_router(
         .routes(routes!(login))
         .routes(routes!(cancel))
         .routes(routes!(logout))
+        .routes(routes!(read_claude))
+        .routes(routes!(login_claude))
+        .routes(routes!(cancel_claude))
+        .routes(routes!(submit_claude_code))
+        .routes(routes!(logout_claude))
         .layer(DefaultBodyLimit::max(1024))
         .layer(axum::middleware::from_fn(crate::http::response_headers))
         .with_state(ConnectionState {
             auth,
             service,
+            claude,
             disconnect,
         })
+}
+
+#[utoipa::path(get, path = "/api/agent-connections/claude", operation_id = "getClaudeConnection",
+    security(("sessionCookie" = [])), responses(
+        (status = 200, description = "Current Claude account state", body = AgentConnectionResponse),
+        (status = 401, description = "Active session required", body = ApiError),
+        (status = 409, description = "Environment changed", body = ApiError),
+        (status = 429, description = "Rate limit", body = ApiError),
+        (status = 503, description = "Identity unavailable", body = ApiError)
+    )
+)]
+async fn read_claude(
+    State(state): State<ConnectionState>,
+    headers: HeaderMap,
+) -> Result<Json<AgentConnectionResponse>, Response> {
+    let (auth, authenticated) = state.authenticate(&headers, None).await?;
+    let Some(service) = state.claude else {
+        return Ok(Json(AgentConnectionResponse::claude_unavailable()));
+    };
+    let result = lifecycle::settle(async move { service.read(actor(&authenticated)).await }).await;
+    auth.authenticate(&headers)
+        .await
+        .map_err(IntoResponse::into_response)?;
+    match result {
+        Ok(snapshot) => Ok(Json(AgentConnectionResponse::claude(snapshot))),
+        Err(problem @ (AgentConnectionError::Unauthorized | AgentConnectionError::Conflict)) => {
+            Err(error(problem))
+        }
+        Err(problem) => Ok(Json(AgentConnectionResponse::claude(
+            ConnectionSnapshot::failure(problem, chrono::Utc::now()),
+        ))),
+    }
+}
+
+#[utoipa::path(post, path = "/api/agent-connections/claude/login", operation_id = "beginClaudeLogin",
+    security(("sessionCookie" = [])),
+    params(("X-CSRF-Token" = String, Header, description = "Session CSRF token; exact frontend Origin required")),
+    responses((status = 202, body = AgentConnectionResponse), (status = 400, body = ApiError), (status = 401, body = ApiError), (status = 403, body = ApiError), (status = 409, body = ApiError), (status = 429, body = ApiError), (status = 503, body = ApiError))
+)]
+async fn login_claude(
+    State(state): State<ConnectionState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<(StatusCode, Json<AgentConnectionResponse>), Response> {
+    let (auth, authenticated) = state.authenticate(&headers, Some(false)).await?;
+    require_empty(body).map_err(IntoResponse::into_response)?;
+    let service = state
+        .claude
+        .ok_or_else(|| error(AgentConnectionError::Unavailable))?;
+    let guard = state
+        .disconnect
+        .ok_or_else(|| error(AgentConnectionError::Unavailable))?;
+    let held = guard
+        .acquire_login(actor(&authenticated))
+        .await
+        .map_err(error)?;
+    let snapshot = lifecycle::begin(auth, service, authenticated, held)
+        .await
+        .map_err(error)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(AgentConnectionResponse::claude(snapshot)),
+    ))
+}
+
+#[utoipa::path(post, path = "/api/agent-connections/claude/login/cancel", operation_id = "cancelClaudeLogin",
+    security(("sessionCookie" = [])), request_body = CancelAgentLoginBody,
+    params(("X-CSRF-Token" = String, Header, description = "Session CSRF token; exact frontend Origin required")),
+    responses((status = 200, body = AgentConnectionResponse), (status = 400, body = ApiError), (status = 401, body = ApiError), (status = 403, body = ApiError), (status = 409, body = ApiError), (status = 429, body = ApiError), (status = 503, body = ApiError))
+)]
+async fn cancel_claude(
+    State(state): State<ConnectionState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<Json<AgentConnectionResponse>, Response> {
+    let (_, authenticated) = state.authenticate(&headers, Some(true)).await?;
+    let bytes = body.map_err(|_| AuthError::invalid().into_response())?;
+    let request: CancelAgentLoginBody =
+        serde_json::from_slice(&bytes).map_err(|_| AuthError::invalid().into_response())?;
+    let service = state
+        .claude
+        .ok_or_else(|| error(AgentConnectionError::Unavailable))?;
+    let actor = actor(&authenticated);
+    lifecycle::settle(async move { service.cancel_login(actor, request.operation_id).await })
+        .await
+        .map(|snapshot| Json(AgentConnectionResponse::claude(snapshot)))
+        .map_err(error)
+}
+
+#[utoipa::path(post, path = "/api/agent-connections/claude/login/code", operation_id = "submitClaudeLoginCode",
+    security(("sessionCookie" = [])), request_body = SubmitClaudeCodeBody,
+    params(("X-CSRF-Token" = String, Header, description = "Session CSRF token; exact frontend Origin required")),
+    responses((status = 200, body = AgentConnectionResponse), (status = 400, body = ApiError), (status = 401, body = ApiError), (status = 403, body = ApiError), (status = 409, body = ApiError), (status = 429, body = ApiError), (status = 503, body = ApiError))
+)]
+async fn submit_claude_code(
+    State(state): State<ConnectionState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<Json<AgentConnectionResponse>, Response> {
+    let (auth, authenticated) = state.authenticate(&headers, Some(true)).await?;
+    let bytes = body.map_err(|_| AuthError::invalid().into_response())?;
+    let request: SubmitClaudeCodeBody =
+        serde_json::from_slice(&bytes).map_err(|_| AuthError::invalid().into_response())?;
+    let service = state
+        .claude
+        .ok_or_else(|| error(AgentConnectionError::Unavailable))?;
+    let actor = actor(&authenticated);
+    let snapshot = lifecycle::settle(async move {
+        service
+            .submit_login_code(actor, request.operation_id, &request.code)
+            .await
+    })
+    .await
+    .map_err(error)?;
+    auth.authenticate(&headers)
+        .await
+        .map_err(IntoResponse::into_response)?;
+    Ok(Json(AgentConnectionResponse::claude(snapshot)))
+}
+
+#[utoipa::path(post, path = "/api/agent-connections/claude/logout", operation_id = "logoutClaude",
+    security(("sessionCookie" = [])),
+    params(("X-CSRF-Token" = String, Header, description = "Session CSRF token; exact frontend Origin required; empty request body")),
+    responses(
+        (status = 200, description = "Provider logout confirmed", body = AgentConnectionResponse),
+        (status = 400, description = "Body must be empty", body = ApiError),
+        (status = 401, description = "Active session required", body = ApiError),
+        (status = 403, description = "Origin or CSRF rejected", body = ApiError),
+        (status = 409, description = "Active or uncertain run", body = ApiError),
+        (status = 429, description = "Rate limit", body = ApiError),
+        (status = 503, description = "Provider unavailable or cleanup uncertain", body = ApiError)
+    )
+)]
+async fn logout_claude(
+    State(state): State<ConnectionState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<Json<AgentConnectionResponse>, Response> {
+    let (_, authenticated) = state.authenticate(&headers, Some(false)).await?;
+    require_empty(body).map_err(IntoResponse::into_response)?;
+    let service = state
+        .claude
+        .ok_or_else(|| error(AgentConnectionError::Unavailable))?;
+    let guard = state
+        .disconnect
+        .ok_or_else(|| error(AgentConnectionError::Unavailable))?;
+    let actor = actor(&authenticated);
+    let held = guard.acquire_login(actor).await.map_err(error)?;
+    lifecycle::settle(async move {
+        let _held = held;
+        service.logout(actor).await
+    })
+    .await
+    .map(|snapshot| Json(AgentConnectionResponse::claude(snapshot)))
+    .map_err(error)
 }
 
 impl ConnectionState {

@@ -13,9 +13,15 @@ import "./connections.css"
 export function ProviderConnection({
   state,
   controller,
+  onClaude,
+  claudeAvailable,
+  inSettings = false,
 }: {
   state: ConnectionState
   controller: ConnectionController
+  onClaude?: () => void
+  claudeAvailable?: boolean
+  inSettings?: boolean
 }) {
   const headingId = useId()
   const statusElement = useRef<HTMLParagraphElement>(null)
@@ -33,6 +39,7 @@ export function ProviderConnection({
         ? "The account status is uncertain. Check again before connecting."
         : null)
   const checking = !connection && !state.message && !busy
+  const Heading = inSettings ? "h3" : "h1"
   const status =
     state.pending === "login"
       ? "Starting sign-in…"
@@ -56,9 +63,13 @@ export function ProviderConnection({
 
   return (
     <section className="provider-connection" aria-labelledby={headingId}>
-      <h1 id={headingId}>
-        {challenge || busy ? "Connect Codex" : "Connect a provider"}
-      </h1>
+      <Heading id={headingId}>
+        {inSettings
+          ? "Codex"
+          : challenge || busy
+            ? "Connect Codex"
+            : "Connect a provider"}
+      </Heading>
       <p
         ref={statusElement}
         tabIndex={-1}
@@ -77,7 +88,19 @@ export function ProviderConnection({
           onClick={() => act(controller.login)}
         >
           <CodeXml aria-hidden="true" />
-          <span>Codex</span>
+          <span>{inSettings ? "Connect Codex" : "Codex"}</span>
+          <ArrowRight aria-hidden="true" />
+        </Button>
+      )}
+      {onClaude && !challenge && !busy && (
+        <Button
+          variant="secondary"
+          className="provider-choice"
+          disabled={!claudeAvailable}
+          onClick={onClaude}
+        >
+          <CodeXml aria-hidden="true" />
+          <span>Claude Code</span>
           <ArrowRight aria-hidden="true" />
         </Button>
       )}

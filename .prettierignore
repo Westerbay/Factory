@@ -6,5 +6,6 @@ out/
 docs/plans/
 packages/adapters/src/codex/generated/
 .factory/
+.worktree/
 target/
 Cargo.lock

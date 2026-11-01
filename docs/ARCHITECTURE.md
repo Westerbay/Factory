@@ -11,7 +11,7 @@ no Node application server. Vite development and preview are local tooling.
 | ----------------------- | --------------------------------------------------------------- | --------------------------------------------- |
 | `crates/core`           | Identity, environment and conversation types and ports          | No application or infrastructure dependencies |
 | `crates/application`    | Identity and conversation use cases, environment reconciliation | Core                                          |
-| `crates/adapters`       | GitHub, Codex and local Docker adapters                         | Core                                          |
+| `crates/adapters`       | GitHub, agent providers and local Docker adapters               | Core                                          |
 | `crates/database`       | SQLx identity, environment and conversation persistence         | Core                                          |
 | `apps/api`              | Composition, configuration, HTTP, cookies, CORS and OpenAPI     | Application, core and concrete adapters       |
 | `apps/web/src/lib`      | Browser transport, session lifecycle and query configuration    | Browser code and generated API types          |
@@ -225,12 +225,14 @@ network membership and ownership before interactive exec. Only the proxy joins b
 the user's bridge and the installation's outbound bridge; IP forwarding is disabled.
 
 The pinned [Squid policy](../infra/egress/squid.conf) permits CONNECT on port 443 only for
-`auth.openai.com`, `chatgpt.com` and `api.openai.com`. DNS answers and actual destination
-addresses are both checked against private/reserved ranges. The proxy entrypoint installs
+the listed OpenAI and Anthropic hosts. DNS answers and actual destination addresses are
+both checked against private/reserved ranges. The proxy entrypoint installs
 its nftables policy, then drops privilege and all capabilities before serving requests.
 There is no TLS interception or tunnel-content logging. Unsupported engine/network policy
 fails closed. Proxy failure affects Codex availability without disabling the local shell;
 status reads never start the proxy or user environment.
+
+The workspace image includes an unmodified, checksum-verified Claude Code binary.
 
 ## Terminal and account operations
 
@@ -268,6 +270,12 @@ shares one environment controller across preparation, profile actions and depend
 The provider authorization view and account settings share the connection controller;
 opening settings or resuming the page never begins a new device authorization.
 Codex logout is blocked when a conversation run is active or cleanup remains uncertain.
+The [Claude account adapter](../crates/adapters/src/claude_account/mod.rs) starts the native
+CLI in a private, echo-disabled PTY, validates its official sign-in URL, and forwards the
+browser-issued one-time code without persisting it. The operation is bound to the initiating
+session and environment generation. Cancellation interrupts the CLI and checks process exit;
+only a successful account read confirms sign-in. A lock and watchdog bound abandoned logins.
+Claude logout uses the same active-run guard as Codex.
 
 ## Conversations and execution
 
@@ -280,30 +288,50 @@ completed message items. Legacy TypeScript execution history remains separate an
 not assigned to a web user.
 
 The [conversation coordinator](../crates/application/src/conversations/coordinator.rs)
-uses the [Codex execution adapter](../crates/adapters/src/codex_execution/mod.rs),
-persists the private provider thread reference before starting a turn and delivers
-bounded event updates. Account and model operations use per-user gates. Each conversation
+registers each provider's account service and execution runtime together. It dispatches
+provider-qualified models to the [Codex](../crates/adapters/src/codex_execution/mod.rs)
+or [Claude](../crates/adapters/src/claude_execution/mod.rs) adapter, persists private
+provider session references before starting a turn and delivers bounded event updates.
+Model discovery retains provider-reported resolved identifiers and supported reasoning
+efforts. Explicit effort selections are checked against a fresh discovery before launch;
+an authorized existing receipt is recovered first, and its durable model selection includes
+the effort so idempotent retries cannot change it. A conclusively failed provider discovery
+does not hide models from other providers; uncertain process cleanup still retains its lease
+and blocks discovery.
+Claude receives `--effort`; Codex receives the turn's `effort` field. An omitted effort
+leaves provider defaults in control.
+Both adapters use the bounded [JSON-lines process transport](../crates/adapters/src/json_stream.rs)
+while owning their respective protocol correlation. Account and model
+operations use per-user gates. Each conversation
 admits only one active or uncertain run; independent conversations have no Factory-wide
 run-count ceiling. Model probes reserve
 a durable lease before starting a provider process, with at most one lease per user;
 unconfirmed cleanup retains it across API restart. Overlapping discoveries for the same
 user and environment share one in-flight result; each caller validates its own session
 and environment, and completed results are not cached on the server. The web client
-keeps each user's last successful model list in session memory and clears it on account
-or session changes. Stale reads refresh after five minutes. Conflict responses use
+keeps each user's last successful model list in session memory without refetching on tab
+changes; confirmed provider connection changes refresh it and session changes clear it.
+When a connected provider has no returned models, the interface offers a retry while keeping
+the other providers usable. Sending waits until the selected model is available in the catalog.
+Conflict responses use
 progressive retries, slowing to one attempt per minute while visible; unavailability
 cancels pending reads and retries without discarding cached models.
 The [API host](../apps/api/src/conversations/runtime.rs) supplies
 task execution, timers and HTTP-compatible encoding; application policy stays in the
-coordinator. The adapter uses the pinned native app-server inside the owned environment with
-`dangerFullAccess` and approval policy `never`. Commands therefore have the container
+coordinator. Codex uses `dangerFullAccess` and approval policy `never`; Claude uses its
+native bypass-permissions mode. Commands therefore have the container
 user's access, including the home and stored credentials. The container and egress
-policy remain the outer isolation boundary; there is no Codex workspace sandbox in this
+policy remain the outer isolation boundary; there is no provider workspace sandbox in this
 mode. Unexpected actionable provider requests fail visibly. Model lists are not proof of
 account entitlement.
 
+The [provider session mapping](../crates/application/src/conversations/provider_sessions.rs)
+retains legacy Codex references and uses compare-and-set persistence when adding a
+provider reference. When a conversation changes provider, saved messages are supplied as
+context; truncated or oversized history fails rather than being silently omitted.
+
 [HTTP and SSE routes](../apps/api/src/conversations/mod.rs) require a verified session;
-mutations also require Origin and CSRF checks. Provider IDs remain internal. Completed
+mutations also require Origin and CSRF checks. Native provider session IDs remain internal. Completed
 messages are durable; streaming fragments are transient. Conversation listing uses
 user-owned keyset cursors, newest first, and provides older pages on request. History
 presents a bounded

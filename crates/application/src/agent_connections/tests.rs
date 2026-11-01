@@ -109,11 +109,11 @@ impl AgentConnectionPort for Port {
             account: None,
             error: None,
             observed_at: Utc::now(),
-            challenge: Some(DeviceChallenge {
+            challenge: Some(LoginChallenge {
                 operation_id,
                 expires_at,
                 verification_url: "https://auth.openai.com/codex/device".into(),
-                user_code: "SYNTHETIC".into(),
+                user_code: Some("SYNTHETIC".into()),
             }),
         };
         *self.state.lock().unwrap() = Some(state.clone());

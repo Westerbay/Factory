@@ -67,7 +67,7 @@ export function ConnectedProvider({
 
   return (
     <section className="provider-settings" aria-labelledby={headingId}>
-      <h2 id={headingId}>Codex</h2>
+      <h3 id={headingId}>Codex</h3>
       <p
         ref={statusElement}
         tabIndex={-1}

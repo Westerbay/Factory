@@ -36,6 +36,9 @@ fn models() -> Vec<ExecutionModel> {
     vec![ExecutionModel {
         id: "model".into(),
         name: "Model".into(),
+        resolved_model: None,
+        effort_levels: vec![],
+        default_effort: None,
     }]
 }
 

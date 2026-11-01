@@ -4,4 +4,4 @@ mod routes;
 
 pub use contracts::{AgentConnectionResponse, AgentConnectionStatus, CancelAgentLoginBody};
 pub(crate) use routes::documented_router;
-pub use routes::{DisconnectGuard, router, router_with_disconnect_guard};
+pub use routes::{DisconnectGuard, router, router_with_disconnect_guard, router_with_providers};

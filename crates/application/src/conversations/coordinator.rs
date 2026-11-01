@@ -1,6 +1,7 @@
 use super::{
     ConversationService,
     model_probes::{ModelProbeResult, ModelProbes},
+    provider_sessions,
 };
 use crate::agent_connections::AgentConnectionService;
 use factory_core::{
@@ -10,7 +11,8 @@ use factory_core::{
         RunStatus,
         execution::{
             ExecutionControl, ExecutionError, ExecutionEvent, ExecutionModel, ExecutionOutput,
-            ExecutionQuestion, ExecutionRuntime, QuestionAnswer, validate_answers,
+            ExecutionQuestion, ExecutionRuntime, QuestionAnswer, encode_selection,
+            validate_answers,
         },
     },
     environments::{Environment, EnvironmentActor},
@@ -57,6 +59,18 @@ struct Active {
     events: broadcast::Sender<ConversationEvent>,
 }
 
+struct Launch {
+    actor: EnvironmentActor,
+    env: Environment,
+    run: Run,
+    thread: Option<String>,
+    previous: Option<String>,
+    model: String,
+    effort: Option<String>,
+    input: String,
+    provider_id: &'static str,
+}
+
 #[derive(Default)]
 struct AccountGates(StdMutex<HashMap<Uuid, Weak<Mutex<()>>>>);
 impl AccountGates {
@@ -78,15 +92,23 @@ impl AccountGates {
 
 pub struct ConversationRuntime {
     pub service: Arc<ConversationService>,
-    runtime: Arc<dyn ExecutionRuntime>,
+    providers: Vec<ExecutionProvider>,
     host: Arc<dyn ExecutionHost>,
     codec: Arc<dyn ConversationCodec>,
-    accounts: Arc<AgentConnectionService>,
     active: Mutex<HashMap<Uuid, Arc<Active>>>,
     account_gates: AccountGates,
     model_probes: ModelProbes,
     inflight: Mutex<HashMap<Uuid, Uuid>>,
 }
+
+/// A real provider's account and execution capabilities are registered together.
+pub struct ExecutionProvider {
+    pub id: &'static str,
+    pub display_name: &'static str,
+    pub accounts: Arc<AgentConnectionService>,
+    pub runtime: Arc<dyn ExecutionRuntime>,
+}
+
 impl ConversationRuntime {
     pub fn new(
         service: Arc<ConversationService>,
@@ -95,17 +117,53 @@ impl ConversationRuntime {
         host: Arc<dyn ExecutionHost>,
         codec: Arc<dyn ConversationCodec>,
     ) -> Arc<Self> {
-        Arc::new(Self {
+        Self::with_providers(
             service,
-            runtime,
+            vec![ExecutionProvider {
+                id: "codex",
+                display_name: "Codex",
+                accounts,
+                runtime,
+            }],
             host,
             codec,
-            accounts,
+        )
+        .expect("the built-in Codex provider is valid")
+    }
+
+    pub fn with_providers(
+        service: Arc<ConversationService>,
+        providers: Vec<ExecutionProvider>,
+        host: Arc<dyn ExecutionHost>,
+        codec: Arc<dyn ConversationCodec>,
+    ) -> Result<Arc<Self>, ConversationError> {
+        if providers.is_empty()
+            || providers.len() > 16
+            || !providers.iter().any(|provider| provider.id == "codex")
+        {
+            return Err(ConversationError::Invalid);
+        }
+        for (index, provider) in providers.iter().enumerate() {
+            if !provider_sessions::valid_id(provider.id)
+                || provider.display_name.trim().is_empty()
+                || provider.display_name.len() > 64
+                || providers[..index]
+                    .iter()
+                    .any(|other| other.id == provider.id)
+            {
+                return Err(ConversationError::Invalid);
+            }
+        }
+        Ok(Arc::new(Self {
+            service,
+            providers,
+            host,
+            codec,
             active: Mutex::new(HashMap::new()),
             account_gates: AccountGates::default(),
             model_probes: ModelProbes::default(),
             inflight: Mutex::new(HashMap::new()),
-        })
+        }))
     }
     pub async fn models(
         &self,
@@ -142,21 +200,58 @@ impl ConversationRuntime {
             .for_user(actor.user_id)?
             .try_lock_owned()
             .map_err(|_| ConversationError::Conflict)?;
-        if self
-            .accounts
-            .read(actor)
-            .await
-            .map_err(|_| ConversationError::Unavailable)?
-            .status
-            != ConnectionStatus::Connected
-        {
+        let mut connected = Vec::new();
+        let mut account_error = false;
+        for provider in &self.providers {
+            match provider.accounts.read(actor).await {
+                Ok(snapshot) if snapshot.status == ConnectionStatus::Connected => {
+                    connected.push(provider)
+                }
+                Ok(snapshot) if snapshot.status == ConnectionStatus::Disconnected => {}
+                _ => account_error = true,
+            }
+        }
+        if connected.is_empty() {
+            if account_error {
+                return Err(ConversationError::Unavailable);
+            }
             return Err(ConversationError::Conflict);
         }
         // Persist the lease before any provider side effect. A crash or lost
         // session leaves it reserved until confirmed cleanup or stopped recovery.
         let lease = Uuid::new_v4();
         self.service.reserve_model_probe(actor, env, lease).await?;
-        let result = self.runtime.models(env).await;
+        let mut result = Ok(Vec::new());
+        let mut failed = false;
+        for provider in connected {
+            match provider.runtime.models(env).await {
+                Ok(models) => {
+                    if models
+                        .iter()
+                        .any(|model| 9 + provider.id.len() + model.id.len() > 256)
+                    {
+                        failed = true;
+                        continue;
+                    }
+                    let target = result.as_mut().expect("successful result");
+                    for mut model in models {
+                        model.id = format!("factory:{}:{}", provider.id, model.id);
+                        model.name = format!("{} · {}", provider.display_name, model.name);
+                        target.push(model);
+                    }
+                }
+                Err(
+                    error @ (ExecutionError::LaunchUncertain | ExecutionError::CleanupUncertain),
+                ) => {
+                    result = Err(error);
+                    break;
+                }
+                Err(_) => failed = true,
+            }
+        }
+        if failed && result.as_ref().is_ok_and(Vec::is_empty) {
+            result = Err(ExecutionError::Unavailable);
+        }
         if matches!(result, Err(ExecutionError::LaunchUncertain)) {
             // The daemon may still receive an old start request; stop alone is not proof.
             return Err(ConversationError::Unavailable);
@@ -174,12 +269,34 @@ impl ConversationRuntime {
         id: Uuid,
         operation: Uuid,
         model: String,
+        effort: Option<String>,
         input: String,
     ) -> Result<Run, ConversationError> {
+        let selection =
+            encode_selection(&model, effort.as_deref()).map_err(|_| ConversationError::Invalid)?;
+        if let Some(run) = self
+            .service
+            .find_turn(actor, id, operation, selection.clone(), input.clone())
+            .await?
+        {
+            return Ok(run);
+        }
+        // Only accept an effort actually advertised for this connected model.
+        // Discovery has its own durable process lease and releases the account gate
+        // before the run acquires it below.
+        if let Some(ref requested) = effort {
+            let models = self.models(actor).await?;
+            if !models.iter().any(|candidate| {
+                candidate.id == model && candidate.effort_levels.contains(requested)
+            }) {
+                return Err(ConversationError::Invalid);
+            }
+        }
         let gate = self.account_gates.for_user(actor.user_id)?;
         let _gate = gate.lock().await;
         let history = self.service.history(actor, id).await?;
-        if self
+        let (provider, provider_model) = self.provider_for_model(&model)?;
+        if provider
             .accounts
             .read(actor)
             .await
@@ -189,9 +306,21 @@ impl ConversationRuntime {
         {
             return Err(ConversationError::Conflict);
         }
+        let previous = history.conversation.provider_thread.clone();
+        let thread = provider_sessions::select(previous.as_deref(), provider.id)?;
+        if thread.is_none() && previous.is_some() {
+            // Both current native providers use UUID session references. Reject a
+            // record that cannot hold one before reserving or launching a run.
+            provider_sessions::merge(
+                previous.as_deref(),
+                provider.id,
+                "00000000-0000-0000-0000-000000000000",
+            )?;
+        }
+        let prompt = provider_sessions::handoff(&history, provider.id, &input)?;
         let (env, run, fresh) = self
             .service
-            .begin_turn(actor, id, operation, model.clone(), input.clone())
+            .begin_turn(actor, id, operation, selection, input.clone())
             .await?;
         if !fresh {
             return Ok(run);
@@ -199,32 +328,46 @@ impl ConversationRuntime {
         self.inflight.lock().await.insert(run.id, actor.user_id);
         let owner = self.clone();
         let current = run.clone();
+        let provider_id = provider.id;
         self.host.spawn(Box::pin(async move {
             owner
-                .launch(
+                .launch(Launch {
                     actor,
                     env,
-                    current,
-                    history.conversation.provider_thread,
-                    model,
-                    input,
-                )
+                    run: current,
+                    thread,
+                    previous,
+                    model: provider_model,
+                    effort,
+                    input: prompt,
+                    provider_id,
+                })
                 .await;
         }));
         Ok(run)
     }
-    async fn launch(
-        self: Arc<Self>,
-        actor: EnvironmentActor,
-        env: Environment,
-        run: Run,
-        thread: Option<String>,
-        model: String,
-        input: String,
-    ) {
-        let session = match self
+    async fn launch(self: Arc<Self>, launch: Launch) {
+        let Launch {
+            actor,
+            env,
+            run,
+            thread,
+            previous,
+            model,
+            effort,
+            input,
+            provider_id,
+        } = launch;
+        let Some(provider) = self
+            .providers
+            .iter()
+            .find(|provider| provider.id == provider_id)
+        else {
+            return;
+        };
+        let session = match provider
             .runtime
-            .open(&env, thread.as_deref(), &model, &input)
+            .open(&env, thread.as_deref(), &model, effort.as_deref(), &input)
             .await
         {
             Ok(s) => s,
@@ -294,18 +437,25 @@ impl ConversationRuntime {
             );
             let mut text = None;
             let result = match event {
-                ExecutionEvent::ThreadReady { provider_thread } => match self
-                    .service
-                    .set_thread(actor, &env, run.id, &provider_thread)
-                    .await
-                {
-                    Ok(()) => active
-                        .control
-                        .lock()
+                ExecutionEvent::ThreadReady { provider_thread } => match provider_sessions::merge(
+                    previous.as_deref(),
+                    provider_id,
+                    &provider_thread,
+                ) {
+                    Ok(encoded) => match self
+                        .service
+                        .set_thread(actor, &env, run.id, &encoded, previous.as_deref())
                         .await
-                        .begin_turn()
-                        .await
-                        .map_err(|_| ConversationError::Unavailable),
+                    {
+                        Ok(()) => active
+                            .control
+                            .lock()
+                            .await
+                            .begin_turn()
+                            .await
+                            .map_err(|_| ConversationError::Unavailable),
+                        Err(e) => Err(e),
+                    },
                     Err(e) => Err(e),
                 },
                 ExecutionEvent::Delta { text: t, .. } => {
@@ -403,6 +553,25 @@ impl ConversationRuntime {
         self.active.lock().await.remove(&run.id);
         self.inflight.lock().await.remove(&run.id);
     }
+
+    fn provider_for_model(
+        &self,
+        model: &str,
+    ) -> Result<(&ExecutionProvider, String), ConversationError> {
+        let (id, native) = match model.strip_prefix("factory:") {
+            Some(encoded) => encoded.split_once(':').ok_or(ConversationError::Invalid)?,
+            None => ("codex", model),
+        };
+        if native.is_empty() {
+            return Err(ConversationError::Invalid);
+        }
+        let provider = self
+            .providers
+            .iter()
+            .find(|provider| provider.id == id)
+            .ok_or(ConversationError::Invalid)?;
+        Ok((provider, native.to_owned()))
+    }
     pub async fn subscribe(
         &self,
         actor: EnvironmentActor,
@@ -477,7 +646,15 @@ impl ConversationRuntime {
             .map_err(|_| factory_core::agent_connections::AgentConnectionError::Unavailable)?;
         let _gate = gate.lock().await;
         match self.service.has_open_runs(actor).await {
-            Ok(false) => self.accounts.logout(actor).await,
+            Ok(false) => {
+                self.providers
+                    .iter()
+                    .find(|provider| provider.id == "codex")
+                    .ok_or(factory_core::agent_connections::AgentConnectionError::Unavailable)?
+                    .accounts
+                    .logout(actor)
+                    .await
+            }
             Ok(true) => Err(factory_core::agent_connections::AgentConnectionError::Conflict),
             Err(_) => Err(factory_core::agent_connections::AgentConnectionError::Unavailable),
         }

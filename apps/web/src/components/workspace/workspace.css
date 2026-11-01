@@ -201,6 +201,10 @@
   display: grid;
   gap: 1.5rem;
 }
+.workspace-settings > .provider-connection {
+  width: 100%;
+  margin-inline: 0;
+}
 .workspace-settings > p {
   margin: 0 0 0.5rem;
   font-size: 0.8125rem;

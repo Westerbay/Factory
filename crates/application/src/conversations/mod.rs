@@ -1,6 +1,7 @@
 //! Conversation entry points validate the supervisor's current environment before storage.
 pub mod coordinator;
 mod model_probes;
+mod provider_sessions;
 use crate::environments::EnvironmentService;
 use factory_core::{
     conversations::*,
@@ -58,6 +59,29 @@ impl ConversationService {
         let env = self.current_environment(actor).await?;
         self.store.history(actor, env.id, env.generation, id).await
     }
+    pub async fn find_turn(
+        &self,
+        actor: EnvironmentActor,
+        conversation_id: Uuid,
+        operation_id: Uuid,
+        model: String,
+        input: String,
+    ) -> Result<Option<Run>, ConversationError> {
+        let env = self.current_environment(actor).await?;
+        self.store
+            .find_turn(
+                actor,
+                StartTurn {
+                    conversation_id,
+                    operation_id,
+                    environment_id: env.id,
+                    generation: env.generation,
+                    model,
+                    input,
+                },
+            )
+            .await
+    }
     /// Returns true only for a freshly reserved turn. The caller must not start the provider for an existing receipt.
     pub async fn begin_turn(
         &self,
@@ -105,10 +129,11 @@ impl ConversationService {
         env: &Environment,
         run_id: Uuid,
         thread: &str,
+        previous: Option<&str>,
     ) -> Result<(), ConversationError> {
         self.same_environment(actor, env).await?;
         self.store
-            .set_thread(actor, env.id, env.generation, run_id, thread)
+            .set_thread(actor, env.id, env.generation, run_id, thread, previous)
             .await
     }
     pub async fn append_assistant(

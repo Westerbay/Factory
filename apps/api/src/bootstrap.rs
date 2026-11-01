@@ -152,6 +152,7 @@ async fn create_host_router(
         Some(host.service()),
         Some(host.terminal()),
         Some(host.accounts()),
+        Some(host.claude_accounts()),
         Some(host.conversations()),
     );
     match router {

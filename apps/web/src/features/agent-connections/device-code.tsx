@@ -9,6 +9,7 @@ export function DeviceCode({ challenge }: { challenge: LoginChallenge }) {
   const [copied, setCopied] = useState(false)
   const [message, setMessage] = useState("")
   const mounted = useRef(true)
+  const userCode = challenge.userCode
   useEffect(() => {
     mounted.current = true
     return () => {
@@ -17,8 +18,9 @@ export function DeviceCode({ challenge }: { challenge: LoginChallenge }) {
   }, [])
 
   async function copy() {
+    if (!userCode) return
     try {
-      await navigator.clipboard.writeText(challenge.userCode)
+      await navigator.clipboard.writeText(userCode)
       if (mounted.current) {
         setCopied(true)
         setMessage("Code copied.")
@@ -31,6 +33,8 @@ export function DeviceCode({ challenge }: { challenge: LoginChallenge }) {
     }
   }
 
+  if (!userCode) return null
+
   return (
     <div className="provider-device-code">
       <p>Enter this code on OpenAI to connect your account.</p>
@@ -38,7 +42,7 @@ export function DeviceCode({ challenge }: { challenge: LoginChallenge }) {
         <span className="sr-only" id={codeId}>
           Authorization code
         </span>
-        <code aria-labelledby={codeId}>{challenge.userCode}</code>
+        <code aria-labelledby={codeId}>{userCode}</code>
         <Button variant="ghost" onClick={copy} aria-label="Copy code">
           {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
           {copied ? "Copied" : "Copy"}

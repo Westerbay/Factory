@@ -4,7 +4,7 @@
 
 Factory offers a private member space and an administrator backoffice. Sign-in uses
 GitHub only; there are no passwords or email invitations. A successful GitHub identity
-check does not itself grant membership. Connecting Codex is a separate explicit action
+check does not itself grant membership. Connecting an agent provider is a separate explicit action
 inside an active member's private environment.
 
 An operator configures the first administrator with the local CLI, selecting a GitHub
@@ -16,11 +16,11 @@ can activate that account, after which the member must begin a new sign-in. Hand
 display names identify people visually but never determine authorization.
 
 After GitHub sign-in, workspace preparation starts automatically. An unconnected member
-sees Codex as the sole provider choice; a confirmed saved account opens the workspace
+chooses Codex or Claude Code; a saved connected account opens the workspace
 directly. The workspace has conversation history on the left, chat in the center and a
 collapsible terminal on the right. The GitHub profile at the bottom left exposes Settings,
 Stop environment and Sign out, plus User access for administrators. Provider account
-details and Disconnect Codex belong in Settings. Repository selection, cloning and global
+details, additional connections and disconnect actions belong in Settings. Repository selection, cloning and global
 skills are not available. The shared graphite interface uses Space Mono and concise
 contextual status instead of an environment dashboard or permanent refresh controls.
 GitHub sign-in does not request repository permissions or save a provider access token.
@@ -66,14 +66,14 @@ Factory imposes no limit on the number of started environments, CPU, memory or p
 counts. They share available host resources; Docker Desktop and operating-system limits
 still apply. Containers retain a non-root user and a read-only root
 filesystem. Temporary storage and logs remain bounded; persistent named volumes have no
-portable disk quota. Each user has an isolated internal network; only approved Codex
-HTTPS destinations are reachable through the shared installation proxy. General Internet,
-host/LAN and other-user access are blocked. There is no file editor.
+portable disk quota. Each user has an isolated internal network; only approved OpenAI and
+Anthropic HTTPS destinations are reachable through the shared installation proxy. General
+Internet, host/LAN and other-user access are blocked. There is no file editor.
 
 Existing environments with a different image or policy are never silently replaced.
 A local database reset removes database records but does not delete Docker homes.
 
-## Terminal and personal Codex account
+## Terminal and personal provider accounts
 
 The terminal opens in `~/Documents` with zsh and Oh My Zsh in the current image,
 shows Neofetch when its shell starts, and attaches to a persistent tmux shell. Closing the
@@ -108,26 +108,36 @@ Disconnect does not guarantee interruption of Codex processes launched from the 
 Stop environment is the explicit way to end all its processes. If an account controller
 is abandoned during API failure, its watchdog bounds recovery to at most ten minutes.
 
+A member can connect Claude Code using the CLI's official sign-in link. After authorizing
+with Anthropic, the member enters the browser-issued one-time code in Factory, which
+forwards it to the same CLI process without persisting it. The CLI must confirm the
+account before Factory marks it connected. Settings can add either
+provider after the first connection or disconnect one while retaining the other. Claude
+logout, like Codex logout, is blocked while a Factory run is active or uncertain.
+
 A missing or stopped proxy makes Codex status/login unavailable. The local terminal
 and local account cancellation/logout remain independent of proxy availability, subject
-to the active-run guard. Members can also deliberately run Codex in the terminal.
+to the active-run guard. Members can also deliberately run either CLI in the terminal.
 
-## Codex conversations
+## Provider conversations
 
-After a confirmed Codex connection, a member can create and select conversations, choose
-an available model, send messages, view streamed output, answer questions and request
+After at least one provider connection, a member can create and select conversations,
+choose from models reported by the connected providers, see and choose an advertised reasoning effort
+for models that support it, send messages, view streamed output, answer questions and request
 cancellation. Completed messages and run states are retained for that user; reading
 history does not replay a message or start tools. The conversation list loads older
 pages on request. Each conversation shows a bounded recent history and indicates when older runs, messages or requests are omitted. A submitted
 question answer can remain pending or uncertain until its receipt is confirmed; it is
 not automatically resent. The last successful model list stays in browser memory for the
-current session and is refreshed when stale after five minutes; account and session
-changes clear it. Concurrent discovery requests share one provider operation. Temporary
+current session, including when changing tabs. Confirmed provider connection changes
+refresh it; session changes clear it. Concurrent discovery requests share one provider operation. Temporary
+provider discovery failures leave other providers' models usable and offer a retry for missing models. Temporary
 model conflicts recover in the background with progressively slower retries, retaining
 the current model selection. A prolonged conflict without a loaded list shows a small
 status message and continues checking while the workspace is available and visible.
 Models and conversations have no permanent refresh buttons; other failures offer
-contextual retry. A listed model is not a guarantee that
+contextual retry. The model selector shows the resolved version when the provider reports it;
+aliases and provider fallbacks can still change the actual model used. A listed model is not a guarantee that
 the account can use it. Provider failures and interrupted or uncertain work remain visible.
 
 Enter sends a message, Shift+Enter inserts a line, and IME composition does not send.
@@ -137,12 +147,15 @@ Assistant replies render Markdown during streaming and after completion, includi
 links, lists, tables and code blocks. Raw HTML cannot execute and embedded images do
 not load remote resources automatically. User messages remain plain text.
 
-Codex runs with full access inside the member's container: commands and file changes do
+Both providers run with full access inside the member's container: commands and file changes do
 not ask for per-action approval, and the agent can read, change or delete any files
-accessible to that container user, including the saved Codex credentials. Docker's
+accessible to that container user, including saved provider credentials. Docker's
 user isolation and network controls still apply, but do not protect a member's own home
 from that member's agent. Treat repository content and external instructions accordingly.
-Claude and multiple accounts per provider are not yet available.
+Multiple accounts per provider are not yet available. When switching providers, the
+visible saved conversation messages are sent as context to the selected provider. A
+switch is refused if that history is truncated or too large to transfer safely. Tool
+activity and answers to interactive questions are not included in the transfer.
 
 An interrupt acknowledgement alone does not prove that all work stopped. If cleanup is
 uncertain, the run remains blocking. Stop the environment, wait until the stopped state

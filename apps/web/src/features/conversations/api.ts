@@ -10,12 +10,19 @@ export type Answer = components["schemas"]["AnswerView"]
 const id = z.uuid()
 const text = z.string()
 const conversation = z.object({ id, createdAt: text })
-const model = z.object({ id: text, name: text })
+const model = z.object({
+  id: text,
+  name: text,
+  resolvedModel: text.nullable(),
+  effortLevels: z.array(text),
+  defaultEffort: text.nullable(),
+})
 const run = z.object({
   id,
   conversationId: id,
   operationId: id,
   model: text,
+  effort: text.nullable(),
   status: z.enum(["active", "completed", "failed", "interrupted", "uncertain"]),
 })
 const question = z.object({
@@ -56,6 +63,11 @@ const event = z.object({
   text: z.string().nullish(),
 })
 const csrf = (token: string) => ({ "X-CSRF-Token": token })
+export class ContextTransferFailure extends ApiFailure {
+  constructor() {
+    super(409)
+  }
+}
 function checked<T>(result: { data?: T; response: Response }): T {
   if (!result.response.ok) throw new ApiFailure(result.response.status)
   if (result.data === undefined) throw new Error("Missing response")
@@ -121,15 +133,15 @@ export async function start(
   token: string,
   signal: AbortSignal
 ) {
-  return run.parse(
-    checked(
-      await apiClient.POST("/api/conversations/{id}/runs", {
-        params: { path: { id: idValue }, header: csrf(token) },
-        body,
-        signal,
-      })
-    )
-  )
+  const result = await apiClient.POST("/api/conversations/{id}/runs", {
+    params: { path: { id: idValue }, header: csrf(token) },
+    body,
+    signal,
+  })
+  if (result.response.status === 409 && result.error?.code === "ContextLimit") {
+    throw new ContextTransferFailure()
+  }
+  return run.parse(checked(result))
 }
 export async function cancel(
   idValue: string,

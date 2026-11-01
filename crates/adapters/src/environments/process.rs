@@ -41,20 +41,62 @@ impl From<ProcessStartError> for EnvironmentError {
 }
 
 /// No string command or Docker identifier supplied by a browser can reach this enum.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) enum FixedProcess {
     TerminalAttach,
     TerminalDetach,
     CodexAccount,
     CodexExecution,
+    ClaudeStatus,
+    ClaudeLogout,
+    ClaudeLogin,
+    ClaudeProbe,
+    ClaudeExecution(ClaudeLaunch),
     #[cfg(test)]
     CodexSchema,
 }
 
+/// Arguments are individual Docker exec arguments, never a shell command.
+#[derive(Clone)]
+pub(crate) struct ClaudeLaunch {
+    model: String,
+    effort: Option<String>,
+    session: uuid::Uuid,
+    resume: bool,
+}
+
+impl ClaudeLaunch {
+    pub(crate) fn new(
+        model: &str,
+        effort: Option<&str>,
+        session: uuid::Uuid,
+        resume: bool,
+    ) -> Option<Self> {
+        if model.is_empty()
+            || model.len() > 256
+            || !model.as_bytes()[0].is_ascii_alphanumeric()
+            || !model
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"-_.:/[]".contains(&c))
+            || effort
+                .is_some_and(|value| !matches!(value, "low" | "medium" | "high" | "xhigh" | "max"))
+            || session.is_nil()
+        {
+            return None;
+        }
+        Some(Self {
+            model: model.to_owned(),
+            effort: effort.map(str::to_owned),
+            session,
+            resume,
+        })
+    }
+}
+
 impl FixedProcess {
-    fn options(self) -> CreateExecOptions<&'static str> {
-        let terminal = matches!(self, Self::TerminalAttach);
-        let cmd = match self {
+    fn options(self) -> CreateExecOptions<String> {
+        let terminal = matches!(self, Self::TerminalAttach | Self::ClaudeLogin);
+        let mut cmd: Vec<String> = match &self {
             Self::TerminalAttach => vec![
                 "/usr/bin/tmux",
                 "-f",
@@ -92,25 +134,69 @@ impl FixedProcess {
                 "--listen",
                 "stdio://",
             ],
+            Self::ClaudeStatus => vec![
+                "/usr/bin/timeout", "--signal=TERM", "--kill-after=5s", "30s",
+                "/opt/claude/claude", "auth", "status",
+            ],
+            Self::ClaudeLogout => vec![
+                "/usr/bin/timeout", "--signal=TERM", "--kill-after=5s", "30s",
+                "/usr/bin/flock", "--nonblock", "--conflict-exit-code=75", "--no-fork",
+                "/tmp/factory-claude-auth.lock", "/opt/claude/claude", "auth", "logout",
+            ],
+            // The CLI needs a private PTY for Ctrl-C. Disable echo before the
+            // browser-issued code reaches stdin; no caller input enters the command.
+            Self::ClaudeLogin => vec![
+                "/bin/sh", "-c",
+                "stty -echo; exec /usr/bin/timeout --signal=TERM --kill-after=5s 595s /usr/bin/flock --nonblock --conflict-exit-code=75 --no-fork /tmp/factory-claude-auth.lock /opt/claude/claude auth login --claudeai",
+            ],
+            Self::ClaudeProbe => vec![
+                "/usr/bin/timeout", "--signal=TERM", "--kill-after=5s", "60s",
+                "/opt/claude/claude", "--print", "--input-format", "stream-json",
+                "--output-format", "stream-json", "--verbose", "--no-session-persistence",
+                "--strict-mcp-config", "--settings", "{\"disableAllHooks\":true}",
+            ],
+            Self::ClaudeExecution(_) => vec![
+                "/usr/bin/timeout", "--signal=TERM", "--kill-after=5s", "86400s",
+                "/opt/claude/claude", "--print", "--input-format", "stream-json",
+                "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+                "--dangerously-skip-permissions", "--permission-prompt-tool", "stdio",
+            ],
             #[cfg(test)]
             Self::CodexSchema => vec![
                 "/bin/sh",
                 "-c",
                 "/opt/codex/bin/codex app-server generate-json-schema --out /tmp/factory-schema && cat /tmp/factory-schema/v2/TurnStartParams.json",
             ],
-        };
+        }.into_iter().map(str::to_owned).collect();
+        if let Self::ClaudeExecution(launch) = self {
+            cmd.push(
+                if launch.resume {
+                    "--resume"
+                } else {
+                    "--session-id"
+                }
+                .into(),
+            );
+            cmd.push(launch.session.to_string());
+            cmd.push("--model".into());
+            cmd.push(launch.model);
+            if let Some(effort) = launch.effort {
+                cmd.push("--effort".into());
+                cmd.push(effort);
+            }
+        }
         CreateExecOptions {
             attach_stdin: Some(true),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             tty: Some(terminal),
             privileged: Some(false),
-            user: Some("10000:10000"),
-            working_dir: Some("/home/factory/Documents"),
+            user: Some("10000:10000".into()),
+            working_dir: Some("/home/factory/Documents".into()),
             env: Some(vec![
-                "HOME=/home/factory",
-                "CODEX_HOME=/home/factory/.codex",
-                "TERM=xterm-256color",
+                "HOME=/home/factory".into(),
+                "CODEX_HOME=/home/factory/.codex".into(),
+                "TERM=xterm-256color".into(),
             ]),
             cmd: Some(cmd),
             ..Default::default()
@@ -306,6 +392,23 @@ mod tests {
         )
     }
 
+    #[test]
+    fn claude_effort_is_a_validated_native_argument() {
+        let session = Uuid::new_v4();
+        let launch = ClaudeLaunch::new("opus", Some("high"), session, false).unwrap();
+        let command = FixedProcess::ClaudeExecution(launch).options().cmd.unwrap();
+        assert!(command.windows(2).any(|part| part == ["--effort", "high"]));
+        assert!(ClaudeLaunch::new("opus", Some("--help"), session, false).is_none());
+        let default = ClaudeLaunch::new("opus", None, session, false).unwrap();
+        assert!(
+            !FixedProcess::ClaudeExecution(default)
+                .options()
+                .cmd
+                .unwrap()
+                .contains(&"--effort".to_owned())
+        );
+    }
+
     #[tokio::test]
     async fn stopped_or_foreign_records_cannot_open_docker_processes() {
         let (metadata, mut env) = environment(&format!("sha256:{}", "a".repeat(64)));
@@ -352,7 +455,7 @@ mod tests {
     }
 
     async fn exercise(
-        runtime: &DockerEnvironmentRuntime,
+        runtime: &Arc<DockerEnvironmentRuntime>,
         env: &mut Environment,
     ) -> Result<(), Box<dyn std::error::Error>> {
         runtime.create_volume(env).await?;
@@ -366,6 +469,8 @@ mod tests {
             .write_all(b"printf 'factory-%s\\n' ready\r")
             .await?;
         until(&mut first.output, "factory-ready").await?;
+        first.input.write_all(b"claude --version\r").await?;
+        until(&mut first.output, "2.1.284 (Claude Code)").await?;
         runtime.resize_process(&first.id, 123, 37).await?;
         first.input.write_all(b"stty size\r").await?;
         until(&mut first.output, "37 123").await?;
@@ -450,6 +555,112 @@ mod tests {
             0
         );
 
+        // Exercise the unmodified Claude binary in the isolated, unsigned-in home.
+        let mut status = runtime
+            .start_process(env, FixedProcess::ClaudeStatus)
+            .await?;
+        until(&mut status.output, "\"loggedIn\": false").await?;
+        let status_id = status.id.clone();
+        drop(status);
+        assert_eq!(
+            runtime
+                .wait_process_exit(&status_id, Duration::from_secs(15))
+                .await?,
+            1
+        );
+        let mut probe = runtime
+            .start_process(env, FixedProcess::ClaudeProbe)
+            .await?;
+        probe.input.write_all(b"{\"type\":\"control_request\",\"request_id\":\"factory-init\",\"request\":{\"subtype\":\"initialize\",\"hooks\":{},\"mcpServers\":{}}}\n").await?;
+        until(&mut probe.output, "\"models\"").await?;
+        probe.input.shutdown().await?;
+        let probe_id = probe.id.clone();
+        drop(probe);
+        assert_eq!(
+            runtime
+                .wait_process_exit(&probe_id, Duration::from_secs(15))
+                .await?,
+            0
+        );
+        // The real login runs in an echo-disabled PTY and must stop on cancellation.
+        let mut login = runtime
+            .start_process(env, FixedProcess::ClaudeLogin)
+            .await?;
+        let mut output = Vec::new();
+        tokio::time::timeout(Duration::from_secs(20), async {
+            while let Some(chunk) = login.output.next().await {
+                output.extend_from_slice(chunk?.as_ref());
+                if output
+                    .windows(b"Paste code here".len())
+                    .any(|part| part == b"Paste code here")
+                {
+                    return Ok::<(), Box<dyn std::error::Error>>(());
+                }
+                if output.len() > 65536 {
+                    return Err("Login output exceeded limit".into());
+                }
+            }
+            Err("Login exited before the browser prompt".into())
+        })
+        .await??;
+        let synthetic_code = b"factory-synthetic-no-echo";
+        login.input.write_all(synthetic_code).await?;
+        login.input.flush().await?;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        login.input.write_all(b"\x03").await?;
+        login.input.flush().await?;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(chunk) = login.output.next().await {
+                output.extend_from_slice(chunk?.as_ref());
+                if output.len() > 65536 {
+                    return Err::<(), Box<dyn std::error::Error>>(
+                        "Login output exceeded limit".into(),
+                    );
+                }
+            }
+            Ok(())
+        })
+        .await??;
+        assert!(
+            !output
+                .windows(synthetic_code.len())
+                .any(|part| part == synthetic_code)
+        );
+        let login_id = login.id.clone();
+        drop(login);
+        assert_ne!(
+            runtime
+                .wait_process_exit(&login_id, Duration::from_secs(15))
+                .await?,
+            0
+        );
+        // Exercise the adapter's real URL parsing and confirmed cancellation twice.
+        let claude = crate::claude_account::ClaudeAccountAdapter::new(runtime.clone());
+        for _ in 0..2 {
+            let operation = Uuid::new_v4();
+            let result = factory_core::agent_connections::AgentConnectionPort::begin_login(
+                &claude,
+                env,
+                operation,
+                Utc::now() + chrono::Duration::minutes(2),
+            )
+            .await?;
+            let challenge = result
+                .challenge
+                .ok_or("Missing Claude authorization challenge")?;
+            assert_eq!(challenge.operation_id, operation);
+            assert!(
+                challenge
+                    .verification_url
+                    .starts_with("https://claude.com/cai/oauth/authorize?")
+            );
+            assert!(challenge.user_code.is_none());
+            factory_core::agent_connections::AgentConnectionPort::cancel_login(
+                &claude, env, operation,
+            )
+            .await?;
+        }
+
         // The image's pinned binary owns the contract, not a copied documentation enum.
         let mut schema = runtime
             .start_process(env, FixedProcess::CodexSchema)
@@ -488,8 +699,9 @@ mod tests {
             std::env::var("FACTORY_PROCESS_TEST_IMAGE").expect("Explicit fixture image required");
         let (metadata, mut env) = environment(&image);
         let egress = crate::environments::fixture::egress_metadata(metadata.installation_id());
-        let runtime =
-            DockerEnvironmentRuntime::connect(metadata, egress, Arc::new(|| true)).unwrap();
+        let runtime = Arc::new(
+            DockerEnvironmentRuntime::connect(metadata, egress, Arc::new(|| true)).unwrap(),
+        );
         let result = std::panic::AssertUnwindSafe(exercise(&runtime, &mut env))
             .catch_unwind()
             .await;

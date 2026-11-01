@@ -52,7 +52,8 @@ export async function prepare(
     image.Os !== "linux" ||
     image.Config?.User !== "10000:10000" ||
     image.Config?.Labels?.["io.factory.environment.image"] !== policyVersion ||
-    image.Config?.Labels?.["io.factory.codex.version"] !== "0.160.0"
+    image.Config?.Labels?.["io.factory.codex.version"] !== "0.160.0" ||
+    image.Config?.Labels?.["io.factory.claude.version"] !== "2.1.284"
   ) {
     throw new Error("Prepared image does not satisfy the environment contract")
   }

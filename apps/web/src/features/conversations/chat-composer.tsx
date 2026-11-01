@@ -8,29 +8,34 @@ export function ChatComposer({
   input,
   model,
   models,
+  effort,
   disabled,
   sendDisabled,
   running,
   stopDisabled,
   onInput,
   onModel,
+  onEffort,
   onSend,
   onStop,
 }: {
   input: string
   model: string
   models: Model[]
+  effort: string
   disabled: boolean
   sendDisabled: boolean
   running: boolean
   stopDisabled: boolean
   onInput: (value: string) => void
   onModel: (value: string) => void
+  onEffort: (value: string) => void
   onSend: () => void
   onStop: () => void
 }) {
   const inputId = useId()
   const composing = useRef(false)
+  const selected = models.find((item) => item.id === model)
   return (
     <form
       className="chat-composer"
@@ -40,7 +45,7 @@ export function ChatComposer({
       }}
     >
       <label className="sr-only" htmlFor={inputId}>
-        Message Codex
+        Message assistant
       </label>
       <textarea
         id={inputId}
@@ -64,7 +69,7 @@ export function ChatComposer({
             if (!sendDisabled && !running) onSend()
           }
         }}
-        placeholder="Ask Codex…"
+        placeholder="Ask anything…"
         disabled={disabled}
         rows={2}
       />
@@ -86,15 +91,36 @@ export function ChatComposer({
             ))}
           </select>
         </label>
+        {selected && selected.effortLevels.length > 0 && (
+          <label className="chat-effort">
+            <span className="sr-only">Reasoning effort</span>
+            <select
+              value={effort}
+              onChange={(event) => onEffort(event.target.value)}
+              disabled={disabled}
+            >
+              {selected.effortLevels.map((level) => (
+                <option key={level} value={level}>
+                  {level === "ultra" ? "Ultra (automatic delegation)" : level}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <details className="chat-access">
-          <summary aria-label="Codex access information" title="Codex access">
+          <summary
+            aria-label="Assistant access information"
+            title="Assistant access"
+          >
             <CircleHelp aria-hidden="true" size={16} />
-            <span className="sr-only">Codex access</span>
+            <span className="sr-only">Assistant access</span>
           </summary>
           <p>
-            Codex has full access to files and credentials inside your
-            environment. It can read, change or delete them without asking for
-            each action.
+            The selected assistant has full access to files and credentials
+            inside your environment. It can read, change or delete them without
+            asking for each action. Switching providers shares saved messages
+            with the selected provider; tool activity and answers to interactive
+            questions are not transferred.
           </p>
         </details>
         {running ? (

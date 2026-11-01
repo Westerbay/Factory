@@ -14,6 +14,9 @@ import {
 } from "lucide-react"
 
 import { ConnectedProvider } from "../../features/agent-connections/connected-provider"
+import { ClaudeSettings } from "../../features/agent-connections/claude-connection"
+import { ClaudeLogin } from "../../features/agent-connections/claude-login"
+import { useClaudeConnection } from "../../features/agent-connections/use-claude-connection"
 import { ProviderConnection } from "../../features/agent-connections/provider-connection"
 import { useConnection } from "../../features/agent-connections/use-connection"
 import { listRecoverable } from "../../features/conversations/api"
@@ -45,12 +48,17 @@ export function WorkspacePage() {
     environment.state.environment?.status === "running" &&
     environment.state.pending !== "stop"
   const connection = useConnection(available)
-  const connected = connection.state.connection?.status === "connected"
+  const [claudeSetup, setClaudeSetup] = useState(false)
+  const claude = useClaudeConnection(available, claudeSetup)
+  const codexConnected = connection.state.connection?.status === "connected"
+  const claudeConnected = claude.data?.status === "connected"
+  const connected = codexConnected || claudeConnected
   const [wasConnected, setWasConnected] = useState(false)
   if (connected && !wasConnected) setWasConnected(true)
   if (
     available &&
     connection.state.connection?.status === "disconnected" &&
+    claude.data?.status === "disconnected" &&
     wasConnected
   )
     setWasConnected(false)
@@ -62,7 +70,18 @@ export function WorkspacePage() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [stopOpen, setStopOpen] = useState(false)
+  useEffect(() => {
+    if (claudeSetup && claudeConnected) setClaudeSetup(false)
+  }, [claudeConnected, claudeSetup])
   const entryContent = useRef<HTMLDivElement>(null)
+  const claudeHeading = useRef<HTMLHeadingElement>(null)
+  const previousClaudeSetup = useRef(false)
+  useEffect(() => {
+    if (claudeSetup && !connected) claudeHeading.current?.focus()
+    else if (previousClaudeSetup.current && !connected)
+      entryContent.current?.focus()
+    previousClaudeSetup.current = claudeSetup
+  }, [claudeSetup, connected])
   const previousAvailable = useRef(available)
   useEffect(() => {
     if (previousAvailable.current && !available) entryContent.current?.focus()
@@ -106,6 +125,16 @@ export function WorkspacePage() {
   function openStop() {
     setDrawerOpen(false)
     setStopOpen(true)
+  }
+  function connectClaude() {
+    setSettingsOpen(false)
+    setClaudeSetup(true)
+    if (claude.data?.status !== "connecting") void claude.begin()
+  }
+  async function closeClaudeSetup() {
+    if (claude.pending) return
+    if (claude.data?.challenge && !(await claude.cancel())) return
+    setClaudeSetup(false)
   }
   const profile = (
     <ProfileMenu
@@ -237,7 +266,19 @@ export function WorkspacePage() {
             className="workspace-entry-content"
           >
             {available ? (
-              <ProviderConnection {...connection} />
+              claudeSetup ? (
+                <ClaudeLogin
+                  connection={claude}
+                  headingRef={claudeHeading}
+                  onClose={() => setClaudeSetup(false)}
+                />
+              ) : (
+                <ProviderConnection
+                  {...connection}
+                  onClaude={connectClaude}
+                  claudeAvailable={available}
+                />
+              )
             ) : (
               <EnvironmentView {...environment} />
             )}
@@ -286,7 +327,18 @@ export function WorkspacePage() {
           <div className="workspace-settings">
             <p>Dark · Space Mono</p>
             {available ? (
-              <ConnectedProvider {...connection} />
+              <>
+                {codexConnected ? (
+                  <ConnectedProvider {...connection} />
+                ) : (
+                  <ProviderConnection {...connection} inSettings />
+                )}
+                <ClaudeSettings
+                  connection={claude}
+                  available={available}
+                  onConnect={connectClaude}
+                />
+              </>
             ) : (
               <p>
                 Provider settings are available when your workspace is running.
@@ -298,6 +350,16 @@ export function WorkspacePage() {
               Done
             </Button>
           </div>
+        </Modal>
+        <Modal
+          open={claudeSetup && connected}
+          onClose={() => void closeClaudeSetup()}
+          title="Connect Claude Code"
+        >
+          <ClaudeLogin
+            connection={claude}
+            onClose={() => setClaudeSetup(false)}
+          />
         </Modal>
         <Modal
           returnFocusRef={compact ? navigationToggle : undefined}
@@ -333,6 +395,10 @@ export function WorkspacePage() {
   return connected || wasConnected ? (
     <Chat
       available={workspaceReady}
+      connectedProviders={[
+        ...(codexConnected ? [{ id: "codex", name: "Codex" }] : []),
+        ...(claudeConnected ? [{ id: "claude", name: "Claude" }] : []),
+      ]}
       resuming={resuming}
       renderLayout={layout}
     />
