@@ -8,3 +8,8 @@ if [[ -o interactive && ! -f "$HOME/.zshrc" ]]; then
   zstyle ':omz:update' mode disabled
   source "$ZSH/oh-my-zsh.sh"
 fi
+
+# Show system information when a terminal shell starts, including with a personal zshrc.
+if [[ -o interactive && -n "$TMUX" ]]; then
+  neofetch
+fi

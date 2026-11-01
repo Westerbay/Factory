@@ -76,7 +76,7 @@ A local database reset removes database records but does not delete Docker homes
 ## Terminal and personal Codex account
 
 The terminal opens in `~/Documents` with zsh and Oh My Zsh in the current image,
-and attaches to a persistent tmux shell. Closing the
+shows Neofetch when its shell starts, and attaches to a persistent tmux shell. Closing the
 page, losing the connection or restarting the API detaches the display without stopping
 the shell. Stop environment ends its processes; saved files remain. One view owns input
 at a time, and another view must explicitly take over. Reconnection never replays unsent
