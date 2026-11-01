@@ -19,7 +19,8 @@ import { ClaudeLogin } from "../../features/agent-connections/claude-login"
 import { useClaudeConnection } from "../../features/agent-connections/use-claude-connection"
 import { ProviderConnection } from "../../features/agent-connections/provider-connection"
 import { useConnection } from "../../features/agent-connections/use-connection"
-import { listRecoverable } from "../../features/conversations/api"
+import { hasRecoverableWork } from "../../features/projects/api"
+import { useProjects } from "../../features/projects/use-projects"
 import { Chat } from "../../features/conversations/chat"
 import { canStopEnvironment } from "../../features/environments/environment-controller"
 import { useEnvironment } from "../../features/environments/use-environment"
@@ -30,6 +31,7 @@ import { Modal } from "../ui/modal"
 import { SplitPane } from "../ui/split-pane"
 import { EnvironmentView } from "./environment-view"
 import { ProfileMenu } from "./profile-menu"
+import { WorkspaceSidebar } from "./workspace-sidebar"
 import "./workspace.css"
 
 const compactQuery = "(max-width: 900px)"
@@ -39,14 +41,13 @@ function subscribeCompact(listener: () => void) {
   return () => query.removeEventListener("change", listener)
 }
 const readCompact = () => window.matchMedia(compactQuery).matches
-const hasRecoverableRuns = async (signal: AbortSignal) =>
-  (await listRecoverable(signal)).length > 0
 
 export function WorkspacePage() {
-  const environment = useEnvironment(hasRecoverableRuns)
+  const environment = useEnvironment(hasRecoverableWork)
   const available =
     environment.state.environment?.status === "running" &&
     environment.state.pending !== "stop"
+  const projects = useProjects(available)
   const connection = useConnection(available)
   const [claudeSetup, setClaudeSetup] = useState(false)
   const claude = useClaudeConnection(available, claudeSetup)
@@ -147,37 +148,37 @@ export function WorkspacePage() {
     navigation: ReactNode
     conversation: ReactNode
     title: string
+    conversationId?: string
+    projectName?: string
+    projectWarnings?: string[]
   }) {
     return (
       <div
         className={showWorkspace ? "workspace" : "workspace workspace-entry"}
         data-terminal-expanded={expanded ? "" : undefined}
       >
-        {showWorkspace && !compact ? (
-          <div
-            className="workspace-sidebar-track t-resize"
-            data-collapsed={!sidebarVisible || expanded ? "" : undefined}
-            inert={!sidebarVisible || expanded}
-            aria-hidden={!sidebarVisible || expanded}
+        {showWorkspace ? (
+          <WorkspaceSidebar
+            visible={sidebarVisible && !expanded}
+            compact={compact}
+            terminalVisible={terminalVisible}
+            onCollapse={() => {
+              setSidebarVisible(false)
+              navigationToggle.current?.focus({ preventScroll: true })
+            }}
           >
-            <aside
-              id="workspace-sidebar"
-              className="workspace-sidebar"
-              aria-label="Workspace navigation"
-            >
-              <Brand />
-              {parts?.navigation}
-              {profile}
-            </aside>
-          </div>
-        ) : !showWorkspace ? (
+            <Brand />
+            {parts?.navigation}
+            {profile}
+          </WorkspaceSidebar>
+        ) : (
           <>
             <div className="workspace-entry-brand">
               <Brand />
             </div>
             <div className="workspace-entry-profile">{profile}</div>
           </>
-        ) : null}
+        )}
         {showWorkspace ? (
           <div className="workspace-body">
             <div
@@ -248,6 +249,9 @@ export function WorkspacePage() {
               secondary={
                 <TerminalPanel
                   available={available}
+                  conversationId={parts?.conversationId}
+                  projectName={parts?.projectName}
+                  projectWarnings={parts?.projectWarnings}
                   visible={terminalVisible}
                   expanded={expanded}
                   onExpandedChange={setTerminalExpanded}
@@ -306,7 +310,7 @@ export function WorkspacePage() {
             onClick={(event) => {
               if (
                 (event.target as Element).closest(
-                  ".conversation-row, .conversation-new"
+                  ".conversation-row, .conversation-new, .project-create-chat"
                 )
               ) {
                 setMobileTerminal(false)
@@ -314,7 +318,7 @@ export function WorkspacePage() {
               }
             }}
           >
-            {parts?.navigation}
+            {compact ? parts?.navigation : null}
           </div>
           {profile}
         </Modal>
@@ -395,11 +399,13 @@ export function WorkspacePage() {
   return connected || wasConnected ? (
     <Chat
       available={workspaceReady}
+      projectWorkspace={projects}
       connectedProviders={[
         ...(codexConnected ? [{ id: "codex", name: "Codex" }] : []),
         ...(claudeConnected ? [{ id: "claude", name: "Claude" }] : []),
       ]}
       resuming={resuming}
+      navigationVisible={!compact || drawerOpen}
       renderLayout={layout}
     />
   ) : (

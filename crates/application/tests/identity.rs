@@ -163,7 +163,7 @@ async fn verified_identity_reaches_admission_once_and_pending_is_not_a_session()
                 new_session()
             )
             .await,
-        Ok(AdmissionOutcome::Pending)
+        Ok((AdmissionOutcome::Pending, None))
     ));
     assert_eq!(store.admissions.load(Ordering::SeqCst), 1);
     assert_eq!(provider.exchanges.load(Ordering::SeqCst), 1);

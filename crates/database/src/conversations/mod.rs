@@ -18,6 +18,7 @@ fn conversation(row: &PgRow) -> Result<Conversation, ConversationError> {
     Ok(Conversation {
         id: row.try_get("id").map_err(unavailable)?,
         user_id: row.try_get("user_id").map_err(unavailable)?,
+        project_id: row.try_get("project_id").map_err(unavailable)?,
         provider_thread: row.try_get("provider_thread").map_err(unavailable)?,
         created_at: row.try_get("created_at").map_err(unavailable)?,
     })
@@ -106,7 +107,7 @@ async fn owned(
     user: Uuid,
     id: Uuid,
 ) -> Result<Conversation, ConversationError> {
-    let row = sqlx::query("SELECT id,user_id,provider_thread,created_at FROM factory_identity.conversations WHERE id=$1 AND user_id=$2 FOR UPDATE")
+    let row = sqlx::query("SELECT id,user_id,project_id,provider_thread,created_at FROM factory_identity.conversations WHERE id=$1 AND user_id=$2 FOR UPDATE")
         .bind(id).bind(user).fetch_optional(&mut **tx).await.map_err(unavailable)?.ok_or(ConversationError::NotFound)?;
     conversation(&row)
 }
@@ -254,15 +255,33 @@ impl ConversationStore for PgConversationStore {
         env: Uuid,
         generation: i64,
     ) -> Result<Conversation, ConversationError> {
+        self.create_in_project(actor, env, generation, None).await
+    }
+    async fn create_in_project(
+        &self,
+        actor: EnvironmentActor,
+        env: Uuid,
+        generation: i64,
+        project_id: Option<Uuid>,
+    ) -> Result<Conversation, ConversationError> {
+        if project_id.is_some_and(|id| id.is_nil()) {
+            return Err(ConversationError::Invalid);
+        }
         with_connection(&self.pool, || ConversationError::Unavailable, |connection| {
             Box::pin(async move {
                 let mut tx = connection.begin().await.map_err(unavailable)?;
                 authorize(&mut tx, actor, env, generation).await?;
+                if let Some(id) = project_id {
+                    let ready: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM factory_identity.projects WHERE id=$1 AND user_id=$2 AND environment_id=$3 AND state='ready')")
+                        .bind(id).bind(actor.user_id).bind(env).fetch_one(&mut *tx).await.map_err(unavailable)?;
+                    if !ready { return Err(ConversationError::NotFound); }
+                }
                 let row = sqlx::query(
-                    "INSERT INTO factory_identity.conversations(id,user_id) VALUES($1,$2) RETURNING *",
+                    "INSERT INTO factory_identity.conversations(id,user_id,project_id) VALUES($1,$2,$3) RETURNING *",
                 )
                 .bind(Uuid::new_v4())
                 .bind(actor.user_id)
+                .bind(project_id)
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(unavailable)?;
@@ -451,6 +470,29 @@ impl ConversationStore for PgConversationStore {
             })
         }).await
     }
+
+    async fn get(
+        &self,
+        actor: EnvironmentActor,
+        env: Uuid,
+        generation: i64,
+        id: Uuid,
+    ) -> Result<Conversation, ConversationError> {
+        with_connection(
+            &self.pool,
+            || ConversationError::Unavailable,
+            |connection| {
+                Box::pin(async move {
+                    let mut tx = connection.begin().await.map_err(unavailable)?;
+                    authorize(&mut tx, actor, env, generation).await?;
+                    let conversation = owned(&mut tx, actor.user_id, id).await?;
+                    tx.commit().await.map_err(unavailable)?;
+                    Ok(conversation)
+                })
+            },
+        )
+        .await
+    }
     async fn begin_turn(
         &self,
         actor: EnvironmentActor,
@@ -463,7 +505,12 @@ impl ConversationStore for PgConversationStore {
             Box::pin(async move {
                 let mut tx = connection.begin().await.map_err(unavailable)?;
                 authorize(&mut tx, actor, turn.environment_id, turn.generation).await?;
-                owned(&mut tx, actor.user_id, turn.conversation_id).await?;
+                let conversation = owned(&mut tx, actor.user_id, turn.conversation_id).await?;
+                if let Some(project_id) = conversation.project_id {
+                    let ready: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM factory_identity.projects WHERE id=$1 AND user_id=$2 AND environment_id=$3 AND state='ready')")
+                        .bind(project_id).bind(actor.user_id).bind(turn.environment_id).fetch_one(&mut *tx).await.map_err(unavailable)?;
+                    if !ready { return Err(ConversationError::Conflict); }
+                }
                 let prior = sqlx::query("SELECT * FROM factory_identity.conversation_runs WHERE conversation_id=$1 AND operation_id=$2").bind(turn.conversation_id).bind(turn.operation_id).fetch_optional(&mut *tx).await.map_err(unavailable)?;
                 if let Some(row) = prior {
                     let previous = matching_turn(&row, &turn)?;

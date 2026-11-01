@@ -26,6 +26,8 @@ pub enum ConversationError {
 pub struct Conversation {
     pub id: Uuid,
     pub user_id: Uuid,
+    /// Optional, immutable association; absent conversations use Documents.
+    pub project_id: Option<Uuid>,
     /// Internal provider reference; never include this field in HTTP projections.
     pub provider_thread: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -170,6 +172,19 @@ pub trait ConversationStore: Send + Sync {
         environment_id: Uuid,
         generation: i64,
     ) -> Result<Conversation, ConversationError>;
+    /// Associate a ready, owned project in the same transaction as creation.
+    async fn create_in_project(
+        &self,
+        actor: EnvironmentActor,
+        environment_id: Uuid,
+        generation: i64,
+        project_id: Option<Uuid>,
+    ) -> Result<Conversation, ConversationError> {
+        if project_id.is_some() {
+            return Err(ConversationError::Unavailable);
+        }
+        self.create(actor, environment_id, generation).await
+    }
     async fn list(
         &self,
         actor: EnvironmentActor,
@@ -190,6 +205,19 @@ pub trait ConversationStore: Send + Sync {
         actor: EnvironmentActor,
         turn: StartTurn,
     ) -> Result<Option<Run>, ConversationError>;
+    /// Resolve the owned conversation without requiring the full message history.
+    async fn get(
+        &self,
+        actor: EnvironmentActor,
+        environment_id: Uuid,
+        generation: i64,
+        id: Uuid,
+    ) -> Result<Conversation, ConversationError> {
+        Ok(self
+            .history(actor, environment_id, generation, id)
+            .await?
+            .conversation)
+    }
     /// Repeating an operation with identical inputs returns its original run, never re-executes it.
     async fn begin_turn(
         &self,

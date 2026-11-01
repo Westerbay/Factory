@@ -89,18 +89,31 @@ async fn issue(
         serde_json::from_slice(&body).map_err(|_| AuthError::invalid().into_response())?;
     let ticket = random_token().map_err(|error| AuthError::from(error).into_response())?;
     let hash = hash_token(&ticket).map_err(|error| AuthError::from(error).into_response())?;
-    let expires_at = service
-        .issue(
-            EnvironmentActor {
-                user_id: authenticated.session.user.id,
-                session_hash: authenticated.token_hash,
-            },
-            hash,
-            request.take_over,
-            authenticated.session.expires_at,
-        )
-        .await
-        .map_err(error)?;
+    let actor = EnvironmentActor {
+        user_id: authenticated.session.user.id,
+        session_hash: authenticated.token_hash,
+    };
+    let expires_at = if let Some(conversation) = request.conversation_id {
+        service
+            .issue_for_conversation(
+                actor,
+                hash,
+                request.take_over,
+                authenticated.session.expires_at,
+                conversation,
+            )
+            .await
+    } else {
+        service
+            .issue(
+                actor,
+                hash,
+                request.take_over,
+                authenticated.session.expires_at,
+            )
+            .await
+    }
+    .map_err(error)?;
     Ok((
         StatusCode::CREATED,
         Json(AttachmentResponse { ticket, expires_at }),

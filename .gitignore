@@ -9,7 +9,7 @@ out/
 # Planning documents stay local unless publication is explicitly requested.
 docs/plans/
 
-# Local non-secret database ownership marker.
+# Local installation state, including secrets; never commit this directory.
 .factory/
 
 # Rust build output is local; Cargo.lock is versioned.

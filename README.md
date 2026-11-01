@@ -7,9 +7,10 @@ with Codex and Claude Code conversations, a persistent web terminal and personal
 The frontend builds to static assets
 hosted independently of Rust and is installable as a PWA.
 
-The member workspace provides provider conversations and an xterm terminal backed by Docker
-exec and tmux. Codex and Claude Code run with full access inside the user container, including
-its home and credentials. Repository selection and global skills remain future work.
+The member workspace provides Codex and Claude Code conversations and an xterm terminal backed by Docker
+exec and tmux. Both agents run with full access inside the user container, including its home
+and credentials. Members can authorize GitHub access, import projects and start chats and
+independent persistent terminals in each repository. Global skills remain future work.
 The existing TypeScript execution packages remain porting references;
 their history is not assigned or exposed to web users. Hosting and deployment are
 outside the current local increment.
@@ -21,7 +22,8 @@ linker. Windows Rust builds need the MSVC C++ tools and Windows SDK. After
 `pnpm install --frozen-lockfile`, copy [.env.example](.env.example) to `.env` at the
 repository root and fill in the two GitHub OAuth values. See the
 [GitHub OAuth setup](docs/DEVELOPMENT.md#github-oauth-setup) for registration and the
-administrator CLI setup. Existing terminal variables override `.env` values.
+administrator CLI setup. Factory automatically creates and retains the local key used to
+protect repository credentials. Existing terminal variables override `.env` values.
 
 With Docker running, initialize the owned local database explicitly:
 

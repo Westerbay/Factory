@@ -66,3 +66,8 @@
     padding-block: 0.75rem;
   }
 }
+
+.workspace-recovery button[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

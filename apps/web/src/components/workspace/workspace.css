@@ -14,7 +14,6 @@
 }
 .workspace-sidebar-track {
   flex: none;
-  width: 224px;
   height: 100%;
   overflow: hidden;
 }
@@ -24,13 +23,25 @@
 .workspace-sidebar {
   display: flex;
   flex-direction: column;
-  flex: 0 0 224px;
-  width: 224px;
+  flex: none;
   height: 100%;
   min-width: 0;
   padding: 1.5rem 0.75rem 0.75rem;
   background: var(--surface-sidebar);
-  border-right: 1px solid var(--border);
+}
+.workspace-sidebar-separator {
+  flex: 0 0 1px;
+  height: 100%;
+}
+.workspace-sidebar-separator[data-resizing] {
+  background: var(--text-muted);
+}
+.workspace:has(.workspace-sidebar-separator[data-resizing]) {
+  cursor: col-resize;
+  user-select: none;
+}
+.workspace-sidebar-track[data-resizing] {
+  transition: none;
 }
 .workspace-sidebar > .ui-brand {
   margin: 0 0.75rem 2rem;

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
 
 import { Button } from "../../components/ui/button"
 import { ApiFailure } from "../../lib/api/client"
@@ -9,30 +9,47 @@ import {
   recoverModelProbe,
   type Recoverable,
 } from "./api"
+import {
+  listRecoverable as listRecoverableImports,
+  recover as recoverImport,
+  remainingAfterRecovery,
+  type RecoverableImport,
+} from "../projects/api"
 import "./recovery.css"
 
 /** A stopped environment can expose runs to recover even after a page reload. */
 export function Recovery() {
   const { state: session } = useSession()
   const [entries, setEntries] = useState<Recoverable[]>([])
+  const [imports, setImports] = useState<RecoverableImport[]>([])
   const [message, setMessage] = useState("")
   const [busy, setBusy] = useState(false)
   const [checking, setChecking] = useState(true)
   const [retryNeeded, setRetryNeeded] = useState(false)
   const [version, setVersion] = useState(0)
   const mutation = useRef<AbortController | null>(null)
+  const statusRef = useRef<HTMLParagraphElement>(null)
+  const restoreImportFocus = useRef(false)
+  useLayoutEffect(() => {
+    if (restoreImportFocus.current && document.activeElement === document.body)
+      statusRef.current?.focus()
+    restoreImportFocus.current = false
+  }, [imports])
   useEffect(() => () => mutation.current?.abort(), [])
   const csrf = session.status === "active" ? session.session.csrfToken : ""
   useEffect(() => {
     if (!csrf) return
     const controller = new AbortController()
     setChecking(true)
-    void listRecoverable(
-      AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)])
-    )
-      .then((data) => {
+    const signal = AbortSignal.any([
+      controller.signal,
+      AbortSignal.timeout(10_000),
+    ])
+    void Promise.all([listRecoverable(signal), listRecoverableImports(signal)])
+      .then(([data, pendingImports]) => {
         if (controller.signal.aborted) return
         setEntries(data)
+        setImports(pendingImports)
         setMessage("")
         setRetryNeeded(false)
       })
@@ -72,6 +89,51 @@ export function Recovery() {
       if (!controller.signal.aborted) {
         setMessage(
           "Recovery could not be confirmed. Check its status in Recovery options."
+        )
+        setRetryNeeded(true)
+      }
+    } finally {
+      if (!controller.signal.aborted) setBusy(false)
+      if (mutation.current === controller) mutation.current = null
+    }
+  }
+  async function runImport(
+    entry: RecoverableImport,
+    button: HTMLButtonElement
+  ) {
+    if (mutation.current || checking || !csrf) return
+    setBusy(true)
+    setMessage("")
+    const controller = new AbortController()
+    mutation.current = controller
+    try {
+      await recoverImport(
+        entry.projectId,
+        csrf,
+        AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)])
+      )
+      if (controller.signal.aborted) return
+      restoreImportFocus.current = document.activeElement === button
+      setMessage("Checking remaining imports…")
+      setImports((current) =>
+        current.filter((item) => item.projectId !== entry.projectId)
+      )
+      const remaining = await remainingAfterRecovery(
+        imports.filter((item) => item.projectId !== entry.projectId),
+        AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)])
+      )
+      if (controller.signal.aborted) return
+      setImports(remaining)
+      setMessage(
+        remaining.length
+          ? "More imports need recovery before returning to your workspace."
+          : "Import recovered. Return to your workspace to retry it."
+      )
+      setRetryNeeded(false)
+    } catch {
+      if (!controller.signal.aborted) {
+        setMessage(
+          "Import recovery could not be confirmed. Check its status and try again."
         )
         setRetryNeeded(true)
       }
@@ -145,7 +207,37 @@ export function Recovery() {
           </ul>
         </div>
       )}
-      <p className="workspace-recovery-status" role="status">
+      {imports.length > 0 && (
+        <div className="workspace-recovery-tasks">
+          <h2>
+            {imports.length === 1
+              ? "An import needs recovery"
+              : "Imports need recovery"}
+          </h2>
+          <p>Recover interrupted imports before returning to your workspace.</p>
+          <ul>
+            {imports.map((entry, index) => (
+              <li key={entry.projectId}>
+                <Button
+                  disabled={checking || !csrf}
+                  aria-disabled={busy || undefined}
+                  onClick={(event) =>
+                    void runImport(entry, event.currentTarget)
+                  }
+                >
+                  Recover import {index + 1}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <p
+        ref={statusRef}
+        tabIndex={-1}
+        className="workspace-recovery-status"
+        role="status"
+      >
         {message}
       </p>
       <details className="workspace-recovery-options">

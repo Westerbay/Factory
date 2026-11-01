@@ -20,17 +20,59 @@ chooses Codex or Claude Code; a saved connected account opens the workspace
 directly. The workspace has conversation history on the left, chat in the center and a
 collapsible terminal on the right. The GitHub profile at the bottom left exposes Settings,
 Stop environment and Sign out, plus User access for administrators. Provider account
-details, additional connections and disconnect actions belong in Settings. Repository selection, cloning and global
-skills are not available. The shared graphite interface uses Space Mono and concise
+details, additional connections and disconnect actions belong in Settings. GitHub sign-in
+requests repository access as well as identity. Global skills are not available. The shared
+graphite interface uses Space Mono and concise
 contextual status instead of an environment dashboard or permanent refresh controls.
-GitHub sign-in does not request repository permissions or save a provider access token.
+
+## GitHub projects
+
+A member authorizes repository access during GitHub sign-in. The app requests GitHub
+`repo`, `write:public_key` and `user:email` permissions; the classic `repo` scope grants
+broad read/write access. Once the environment is ready, Factory automatically registers its
+dedicated SSH public key. Codex and the
+terminal can use its private key with that member's GitHub permissions, including push;
+repository rules and organization SSO still apply. The account's verified primary email
+is used as the default Git author email, which is visible to readers of commits. Existing
+explicit Git identity settings take precedence.
+
+Accessible repositories can be imported into the environment's `~/Documents` using
+the repository name as the folder name, such as `~/Documents/Factory`. If that name is
+already occupied, import reports the conflict without overwriting it. The import picker
+excludes existing projects and shows progress until the clone is ready; users may continue
+in the background. Deleting a local project folder leaves its project and chats
+listed, but the folder must be restored before its project sessions can run. Import
+reserves the stable GitHub repository ID before cloning; concurrent requests never launch another clone. Interrupted or
+uncertain imports require an observed environment stop and explicit recovery before a
+retry. Factory never overwrites or adopts unrecognized folders. The sidebar groups chats
+under independently expandable projects and offers a new-chat action on each project. Project chats start and
+resume Codex or Claude Code in the selected repository; an unavailable folder is reported rather than
+replacing it with a different directory.
+
+A confirmed project deletion removes its local checkout and chats, including unpushed changes,
+but leaves the GitHub repository untouched. Deletion is refused while an import or project
+run is active or uncertain. Members must stop terminal commands first; terminal access to
+project chats closes when deletion starts. An interrupted deletion can be retried from the
+project row. Unrecognized or replaced folders are never deleted.
+
+When a member opens a project, Factory checks whether its original GitHub path still
+identifies the same repository. A redirect, inaccessible path or different repository
+is reported for review; an unavailable check is shown as unverified, without blocking
+local work. This check does not inspect the Git remote or establish that a push is safe:
+GitHub may change after the check, and the member may have configured a different remote
+or push URL. Factory never changes those Git settings automatically.
+
+Disconnecting repository access locally removes the saved OAuth token but does not itself
+remove the SSH key. Members can inspect or revoke SSH keys in GitHub settings. Revoking
+all GitHub OAuth app permissions also removes keys created by that app; GitHub removes
+keys unused for one year. Reconnection recovers a confirmed missing registered key.
 
 ## Private local environments
 
 Creating or activating an account creates no Docker resources. On entry to the workspace,
 an active member automatically initializes a missing environment or starts a stopped one.
 An existing running environment is reused. Before starting a stopped environment,
-Factory checks for recoverable runs; a failed check or outstanding recovery keeps it
+Factory checks for recoverable runs and imports; a failed check or outstanding recovery keeps it
 stopped with an explicit recovery path. Initialization creates a private home volume.
 Files under `/home/factory`, including the working directory `/home/factory/Documents`,
 survive stop/start, sign-out and suspension. There is no volume deletion or reset action.
@@ -66,17 +108,19 @@ Factory imposes no limit on the number of started environments, CPU, memory or p
 counts. They share available host resources; Docker Desktop and operating-system limits
 still apply. Containers retain a non-root user and a read-only root
 filesystem. Temporary storage and logs remain bounded; persistent named volumes have no
-portable disk quota. Each user has an isolated internal network; only approved OpenAI and
-Anthropic HTTPS destinations are reachable through the shared installation proxy. General
-Internet, host/LAN and other-user access are blocked. There is no file editor.
+portable disk quota. Each user has an isolated internal network; approved OpenAI and
+Anthropic HTTPS destinations and GitHub SSH on port 443 are reachable through the shared
+installation proxy. General Internet, host/LAN and other-user access are blocked. There is no file editor.
 
 Existing environments with a different image or policy are never silently replaced.
 A local database reset removes database records but does not delete Docker homes.
 
 ## Terminal and personal provider accounts
 
-The terminal opens in `~/Documents` with zsh and Oh My Zsh in the current image,
-shows Neofetch when its shell starts, and attaches to a persistent tmux shell. Closing the
+A project chat’s terminal starts in that project repository; a projectless chat starts in
+`~/Documents`. Each chat attaches to its own persistent zsh/tmux shell and shows Neofetch
+when its shell starts. Switching chats or reconnecting preserves the shell and a directory
+changed by the member. Closing the
 page, losing the connection or restarting the API detaches the display without stopping
 the shell. Stop environment ends its processes; saved files remain. One view owns input
 at a time, and another view must explicitly take over. Reconnection never replays unsent
@@ -204,8 +248,8 @@ tab; another tab's choice does not automatically reload it.
 
 ## Direction and preserved execution behavior
 
-Future work will connect each user's isolated server environment to repository providers
-and global skills. Providers should remain replaceable.
+Future work includes global skills and additional repository providers. Providers should
+remain replaceable.
 Repository authorization and agent execution remain explicit capabilities, never hidden
 actions of sign-in.
 

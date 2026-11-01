@@ -1,0 +1,191 @@
+.project-navigation {
+  flex: none;
+  min-width: 0;
+}
+.project-navigation-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.project-navigation-heading .conversation-list-label {
+  margin: 0.75rem 0.75rem 0.5rem;
+}
+.project-navigation-heading .ui-icon-button {
+  width: 2rem;
+  height: 2rem;
+  min-height: 2rem;
+}
+.project-list {
+  overflow: visible;
+}
+.project-navigation .project-row,
+.project-navigation .project-more {
+  width: 100%;
+  justify-content: flex-start;
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+.project-row-group {
+  display: flex;
+  align-items: center;
+}
+.project-navigation .project-row {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+}
+.project-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-row svg {
+  flex: none;
+}
+.project-row[aria-expanded="true"],
+.project-navigation .project-row:hover:not(:disabled) {
+  background: transparent;
+  color: var(--text);
+}
+.project-create-chat,
+.project-delete {
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+  min-height: 2rem;
+}
+.project-delete {
+  color: var(--text-muted);
+}
+.project-delete-dialog p {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+.project-delete-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1.5rem;
+}
+.project-chats {
+  padding-left: 1.75rem;
+  overflow: visible;
+}
+.project-chats .conversation-row {
+  min-height: 2.25rem;
+}
+.project-state,
+.project-hint,
+.project-message {
+  margin: 0.35rem 0.75rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.project-message p {
+  margin: 0;
+}
+.project-message .ui-button,
+.project-retry {
+  font-size: 0.75rem;
+}
+.project-picker {
+  width: min(36rem, calc(100vw - 2rem));
+}
+.project-import-progress {
+  padding: 1.5rem 0;
+}
+.project-import-progress .ui-loading {
+  flex-direction: row;
+  justify-content: flex-start;
+  padding: 0;
+  text-align: left;
+}
+.project-import-progress .ui-loading-title {
+  font-size: 0.875rem;
+}
+.project-import-progress p {
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.project-import-progress .project-import-title {
+  color: var(--text);
+  font-weight: 600;
+}
+.project-picker-caption,
+.project-connect p,
+.project-account p {
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+.project-search {
+  display: grid;
+  gap: 0.4rem;
+  margin-block: 1rem;
+  font-size: 0.8125rem;
+}
+.project-search input {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+}
+.project-repositories {
+  display: flex;
+  max-height: min(45vh, 25rem);
+  overflow-y: auto;
+  flex-direction: column;
+}
+.project-repositories .project-repository {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.75rem;
+  justify-content: space-between;
+  font-size: 0.8125rem;
+  font-weight: 400;
+}
+.project-repository span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-repository small {
+  flex: none;
+  color: var(--text-muted);
+}
+.project-repository-meta {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-muted);
+}
+.project-account {
+  margin-top: 1rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+.project-account a {
+  display: inline-block;
+  margin: 0.5rem;
+  color: inherit;
+}
+@media (pointer: coarse) {
+  .project-navigation-heading .ui-icon-button,
+  .project-create-chat,
+  .project-delete {
+    width: 2.75rem;
+    height: 2.75rem;
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+}

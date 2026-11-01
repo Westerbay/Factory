@@ -107,6 +107,22 @@ impl TerminalRuntime for Runtime {
             output: Box::new(Output),
         })
     }
+    async fn attach_conversation(
+        &self,
+        environment: &Environment,
+        _: Uuid,
+        _: Option<&Project>,
+    ) -> Result<TerminalProcess, TerminalError> {
+        self.attach(environment).await
+    }
+    async fn detach_conversation(
+        &self,
+        environment: &Environment,
+        _: Uuid,
+        handle: &str,
+    ) -> Result<(), TerminalError> {
+        self.detach(environment, handle).await
+    }
     async fn resize(&self, _: &str, _: TerminalSize) -> Result<(), TerminalError> {
         Ok(())
     }
@@ -314,4 +330,101 @@ async fn inputs_are_reauthorized_and_bounded_before_writing() {
     );
     assert!(fixture.runtime.writes.lock().unwrap().is_empty());
     fixture.service.finish(attachment).await.unwrap();
+}
+
+struct ConversationAccess {
+    owner: Uuid,
+    allowed: [Uuid; 2],
+    revoked: AtomicBool,
+}
+impl TerminalConversationAccess for ConversationAccess {
+    fn project<'a>(
+        &'a self,
+        actor: EnvironmentActor,
+        _: &'a Environment,
+        conversation: Uuid,
+    ) -> ProjectResolution<'a> {
+        Box::pin(async move {
+            if self.revoked.load(Ordering::SeqCst)
+                || actor.user_id != self.owner
+                || !self.allowed.contains(&conversation)
+            {
+                return Err(TerminalError::Conflict);
+            }
+            Ok(None)
+        })
+    }
+}
+
+#[tokio::test]
+async fn conversations_have_independent_tickets_takeovers_and_cleanup() {
+    let mut fixture = Fixture::new().await;
+    let one = Uuid::new_v4();
+    let two = Uuid::new_v4();
+    let access = Arc::new(ConversationAccess {
+        owner: fixture.actor.user_id,
+        allowed: [one, two],
+        revoked: AtomicBool::new(false),
+    });
+    fixture.service.conversations = Some(access.clone());
+    let expiry = Utc::now() + ChronoDuration::minutes(1);
+    fixture
+        .service
+        .issue_for_conversation(fixture.actor, CredentialHash([21; 32]), false, expiry, one)
+        .await
+        .unwrap();
+    fixture
+        .service
+        .issue_for_conversation(fixture.actor, CredentialHash([22; 32]), false, expiry, two)
+        .await
+        .unwrap();
+    let mut first = fixture.attach(21).await.unwrap();
+    let second = fixture.attach(22).await.unwrap();
+    // A deletion fence or removed conversation must revoke an existing attachment.
+    access.revoked.store(true, Ordering::SeqCst);
+    assert_eq!(
+        fixture
+            .service
+            .write(&mut first, b"must not reach shell")
+            .await,
+        Err(TerminalError::Conflict)
+    );
+    assert!(fixture.runtime.writes.lock().unwrap().is_empty());
+    access.revoked.store(false, Ordering::SeqCst);
+    assert!(!*first.replaced.borrow());
+    assert!(!*second.replaced.borrow());
+    assert_eq!(
+        fixture
+            .service
+            .issue_for_conversation(fixture.actor, CredentialHash([23; 32]), false, expiry, one)
+            .await,
+        Err(TerminalError::Conflict)
+    );
+    fixture
+        .service
+        .issue_for_conversation(fixture.actor, CredentialHash([24; 32]), true, expiry, one)
+        .await
+        .unwrap();
+    let replacement = fixture.attach(24).await.unwrap();
+    assert!(*first.replaced.borrow());
+    assert!(!*second.replaced.borrow());
+    fixture.service.finish(first).await.unwrap();
+    assert_eq!(*fixture.runtime.detached.lock().unwrap(), vec!["0"]);
+    fixture.service.finish(second).await.unwrap();
+    assert!(!*replacement.replaced.borrow());
+    fixture.service.finish(replacement).await.unwrap();
+    assert_eq!(
+        *fixture.runtime.detached.lock().unwrap(),
+        vec!["0", "1", "2"]
+    );
+    fixture
+        .service
+        .issue_for_conversation(fixture.actor, CredentialHash([25; 32]), false, expiry, one)
+        .await
+        .unwrap();
+    access.revoked.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        fixture.attach(25).await,
+        Err(TerminalError::Conflict)
+    ));
 }

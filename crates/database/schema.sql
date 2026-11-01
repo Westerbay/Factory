@@ -1,6 +1,6 @@
 CREATE SCHEMA factory_identity;
-CREATE TABLE factory_identity.schema_info (id boolean PRIMARY KEY DEFAULT true CHECK (id), version integer NOT NULL CHECK (version = 1));
-INSERT INTO factory_identity.schema_info(id,version) VALUES(true,1);
+CREATE TABLE factory_identity.schema_info (id boolean PRIMARY KEY DEFAULT true CHECK (id), version integer NOT NULL CHECK (version = 4));
+INSERT INTO factory_identity.schema_info(id,version) VALUES(true,4);
 -- Identity and user access.
 CREATE TABLE factory_identity.users (
     id uuid PRIMARY KEY,
@@ -31,7 +31,8 @@ CREATE TABLE factory_identity.sessions (
     user_id uuid NOT NULL REFERENCES factory_identity.users(id),
     csrf_token text NOT NULL CHECK (length(csrf_token) BETWEEN 32 AND 256),
     expires_at timestamptz NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    UNIQUE (token_hash, user_id)
 );
 CREATE INDEX identity_sessions_user ON factory_identity.sessions (user_id);
 CREATE INDEX identity_sessions_expiry ON factory_identity.sessions (expires_at);
@@ -72,15 +73,78 @@ CREATE TABLE factory_identity.environments (
     error_code text CHECK (error_code IN ('unauthorized','conflict','unavailable','invalid_configuration','ownership_conflict','volume_missing','provisioning_uncertain','policy_mismatch','timeout')),
     next_reconcile_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-    updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+    updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    UNIQUE (id, user_id)
 );
 CREATE INDEX environments_reconcile ON factory_identity.environments (installation_id,next_reconcile_at);
+
+-- Durable fencing persists even after a repository credential is disconnected.
+CREATE TABLE factory_identity.github_authorization_epochs (
+    user_id uuid PRIMARY KEY REFERENCES factory_identity.users(id),
+    epoch bigint NOT NULL DEFAULT 1 CHECK (epoch > 0)
+);
+
+-- Encrypted provider credentials remain opaque to persistence. Encryption and key
+-- lifecycle belong to the provider adapter, never to the browser or database.
+CREATE TABLE factory_identity.github_credentials (
+    user_id uuid PRIMARY KEY REFERENCES factory_identity.users(id),
+    github_user_id bigint NOT NULL CHECK (github_user_id > 0),
+    authorization_epoch bigint NOT NULL CHECK (authorization_epoch > 0),
+    github_login text NOT NULL CHECK (length(github_login) BETWEEN 1 AND 128),
+    primary_email text NOT NULL CHECK (length(primary_email) BETWEEN 3 AND 320),
+    key_id text NOT NULL CHECK (length(key_id) BETWEEN 1 AND 128),
+    nonce bytea NOT NULL CHECK (octet_length(nonce) BETWEEN 12 AND 32),
+    ciphertext bytea NOT NULL CHECK (octet_length(ciphertext) BETWEEN 16 AND 8192),
+    updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
+-- Provider capability OAuth attempts are separate from identity login attempts.
+-- Revoking the initiating session removes its pending attempts.
+CREATE TABLE factory_identity.github_authorization_attempts (
+    state_hash bytea PRIMARY KEY CHECK (octet_length(state_hash) = 32),
+    binding_hash bytea NOT NULL CHECK (octet_length(binding_hash) = 32),
+    pkce_verifier text NOT NULL CHECK (length(pkce_verifier) BETWEEN 43 AND 128),
+    user_id uuid NOT NULL REFERENCES factory_identity.users(id),
+    session_hash bytea NOT NULL,
+    environment_id uuid NOT NULL,
+    environment_generation bigint NOT NULL CHECK (environment_generation > 0),
+    authorization_epoch bigint NOT NULL CHECK (authorization_epoch > 0),
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    expires_at timestamptz NOT NULL,
+    FOREIGN KEY (session_hash, user_id) REFERENCES factory_identity.sessions(token_hash, user_id) ON DELETE CASCADE,
+    FOREIGN KEY (environment_id, user_id) REFERENCES factory_identity.environments(id, user_id),
+    CHECK (expires_at > created_at)
+);
+CREATE INDEX github_authorization_attempts_expiry ON factory_identity.github_authorization_attempts(expires_at);
+
+-- The path is a validated repository directory name under Documents.
+CREATE TABLE factory_identity.projects (
+    id uuid PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES factory_identity.users(id),
+    repository_id bigint NOT NULL CHECK (repository_id > 0),
+    full_name text NOT NULL CHECK (length(full_name) BETWEEN 3 AND 256),
+    cloned_full_name text NOT NULL CHECK (length(cloned_full_name) BETWEEN 3 AND 256),
+    directory text NOT NULL CHECK (directory ~ '^[A-Za-z0-9._-]{1,100}$' AND directory NOT IN ('.', '..')),
+    state text NOT NULL CHECK (state IN ('importing','ready','failed','deleting')),
+    operation_id uuid NOT NULL,
+    environment_id uuid NOT NULL,
+    environment_generation bigint NOT NULL CHECK (environment_generation > 0),
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    FOREIGN KEY (environment_id, user_id) REFERENCES factory_identity.environments(id, user_id),
+    UNIQUE (user_id, repository_id),
+    CONSTRAINT projects_user_directory_key UNIQUE (user_id, directory),
+    UNIQUE (id, user_id)
+);
+CREATE INDEX projects_owner ON factory_identity.projects (user_id, created_at DESC, id DESC);
 
 -- User-owned conversation history.
 CREATE TABLE factory_identity.conversations (
     id uuid PRIMARY KEY,
     user_id uuid NOT NULL REFERENCES factory_identity.users(id),
     provider_thread text CHECK (length(provider_thread) BETWEEN 1 AND 512),
+    project_id uuid,
+    FOREIGN KEY (project_id, user_id) REFERENCES factory_identity.projects(id, user_id),
     created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 CREATE INDEX conversations_owner ON factory_identity.conversations (user_id, created_at DESC, id);

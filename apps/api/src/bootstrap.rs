@@ -1,5 +1,6 @@
 mod environments;
 mod recovery;
+mod repository_key;
 
 use crate::{
     app::{self, IdentityRuntime},
@@ -41,10 +42,8 @@ async fn identity(config: &RuntimeConfig) -> Result<IdentityRuntime, &'static st
         database.close().await;
         return Err(code);
     }
-    let service = Arc::new(IdentityService::new(
-        Arc::new(database.store()),
-        Arc::new(provider),
-    ));
+    let store = Arc::new(database.store());
+    let service = Arc::new(IdentityService::new(store, Arc::new(provider)));
     Ok(IdentityRuntime {
         auth: AuthState::new(service, config),
         database,
@@ -70,15 +69,21 @@ pub async fn serve(config: RuntimeConfig) -> Result<(), &'static str> {
     let api_origin = config.api_origin().to_owned();
     // The prepared factory holds the installation lock for the entire server
     // lifetime, including outages, recovery attempts and an unexpected worker exit.
-    let factory = database.as_ref().and_then(|database| {
-        match EnvironmentHostFactory::prepare(&config, database.clone()) {
+    let factory = if let Some(database) = &database {
+        match EnvironmentHostFactory::prepare(&config, database.clone()).await {
             Ok(factory) => Some(factory),
             Err(error) => {
-                tracing::warn!(event = "api.environments.unavailable", code = error.code(), guidance = "Prepare the local environment and ensure only one API uses this installation, then restart.");
+                tracing::warn!(
+                    event = "api.environments.unavailable",
+                    code = error.code(),
+                    guidance = "Prepare the local environment and ensure only one API uses this installation, then restart."
+                );
                 None
             }
         }
-    });
+    } else {
+        None
+    };
     let (stop, stopped) = watch::channel(false);
     let fallback = app::router(&config, identity.clone())?;
     let (router, recovery) = if let Some(factory) = factory.clone() {
@@ -146,14 +151,14 @@ async fn create_host_router(
     identity: Option<IdentityRuntime>,
 ) -> Result<HostRouter<EnvironmentHost>, EnvironmentError> {
     let mut host = factory.start().await?;
-    let router = app::router_with_conversations(
+    let router = app::router_with_projects(
         config,
         identity,
         Some(host.service()),
         Some(host.terminal()),
-        Some(host.accounts()),
-        Some(host.claude_accounts()),
+        (Some(host.accounts()), Some(host.claude_accounts())),
         Some(host.conversations()),
+        Some(host.projects()),
     );
     match router {
         Ok(router) => Ok(HostRouter { router, host }),

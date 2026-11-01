@@ -1,5 +1,11 @@
+mod repository;
+pub use repository::GitHubRepositoryProvider;
+
 use async_trait::async_trait;
-use factory_core::identity::{IdentityError, IdentityProvider, VerifiedIdentity};
+use factory_core::identity::{
+    IdentityError, IdentityProvider, RepositoryAccessProvider, RepositoryAccessToken,
+    VerifiedIdentity,
+};
 use oauth2::{
     AuthType, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointNotSet,
     EndpointSet, HttpRequest, HttpResponse, PkceCodeVerifier, RedirectUrl, RequestTokenError,
@@ -73,6 +79,7 @@ type OAuthClient =
     BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet>;
 
 /// No Debug implementation: the OAuth client owns a client secret.
+#[derive(Clone)]
 pub struct GitHubProvider {
     oauth: OAuthClient,
     http: Client,
@@ -159,10 +166,30 @@ impl IdentityProvider for GitHubProvider {
             .oauth
             .authorize_url(|| CsrfToken::new(state.to_owned()))
             .add_scope(Scope::new("read:user".into()))
+            .add_scope(Scope::new("repo".into()))
+            .add_scope(Scope::new("write:public_key".into()))
+            .add_scope(Scope::new("user:email".into()))
             .add_extra_param("code_challenge", challenge)
             .add_extra_param("code_challenge_method", "S256")
             .url();
         Ok(url.into())
+    }
+
+    async fn exchange_login(
+        &self,
+        code: &str,
+        verifier: &str,
+    ) -> Result<(VerifiedIdentity, Option<RepositoryAccessToken>), IdentityError> {
+        let provider = GitHubRepositoryProvider::from_identity(self.clone());
+        let (token, identity) = RepositoryAccessProvider::exchange(&provider, code, verifier)
+            .await
+            .map_err(|error| match error {
+                factory_core::identity::RepositoryAccessError::InvalidLogin => {
+                    IdentityError::InvalidLogin
+                }
+                _ => IdentityError::Unavailable,
+            })?;
+        Ok((identity, Some(token)))
     }
 
     async fn exchange(

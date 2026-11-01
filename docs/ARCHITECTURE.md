@@ -54,8 +54,9 @@ and the static frontend never receives server credentials.
 
 The [GitHub adapter](../crates/adapters/src/identity/github.rs) performs the provider
 exchange and returns the stable provider/issuer/subject identity. Handles and display
-names are presentation data. Provider tokens are used only for identity lookup, then
-discarded; no repository permissions or provider-token persistence are implemented.
+names are presentation data. Sign-in requests repository permissions and retains the
+provider token encrypted server-side only after active admission. The session is revoked
+if credential persistence fails. Repository credential storage rechecks session and epoch.
 OAuth state, browser binding and PKCE protect the single-use login attempt.
 
 Rust [HTTP contracts](../apps/api/src/contracts/mod.rs) and handler annotations produce
@@ -225,19 +226,55 @@ network membership and ownership before interactive exec. Only the proxy joins b
 the user's bridge and the installation's outbound bridge; IP forwarding is disabled.
 
 The pinned [Squid policy](../infra/egress/squid.conf) permits CONNECT on port 443 only for
-the listed OpenAI and Anthropic hosts. DNS answers and actual destination addresses are
+the listed OpenAI, Anthropic and GitHub SSH hosts. DNS answers and actual destination addresses are
 both checked against private/reserved ranges. The proxy entrypoint installs
 its nftables policy, then drops privilege and all capabilities before serving requests.
 There is no TLS interception or tunnel-content logging. Unsupported engine/network policy
 fails closed. Proxy failure affects Codex availability without disabling the local shell;
 status reads never start the proxy or user environment.
 
+## Repository access and project imports
+
+[RepositoryAccessService](../crates/application/src/identity/repository_access.rs) owns
+the session-bound repository capability, including stable identity verification and
+idempotent public SSH key registration. The GitHub adapter requests repository, public-key
+and verified-email scopes; [authenticated encryption](../crates/adapters/src/identity/cipher.rs)
+protects the persisted token with an automatically generated, persistent installation key.
+The key is stored outside the database and user environments; if missing while encrypted
+credentials exist, repository access fails closed rather than silently replacing it. The browser never receives
+the token or SSH private key. Revoked OAuth access and a missing encryption key do not
+invalidate a Factory identity session.
+
+[Projects](../crates/core/src/projects/mod.rs) and their [store](../crates/database/src/projects/mod.rs)
+reserve a provider repository ID once per member and fence operations by session and
+environment generation. The API filters each bounded GitHub page against stored IDs.
+The stable local directory is the validated repository name, checked for conflicts before
+reservation and finalized without replacement; it does not change when GitHub renames a repository.
+On project use, the API verifies the original clone path against GitHub's current identity
+without following redirects. Redirects, missing or inaccessible paths, and different IDs
+or names are reported for review; provider errors leave the status unverified. This
+observation does not inspect or modify Git remotes and cannot guarantee a safe push:
+GitHub can change afterward, and users can change a remote or push URL.
+The [container runtime](../crates/adapters/src/projects/mod.rs) executes an immutable,
+bounded controller with an application-owned staging receipt and no-replace finalization.
+Deletion durably fences new project runs before moving only the verified checkout and its
+owned import stage to a private quarantine. A persistent inode receipt permits a safe retry
+without touching a newly created namesake. Only after filesystem cleanup does a transaction
+remove the project's chats, run history and project row. Active or uncertain runs block deletion.
+A result that may still have descendants remains uncertain; stopped-state recovery checks
+a fresh observation, then the original on-disk receipt before confirming or retrying.
+Before retry, the controller removes only the stopped operation's verified temporary checkout;
+its marker remains so interrupted cleanup is safe to repeat.
+The key is generated within the private home at container startup and reused on restart.
+GitHub SSH traverses the exact `ssh.github.com:443` proxy allowance and verifies the
+published host key. All processes in that container, including Codex, can use its key.
+
 The workspace image includes an unmodified, checksum-verified Claude Code binary.
 
 ## Terminal and account operations
 
 [TerminalService](../crates/application/src/terminals/mod.rs) owns one-use, 30-second
-attachment tickets bound to user, session, environment generation and takeover decision.
+attachment tickets bound to user, session, environment generation, conversation and takeover decision.
 HTTP ticket creation requires Origin and CSRF. WebSocket upgrade requires the session,
 exact Origin and fixed subprotocol; the ticket travels in the first message, never the URL.
 Input and resize requests revalidate access. Passive streams check at most every five
@@ -246,7 +283,9 @@ close them promptly. An in-flight Docker attachment is settled and detached afte
 revocation rather than abandoning its handle.
 
 The [Docker terminal adapter](../crates/adapters/src/terminals/mod.rs) attaches a fixed
-non-root tmux command with zsh in the current image. tmux owns shell lifetime; the API owns only the attached client.
+non-root tmux command with zsh in the current image. Each conversation owns a distinct
+persistent tmux session; reattachment preserves the shell and its current directory.
+tmux owns shell lifetime; the API owns only the attached client.
 The stream uses 16-KiB output chunks and a 256-KiB unacknowledged window. xterm acknowledges
 only after processing output; a slow client is detached. Input/output buffers are bounded,
 and reconnect never replays input. Explicit takeover invalidates the previous attachment
@@ -282,7 +321,9 @@ Claude logout uses the same active-run guard as Codex.
 [Conversation contracts](../crates/core/src/conversations/mod.rs) and
 [service](../crates/application/src/conversations/mod.rs) bind user-owned conversations,
 runs, completed messages and grouped questions to the verified session and environment
-generation. [PostgreSQL persistence](../crates/database/src/conversations/mod.rs)
+generation. A conversation may reference one owned project; its immutable project
+association selects the verified repository directory at every start and resume.
+[PostgreSQL persistence](../crates/database/src/conversations/mod.rs)
 serializes owner/session checks with changes, reserves turns idempotently and retains
 completed message items. Legacy TypeScript execution history remains separate and is
 not assigned to a web user.

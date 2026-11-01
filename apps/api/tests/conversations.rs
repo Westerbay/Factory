@@ -13,12 +13,16 @@ use factory_application::{
     conversations::coordinator::ExecutionProvider,
     environments::{EnvironmentAvailability, EnvironmentReconciler, EnvironmentService},
     identity::IdentityService,
+    projects::ProjectService,
+    terminals::TerminalService,
 };
 use factory_core::{
     agent_connections::*,
     conversations::{execution::*, *},
     environments::*,
     identity::*,
+    projects::*,
+    terminals::*,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -221,7 +225,7 @@ struct ConversationData {
     run_settled: bool,
 }
 #[derive(Default)]
-struct Conversations(Mutex<ConversationData>, AtomicUsize);
+struct Conversations(Mutex<ConversationData>, AtomicUsize, Mutex<Option<Project>>);
 impl Conversations {
     fn owned(&self, actor: EnvironmentActor, id: Uuid) -> Result<Conversation, ConversationError> {
         self.0
@@ -329,11 +333,42 @@ impl ConversationStore for Conversations {
         let c = Conversation {
             id: Uuid::new_v4(),
             user_id: actor.user_id,
+            project_id: None,
             provider_thread: None,
             created_at: Utc::now(),
         };
         self.0.lock().unwrap().conversation = Some(c.clone());
         Ok(c)
+    }
+    async fn create_in_project(
+        &self,
+        actor: EnvironmentActor,
+        environment_id: Uuid,
+        generation: i64,
+        project_id: Option<Uuid>,
+    ) -> Result<Conversation, ConversationError> {
+        if let Some(id) = project_id {
+            let guard = self.2.lock().unwrap();
+            let valid = guard.as_ref().is_some_and(|project| {
+                project.id == id
+                    && project.user_id == actor.user_id
+                    && project.environment_id == environment_id
+                    && project.state == ProjectState::Ready
+                    && generation == 1
+            });
+            if !valid {
+                return Err(ConversationError::NotFound);
+            }
+        }
+        let conversation = Conversation {
+            id: Uuid::new_v4(),
+            user_id: actor.user_id,
+            project_id,
+            provider_thread: None,
+            created_at: Utc::now(),
+        };
+        self.0.lock().unwrap().conversation = Some(conversation.clone());
+        Ok(conversation)
     }
     async fn list(
         &self,
@@ -565,6 +600,104 @@ impl ConversationStore for Conversations {
         Ok(())
     }
 }
+#[async_trait]
+impl ProjectStore for Conversations {
+    async fn reserve(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: ImportProject,
+    ) -> Result<(Project, bool), ProjectError> {
+        unreachable!()
+    }
+    async fn get(
+        &self,
+        actor: EnvironmentActor,
+        env: Uuid,
+        generation: i64,
+        id: Uuid,
+    ) -> Result<Project, ProjectError> {
+        self.2
+            .lock()
+            .unwrap()
+            .clone()
+            .filter(|project| {
+                project.id == id
+                    && project.user_id == actor.user_id
+                    && project.environment_id == env
+                    && generation == 1
+            })
+            .ok_or(ProjectError::NotFound)
+    }
+    async fn list(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: Option<Uuid>,
+    ) -> Result<ProjectPage, ProjectError> {
+        unreachable!()
+    }
+    async fn sync_repository_metadata(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: &[RepositoryMetadata],
+    ) -> Result<Vec<i64>, ProjectError> {
+        unreachable!()
+    }
+    async fn settle(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: Uuid,
+        _: Uuid,
+        _: bool,
+    ) -> Result<Project, ProjectError> {
+        unreachable!()
+    }
+    async fn recover_stopped(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: DateTime<Utc>,
+        _: Uuid,
+    ) -> Result<Project, ProjectError> {
+        unreachable!()
+    }
+    async fn recoverable(
+        &self,
+        _: EnvironmentActor,
+    ) -> Result<Vec<RecoverableImport>, ProjectError> {
+        unreachable!()
+    }
+    async fn confirm_recovered(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: Uuid,
+        _: Uuid,
+    ) -> Result<Project, ProjectError> {
+        unreachable!()
+    }
+    async fn retry(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: Uuid,
+        _: Uuid,
+        _: Uuid,
+    ) -> Result<Project, ProjectError> {
+        unreachable!()
+    }
+}
+
 struct Control {
     started: Arc<AtomicUsize>,
     stopped: Arc<AtomicUsize>,
@@ -602,6 +735,8 @@ struct Provider {
     release_models: Notify,
     started: Arc<AtomicUsize>,
     stopped: Arc<AtomicUsize>,
+    project_opens: Mutex<Vec<(Uuid, String, Option<String>)>>,
+    project_missing: AtomicBool,
 }
 #[async_trait]
 impl ExecutionRuntime for Provider {
@@ -620,6 +755,41 @@ impl ExecutionRuntime for Provider {
             effort_levels: vec!["low".into(), "high".into()],
             default_effort: Some("low".into()),
         }])
+    }
+    async fn open_project(
+        &self,
+        environment: &Environment,
+        project: Option<&Project>,
+        previous: Option<&str>,
+        model: &str,
+        effort: Option<&str>,
+        input: &str,
+    ) -> Result<ExecutionSession, ExecutionError> {
+        let Some(project) = project else {
+            return self.open(environment, previous, model, effort, input).await;
+        };
+        if self.project_missing.load(Ordering::SeqCst) {
+            return Err(ExecutionError::PreflightUnavailable);
+        }
+        self.project_opens.lock().unwrap().push((
+            project.id,
+            format!("/home/factory/Documents/{}", project.directory),
+            previous.map(str::to_owned),
+        ));
+        let (tx, rx) = mpsc::channel(4);
+        tx.send(ExecutionEvent::ThreadReady {
+            provider_thread: "fixture-project-thread".into(),
+        })
+        .await
+        .unwrap();
+        tx.send(ExecutionEvent::Completed).await.unwrap();
+        Ok(ExecutionSession {
+            control: Box::new(Control {
+                started: self.started.clone(),
+                stopped: self.stopped.clone(),
+            }),
+            output: Box::new(Output(rx)),
+        })
     }
     async fn open(
         &self,
@@ -658,6 +828,8 @@ struct ConversationFixture {
     data: Arc<Conversations>,
     provider: Arc<Provider>,
     other_provider: Option<Arc<Provider>>,
+    environments: Arc<EnvironmentService>,
+    conversation_service: Arc<ConversationService>,
     tokens: [String; 2],
     hashes: [CredentialHash; 2],
 }
@@ -747,7 +919,12 @@ impl ConversationFixture {
             env.clone(),
             Arc::new(Connected(claude)),
         ));
-        let service = Arc::new(ConversationService::new(env, data.clone()));
+        let projects = Arc::new(ProjectService::new(env.clone(), data.clone()));
+        let service = Arc::new(ConversationService::new_with_projects(
+            env.clone(),
+            data.clone(),
+            projects,
+        ));
         let (tx, rx) = mpsc::channel(32);
         let provider = Arc::new(Provider {
             tx,
@@ -761,6 +938,8 @@ impl ConversationFixture {
             release_models: Notify::new(),
             started: Arc::new(AtomicUsize::new(0)),
             stopped: Arc::new(AtomicUsize::new(0)),
+            project_opens: Mutex::new(Vec::new()),
+            project_missing: AtomicBool::new(false),
         });
         let other_provider = if with_second_provider {
             let (tx, rx) = mpsc::channel(32);
@@ -776,13 +955,15 @@ impl ConversationFixture {
                 release_models: Notify::new(),
                 started: Arc::new(AtomicUsize::new(0)),
                 stopped: Arc::new(AtomicUsize::new(0)),
+                project_opens: Mutex::new(Vec::new()),
+                project_missing: AtomicBool::new(false),
             }))
         } else {
             None
         };
         let runtime = if let Some(other) = &other_provider {
             factory_api::conversations::runtime::with_providers(
-                service,
+                service.clone(),
                 vec![
                     ExecutionProvider {
                         id: "codex",
@@ -800,7 +981,7 @@ impl ConversationFixture {
             )
             .unwrap()
         } else {
-            factory_api::conversations::runtime::new(service, provider.clone(), accounts)
+            factory_api::conversations::runtime::new(service.clone(), provider.clone(), accounts)
         };
         let auth = AuthState::new(
             Arc::new(IdentityService::new(store.clone(), Arc::new(NoProvider))),
@@ -814,6 +995,8 @@ impl ConversationFixture {
             data,
             provider,
             other_provider,
+            environments: env,
+            conversation_service: service,
             tokens,
             hashes,
         }
@@ -1800,4 +1983,197 @@ async fn models_require_at_least_one_connection_and_include_only_connected_provi
     let none = ConversationFixture::with_connections(true, false, false).await;
     let response = none.call("GET", "/api/conversations/models", 0, "").await;
     assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[derive(Default)]
+struct ProjectTerminal {
+    attached: Mutex<Vec<(Uuid, Option<Uuid>, String)>>,
+    detached: Mutex<Vec<Uuid>>,
+}
+struct ProjectTerminalInput;
+struct ProjectTerminalOutput;
+#[async_trait]
+impl TerminalInput for ProjectTerminalInput {
+    async fn write(&mut self, _: &[u8]) -> Result<(), TerminalError> {
+        Ok(())
+    }
+}
+#[async_trait]
+impl TerminalOutput for ProjectTerminalOutput {
+    async fn read(&mut self) -> Result<Option<Vec<u8>>, TerminalError> {
+        Ok(None)
+    }
+}
+#[async_trait]
+impl TerminalRuntime for ProjectTerminal {
+    async fn attach(&self, _: &Environment) -> Result<TerminalProcess, TerminalError> {
+        unreachable!()
+    }
+    async fn attach_conversation(
+        &self,
+        _: &Environment,
+        conversation: Uuid,
+        project: Option<&Project>,
+    ) -> Result<TerminalProcess, TerminalError> {
+        self.attached.lock().unwrap().push((
+            conversation,
+            project.map(|p| p.id),
+            project.map(|p| p.directory.clone()).unwrap_or_default(),
+        ));
+        Ok(TerminalProcess {
+            handle: Uuid::new_v4().to_string(),
+            input: Box::new(ProjectTerminalInput),
+            output: Box::new(ProjectTerminalOutput),
+        })
+    }
+    async fn detach_conversation(
+        &self,
+        _: &Environment,
+        conversation: Uuid,
+        _: &str,
+    ) -> Result<(), TerminalError> {
+        self.detached.lock().unwrap().push(conversation);
+        Ok(())
+    }
+    async fn resize(&self, _: &str, _: TerminalSize) -> Result<(), TerminalError> {
+        Ok(())
+    }
+    async fn detach(&self, _: &Environment, _: &str) -> Result<(), TerminalError> {
+        unreachable!()
+    }
+}
+
+#[tokio::test]
+async fn project_chat_routes_context_to_provider_and_terminal_on_resume() {
+    let f = ConversationFixture::new().await;
+    let environment = f.store.environment.lock().unwrap().clone();
+    let project_id = Uuid::new_v4();
+    let project = Project {
+        id: project_id,
+        user_id: environment.user_id,
+        repository_id: 123,
+        full_name: "owner/repo".into(),
+        cloned_full_name: "owner/repo".into(),
+        directory: format!("project-{project_id}"),
+        state: ProjectState::Ready,
+        operation_id: Uuid::new_v4(),
+        environment_id: environment.id,
+        environment_generation: environment.generation,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    *f.data.2.lock().unwrap() = Some(project.clone());
+    let body = json!({"projectId":project_id}).to_string();
+    assert_eq!(
+        f.call("POST", "/api/conversations", 1, &body)
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let create = f.call("POST", "/api/conversations", 0, &body).await;
+    assert_eq!(create.status(), StatusCode::OK);
+    let created = body_json(create).await;
+    assert_eq!(created["projectId"], project_id.to_string());
+    let conversation = Uuid::parse_str(created["id"].as_str().unwrap()).unwrap();
+    let path = format!("/api/conversations/{conversation}/runs");
+    for index in 0..2 {
+        let input = json!({"operationId":Uuid::new_v4(),"model":"fixture-model","input":"hello"})
+            .to_string();
+        assert_eq!(
+            f.call("POST", &path, 0, &input).await.status(),
+            StatusCode::OK
+        );
+        until(|| f.provider.project_opens.lock().unwrap().len() == index + 1).await;
+        until(|| {
+            f.data
+                .0
+                .lock()
+                .unwrap()
+                .run
+                .as_ref()
+                .is_some_and(|r| r.status == RunStatus::Completed)
+        })
+        .await;
+        if index == 0 {
+            f.data.0.lock().unwrap().run = None;
+        }
+    }
+    let opens = f.provider.project_opens.lock().unwrap().clone();
+    let expected_directory = format!("/home/factory/Documents/{}", project.directory);
+    assert_eq!(
+        opens,
+        vec![
+            (project_id, expected_directory.clone(), None),
+            (
+                project_id,
+                expected_directory,
+                Some("fixture-project-thread".into())
+            )
+        ]
+    );
+    // A failed project preflight settles the fresh run as failed, without a provider session.
+    f.data.0.lock().unwrap().run = None;
+    f.provider.project_missing.store(true, Ordering::SeqCst);
+    let input =
+        json!({"operationId":Uuid::new_v4(),"model":"fixture-model","input":"missing"}).to_string();
+    assert_eq!(
+        f.call("POST", &path, 0, &input).await.status(),
+        StatusCode::OK
+    );
+    until(|| {
+        f.data
+            .0
+            .lock()
+            .unwrap()
+            .run
+            .as_ref()
+            .is_some_and(|r| r.status == RunStatus::Failed)
+    })
+    .await;
+    assert_eq!(f.provider.project_opens.lock().unwrap().len(), 2);
+
+    let terminal = Arc::new(ProjectTerminal::default());
+    let service = Arc::new(TerminalService::new_with_conversations(
+        f.environments.clone(),
+        terminal.clone(),
+        f.conversation_service.clone(),
+    ));
+    let app = factory_api::terminals::router(f.auth.clone(), Some(service.clone()));
+    let actor = EnvironmentActor {
+        user_id: environment.user_id,
+        session_hash: f.hashes[0],
+    };
+    for _ in 0..2 {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/terminal/attachments")
+            .header("cookie", format!("factory_session={}", f.tokens[0]))
+            .header("origin", ORIGIN)
+            .header("x-csrf-token", CSRF)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"takeOver":false,"conversationId":conversation}).to_string(),
+            ))
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let ticket = body_json(response).await["ticket"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let hash = CredentialHash(Sha256::digest(ticket.as_bytes()).into());
+        let attached = service.attach(actor, hash).await.unwrap();
+        service.finish(attached).await.unwrap();
+    }
+    assert_eq!(
+        *terminal.attached.lock().unwrap(),
+        vec![
+            (conversation, Some(project_id), project.directory.clone()),
+            (conversation, Some(project_id), project.directory)
+        ]
+    );
+    assert_eq!(
+        *terminal.detached.lock().unwrap(),
+        vec![conversation, conversation]
+    );
 }

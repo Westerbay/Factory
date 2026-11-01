@@ -6,3 +6,5 @@ pub mod local_target;
 pub mod schema;
 
 pub mod conversations;
+
+pub mod projects;

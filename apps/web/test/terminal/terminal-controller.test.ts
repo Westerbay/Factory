@@ -47,7 +47,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function setup() {
+function setup(conversationId?: string) {
   vi.useFakeTimers()
   vi.stubGlobal("WebSocket", Socket)
   let auth: SessionState = {
@@ -66,6 +66,7 @@ function setup() {
   const listeners = new Set<() => void>()
   const pending: (() => void)[] = []
   const dependencies = {
+    conversationId,
     session: {
       getSnapshot: () => auth,
       subscribe: (listener: () => void) => {
@@ -102,6 +103,82 @@ function setup() {
 }
 
 describe("terminal attachment", () => {
+  it("retries a brief conflict after this panel detached the same chat", async () => {
+    const { dependencies } = setup("same-chat")
+    dependencies.request.mockRejectedValueOnce(new ApiFailure(409))
+    const controller = new TerminalController({
+      ...dependencies,
+      consumeRecentOwnDetach: () => true,
+    })
+    controllers.push(controller)
+    const opening = controller.connect()
+    await vi.advanceTimersByTimeAsync(200)
+    await opening
+    expect(dependencies.request).toHaveBeenCalledTimes(2)
+    expect(
+      dependencies.request.mock.calls.every((call) => call[0] === false)
+    ).toBe(true)
+    expect(sockets).toHaveLength(1)
+  })
+
+  it("exposes a persistent conflict without taking over another tab", async () => {
+    const { dependencies } = setup("same-chat")
+    dependencies.request.mockRejectedValue(new ApiFailure(409))
+    const controller = new TerminalController({
+      ...dependencies,
+      consumeRecentOwnDetach: () => true,
+    })
+    controllers.push(controller)
+    const opening = controller.connect()
+    await vi.advanceTimersByTimeAsync(1700)
+    await opening
+    expect(dependencies.request).toHaveBeenCalledTimes(4)
+    expect(
+      dependencies.request.mock.calls.every((call) => call[0] === false)
+    ).toBe(true)
+    expect(controller.getSnapshot().status).toBe("conflict")
+    expect(sockets).toHaveLength(0)
+  })
+
+  it("cancels a pending self-detach retry when the chat changes again", async () => {
+    const { dependencies } = setup("same-chat")
+    dependencies.request.mockRejectedValueOnce(new ApiFailure(409))
+    const controller = new TerminalController({
+      ...dependencies,
+      consumeRecentOwnDetach: () => true,
+    })
+    controllers.push(controller)
+    const opening = controller.connect()
+    await vi.advanceTimersByTimeAsync(0)
+    controller.dispose()
+    await vi.advanceTimersByTimeAsync(2000)
+    await opening
+    expect(dependencies.request).toHaveBeenCalledTimes(1)
+    expect(sockets).toHaveLength(0)
+  })
+  it("scopes an attachment to its chat and discards a late ticket after switching", async () => {
+    const first = setup("first-chat")
+    let resolve!: (ticket: { ticket: string; expiresAt: string }) => void
+    first.dependencies.request.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done
+        })
+    )
+    const opening = first.controller.connect()
+    first.controller.dispose()
+    const second = setup("second-chat")
+    await second.controller.connect()
+    expect(second.dependencies.request.mock.calls[0]?.[3]).toBe("second-chat")
+    resolve({
+      ticket: "old-ticket",
+      expiresAt: new Date(Date.now() + 30_000).toISOString(),
+    })
+    await opening
+    expect(first.dependencies.request.mock.calls[0]?.[3]).toBe("first-chat")
+    expect(sockets).toHaveLength(1)
+  })
+
   it("keeps the transport during a same-session refresh but closes it on token rotation", async () => {
     const { controller, dependencies, changeSession } = setup()
     await controller.connect()

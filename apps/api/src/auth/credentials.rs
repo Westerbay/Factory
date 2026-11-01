@@ -30,7 +30,7 @@ pub(crate) fn hash_token(value: &str) -> Result<CredentialHash, IdentityError> {
     Ok(CredentialHash(Sha256::digest(value.as_bytes()).into()))
 }
 
-pub(super) fn credential(
+pub(crate) fn credential(
     headers: &HeaderMap,
     name: &str,
 ) -> Result<Option<CredentialHash>, AuthError> {
@@ -53,7 +53,7 @@ pub(super) fn credential(
     Ok(found)
 }
 
-pub(super) fn cookie(
+pub(crate) fn cookie(
     name: &'static str,
     value: String,
     lifetime: i64,
@@ -71,6 +71,24 @@ pub(super) fn cookie(
         .expect("Generated cookie contains only a fixed name and base64url token")
 }
 
-pub(super) fn clear_cookie(name: &'static str, secure: bool) -> HeaderValue {
+pub(crate) fn clear_cookie(name: &'static str, secure: bool) -> HeaderValue {
     cookie(name, String::new(), 0, secure)
+}
+
+/// The prefix distinguishes repository callbacks even after their attempt expires.
+pub(crate) const REPOSITORY_STATE_PREFIX: &str = "repo.";
+
+pub(crate) fn repository_state_hash(value: &str) -> Result<CredentialHash, IdentityError> {
+    hash_token(
+        value
+            .strip_prefix(REPOSITORY_STATE_PREFIX)
+            .ok_or(IdentityError::InvalidLogin)?,
+    )
+}
+
+pub(crate) fn is_repository_callback(uri: &axum::http::Uri) -> bool {
+    uri.query().is_some_and(|query| {
+        url::form_urlencoded::parse(query.as_bytes())
+            .any(|(name, value)| name == "state" && value.starts_with(REPOSITORY_STATE_PREFIX))
+    })
 }

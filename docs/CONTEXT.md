@@ -44,14 +44,15 @@ maximize it across the app without reattaching. Setup and account details appear
 with provider settings available from the profile. Conversations and completed messages
 are private to their owner. Both providers run
 in full-access mode inside the user's container; commands can access that user's home
-and credentials without per-action approval. Repository selection and global skills
-remain future work. Multiple accounts per provider are not implemented; GitHub identity
-currently grants no repository access.
+and credentials without per-action approval. GitHub sign-in also authorizes repository access,
+allowing members to import accessible repositories once and start project-bound chats.
+A dedicated SSH key permits Git operations with the member’s own permissions. Global
+skills and multiple accounts per provider remain future work.
 
 Environments use an isolated internal network per user and an installation-owned HTTPS
-CONNECT proxy. Only approved OpenAI and Anthropic destinations are allowed. Existing
-containers are not silently replaced when the image changes. A local database reset
-removes database records but leaves Docker homes untouched and unassociated.
+CONNECT proxy. Approved OpenAI and Anthropic destinations and GitHub SSH on port 443 are
+allowed. Existing containers are not silently replaced when the image changes. A local
+database reset removes database records but leaves Docker homes untouched and unassociated.
 
 The TypeScript execution packages remain tested porting references. Fresh installations
 use one initial database schema; no previous database upgrade is supported.

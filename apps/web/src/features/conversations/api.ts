@@ -9,7 +9,7 @@ export type Model = components["schemas"]["ModelView"]
 export type Answer = components["schemas"]["AnswerView"]
 const id = z.uuid()
 const text = z.string()
-const conversation = z.object({ id, createdAt: text })
+const conversation = z.object({ id, createdAt: text, projectId: id.nullish() })
 const model = z.object({
   id: text,
   name: text,
@@ -103,12 +103,14 @@ export async function models(signal: AbortSignal): Promise<Model[]> {
 }
 export async function create(
   token: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  projectId?: string
 ): Promise<Conversation> {
   return conversation.parse(
     checked(
       await apiClient.POST("/api/conversations", {
         params: { header: csrf(token) },
+        ...(projectId ? { body: { projectId } } : {}),
         signal,
       })
     )
