@@ -6,7 +6,7 @@
       "outputs": ["dist/**", "out/**"]
     },
     "typecheck": {
-      "dependsOn": ["^typecheck"]
+      "dependsOn": ["^build", "^typecheck"]
     },
     "dev": {
       "cache": false,
@@ -25,6 +25,12 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**"],
       "env": ["VITE_API_BASE_URL"]
+    },
+    "@workspace/i18n#build": {
+      "outputs": ["src/generated/**"]
+    },
+    "@workspace/i18n#typecheck": {
+      "dependsOn": ["build"]
     }
   }
 }

@@ -242,3 +242,11 @@ window and process-launch mechanisms are retired rather than exposed to the brow
 These execution mechanisms have no web-user ownership and must not be composed into
 member routes until that boundary is designed. They do not grant access to legacy history,
 provider credentials or global configuration.
+
+## Web interface language
+
+The [`@workspace/i18n`](../packages/i18n/) package owns the English and French
+Paraglide message catalogs and generated, typed browser runtime. The web locale adapter
+in [`apps/web/src/lib/i18n`](../apps/web/src/lib/i18n/) selects the browser language
+when available and persists explicit choices locally. Use generated messages for interface
+copy; provider output remains user content.

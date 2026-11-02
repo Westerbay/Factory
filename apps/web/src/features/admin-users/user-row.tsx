@@ -1,3 +1,5 @@
+import * as m from "@workspace/i18n/messages"
+import { useLocale, translateMessage } from "../../lib/i18n"
 import { useRef, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 
@@ -15,6 +17,7 @@ export function UserRow({
   csrfToken: string
   onNotice: (message: string, focus?: boolean) => void
 }) {
+  useLocale()
   const [confirming, setConfirming] = useState(false)
   const suspendButton = useRef<HTMLButtonElement>(null)
   const queryClient = useQueryClient()
@@ -52,21 +55,21 @@ export function UserRow({
       </div>
       <dl className="admin-details">
         <div>
-          <dt>Provider</dt>
+          <dt>{m.provider()}</dt>
           <dd>{user.provider}</dd>
         </div>
         <div>
-          <dt>Role</dt>
-          <dd>{user.role}</dd>
+          <dt>{m.role()}</dt>
+          <dd>{translateMessage(user.role)}</dd>
         </div>
         <div>
-          <dt>Status</dt>
-          <dd>{user.status}</dd>
+          <dt>{m.status()}</dt>
+          <dd>{translateMessage(user.status)}</dd>
         </div>
       </dl>
       <div className="admin-actions">
         {user.role === "admin" ? (
-          <span className="admin-protected">Protected administrator</span>
+          <span className="admin-protected">{m.protected_administrator()}</span>
         ) : (
           <>
             {user.status !== "active" && (
@@ -74,9 +77,9 @@ export function UserRow({
                 type="button"
                 disabled={change.isPending}
                 onClick={() => change.mutate("active")}
-                aria-label={`Activate ${name}`}
+                aria-label={m.activate_name({ name })}
               >
-                Activate
+                {m.activate()}{" "}
               </Button>
             )}
             {user.status !== "suspended" && (
@@ -85,14 +88,14 @@ export function UserRow({
                 type="button"
                 disabled={change.isPending}
                 onClick={() => setConfirming(true)}
-                aria-label={`Suspend ${name}`}
+                aria-label={m.suspend_name({ name })}
               >
-                Suspend
+                {m.suspend()}{" "}
               </Button>
             )}
           </>
         )}
-        {change.isPending && <span role="status">Saving access…</span>}
+        {change.isPending && <span role="status">{m.saving_access()}</span>}
       </div>
       {confirming && (
         <SuspendDialog

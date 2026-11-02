@@ -1,3 +1,5 @@
+import * as m from "@workspace/i18n/messages"
+import { useLocale, translateMessage } from "../../lib/i18n"
 import {
   useCallback,
   useEffect,
@@ -70,6 +72,7 @@ export function Chat({
   navigationVisible?: boolean
   renderLayout: (parts: ChatLayout) => ReactNode
 }) {
+  const locale = useLocale()
   const { state: session, controller: sessionController } = useSession()
   const queryClient = useQueryClient()
   const closeProjectPicker = projectWorkspace.setPickerOpen
@@ -612,10 +615,10 @@ export function Chat({
   }, [projectId, listedProject, available, projectWorkspace.refreshVersion])
   const title = selectedConversation
     ? `${project?.fullName ? `${project.fullName} · ` : ""}${conversationLabel(selectedConversation)}`
-    : "New chat"
+    : m.new_chat()
   const outcome = resuming
-    ? "Checking workspace…"
-    : runOutcome(currentHistory, available)
+    ? m.checking_workspace()
+    : translateMessage(runOutcome(currentHistory, available))
   const latestRun = currentHistory?.runs[currentHistory.runs.length - 1]
   const historyReady = Boolean(currentHistory) && verifiedHistory === selected
   const submitDisabled =
@@ -657,7 +660,7 @@ export function Chat({
           disabled={!available || busy}
         >
           <SquarePen aria-hidden="true" size={16} />
-          New chat
+          {m.new_chat()}{" "}
         </Button>
         <ProjectNavigation
           workspace={projectWorkspace}
@@ -705,12 +708,12 @@ export function Chat({
     conversation: (
       <section
         className="chat"
-        aria-label="Assistant conversation"
+        aria-label={m.assistant_conversation()}
         aria-busy={resuming}
       >
         {warnings.map((warning) => (
           <p key={warning} className="chat-project-warning" role="status">
-            {warning}
+            {translateMessage(warning)}
           </p>
         ))}
         <div
@@ -718,28 +721,28 @@ export function Chat({
           ref={observeMessages}
           role="region"
           tabIndex={0}
-          aria-label="Conversation messages"
+          aria-label={m.conversation_messages()}
           onScroll={onMessageScroll}
         >
           <div className="chat-transcript">
             {!selected && (
               <div className="chat-empty">
-                <h2>What are we building?</h2>
+                <h2>{m.what_are_we_building()}</h2>
                 <Button
                   variant="primary"
                   onClick={() => newConversation()}
                   disabled={!available || busy}
                 >
-                  New chat
+                  {m.new_chat()}{" "}
                 </Button>
               </div>
             )}
             {selected && !currentHistory && !message && available && (
-              <LoadingState title="Loading chat…" />
+              <LoadingState title={m.loading_chat()} />
             )}
             {selected && currentHistory?.messages.length === 0 && !delta && (
               <div className="chat-empty">
-                <h2>What are we building?</h2>
+                <h2>{m.what_are_we_building()}</h2>
               </div>
             )}
             {currentHistory &&
@@ -747,15 +750,21 @@ export function Chat({
                 currentHistory.messagesTruncated ||
                 currentHistory.requestsTruncated) && (
                 <p className="chat-history-note" role="status">
-                  Only recent history is shown. Older{" "}
-                  {[
-                    currentHistory.runsTruncated && "runs",
-                    currentHistory.messagesTruncated && "messages",
-                    currentHistory.requestsTruncated && "requests",
-                  ]
-                    .filter(Boolean)
-                    .join(", ")}{" "}
-                  are not displayed.
+                  {m.only_recent_history_is_shown_older_items_are_not_displayed(
+                    {
+                      items: new Intl.ListFormat(locale, {
+                        type: "disjunction",
+                      }).format([
+                        ...(currentHistory.runsTruncated ? [m.runs()] : []),
+                        ...(currentHistory.messagesTruncated
+                          ? [m.messages()]
+                          : []),
+                        ...(currentHistory.requestsTruncated
+                          ? [m.requests()]
+                          : []),
+                      ]),
+                    }
+                  )}
                 </p>
               )}
             {currentHistory?.messages.map((item) => (
@@ -763,7 +772,9 @@ export function Chat({
                 className={`chat-message chat-message-${item.role}`}
                 key={item.id}
                 aria-label={
-                  item.role === "user" ? "Your message" : "Assistant message"
+                  item.role === "user"
+                    ? m.your_message()
+                    : m.assistant_message()
                 }
               >
                 {item.role === "assistant" && <strong>Assistant</strong>}
@@ -777,7 +788,7 @@ export function Chat({
             {delta && currentHistory && (
               <article
                 className="chat-message chat-message-assistant"
-                aria-label="Assistant response in progress"
+                aria-label={m.assistant_response_in_progress()}
               >
                 <strong>Assistant</strong>
                 <MessageMarkdown>{delta}</MessageMarkdown>
@@ -797,8 +808,10 @@ export function Chat({
                     respond(request)
                   }}
                 >
-                  <h2>Assistant has a question</h2>
-                  {receipt.message && <p role="status">{receipt.message}</p>}
+                  <h2>{m.assistant_has_a_question()}</h2>
+                  {receipt.message && (
+                    <p role="status">{translateMessage(receipt.message)}</p>
+                  )}
                   {request.questions.map((question) => (
                     <fieldset
                       key={question.id}
@@ -832,7 +845,7 @@ export function Chat({
                       ))}
                       {question.allowFreeText && (
                         <label className="chat-free-answer">
-                          Other answer
+                          {m.other_answer()}{" "}
                           <input
                             value={
                               question.options.some(
@@ -857,7 +870,7 @@ export function Chat({
                     type="submit"
                     disabled={receipt.disabled || busy || !available}
                   >
-                    Send answers
+                    {m.send_answers()}{" "}
                   </Button>
                 </form>
               )
@@ -871,21 +884,21 @@ export function Chat({
             onClick={showLatest}
           >
             <ArrowDown aria-hidden="true" size={14} />
-            Jump to latest
+            {m.jump_to_latest()}{" "}
           </Button>
         )}
         <div className="chat-bottom">
           {modelQuery.failureCount > 5 && !modelError && !models.length && (
             <p className="chat-status" role="status">
-              Model discovery is still busy. Retrying automatically.
+              {m.model_discovery_is_still_busy_retrying_automatically()}{" "}
             </p>
           )}
           {modelError && (
             <div className="chat-notice" role="status">
               <p>
                 {models.length
-                  ? "Models could not be updated. Your previous selection remains available."
-                  : "Models could not be loaded. Existing chats remain available."}
+                  ? m.models_could_not_be_updated_your_previous_selection_remains_avail()
+                  : m.models_could_not_be_loaded_existing_chats_remain_available()}
               </p>
               <Button
                 variant="ghost"
@@ -894,16 +907,18 @@ export function Chat({
                   void modelQuery.refetch({ cancelRefetch: false })
                 }
               >
-                Retry models
+                {m.retry_models()}{" "}
               </Button>
             </div>
           )}
           {!modelError && missingProviders.length > 0 && (
             <div className="chat-notice" role="status">
               <p>
-                Models from{" "}
-                {missingProviders.map((provider) => provider.name).join(", ")}{" "}
-                could not be loaded.
+                {m.models_from_providers_could_not_be_loaded({
+                  providers: missingProviders
+                    .map((provider) => provider.name)
+                    .join(", "),
+                })}
               </p>
               <Button
                 variant="ghost"
@@ -912,29 +927,27 @@ export function Chat({
                   void modelQuery.refetch({ cancelRefetch: false })
                 }
               >
-                Retry models
+                {m.retry_models()}{" "}
               </Button>
             </div>
           )}
           {message && (
             <div className="chat-notice" role="status">
-              <p>{message}</p>
+              <p>{translateMessage(message)}</p>
               {selected && (
                 <Button
                   variant="ghost"
                   disabled={!available || busy}
                   onClick={retryHistory}
                 >
-                  Check status
+                  {m.check_status()}{" "}
                 </Button>
               )}
             </div>
           )}
           {uncertain && (
             <p className="chat-notice" role="status">
-              This run is not confirmed stopped. Use Stop environment in your
-              profile, then recover the run before continuing. Some launches
-              need administrator help.
+              {m.this_run_is_not_confirmed_stopped_use_stop_environment_in_your_pr()}{" "}
             </p>
           )}
           {outcome && !uncertain && (

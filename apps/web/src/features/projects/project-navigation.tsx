@@ -1,3 +1,5 @@
+import * as m from "@workspace/i18n/messages"
+import { useLocale, translateMessage } from "../../lib/i18n"
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import {
   ChevronDown,
@@ -35,6 +37,7 @@ export function ProjectNavigation({
   onSelectConversation: (id: string) => void
   onProjectRemoved: (projectId: string) => void
 }) {
+  useLocale()
   const [search, setSearch] = useState("")
   const [deleteTarget, setDeleteTarget] = useState<string>()
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
@@ -84,12 +87,12 @@ export function ProjectNavigation({
     (project) => project.id === deleteTarget
   )
   return (
-    <section className="project-navigation" aria-label="Projects">
+    <section className="project-navigation" aria-label={m.projects()}>
       <div className="project-navigation-heading">
-        <p className="conversation-list-label">Projects</p>
+        <p className="conversation-list-label">{m.projects()}</p>
         <IconButton
           ref={addButton}
-          label="Add project"
+          label={m.add_project()}
           disabled={!available || workspace.busy}
           onClick={() => {
             setSearch("")
@@ -101,13 +104,13 @@ export function ProjectNavigation({
       </div>
       {workspace.loading && !workspace.projects.length && (
         <p className="project-hint" role="status">
-          Loading projects…
+          {m.loading_projects()}{" "}
         </p>
       )}
       {!workspace.loading && !workspace.projects.length && (
-        <p className="project-hint">No projects yet.</p>
+        <p className="project-hint">{m.no_projects_yet()}</p>
       )}
-      <nav className="project-list" aria-label="Your projects">
+      <nav className="project-list" aria-label={m.your_projects()}>
         {workspace.projects.map((project) => (
           <div className="project-item" key={project.id}>
             <div className="project-row-group">
@@ -138,7 +141,9 @@ export function ProjectNavigation({
               </Button>
               <IconButton
                 className="project-create-chat"
-                label={`New chat in ${project.fullName}`}
+                label={m.new_chat_in_name({
+                  name: project.fullName,
+                })}
                 disabled={!available || busy || project.state !== "ready"}
                 onClick={() => {
                   workspace.setSelectedProjectId(project.id)
@@ -152,7 +157,7 @@ export function ProjectNavigation({
               </IconButton>
               <IconButton
                 className="project-delete"
-                label={`Delete ${project.fullName}`}
+                label={m.delete_name({ name: project.fullName })}
                 disabled={
                   !available ||
                   workspace.busy ||
@@ -171,7 +176,9 @@ export function ProjectNavigation({
             {expandedProjects.has(project.id) && (
               <div
                 className="project-chats conversation-list"
-                aria-label={`Chats in ${project.fullName}`}
+                aria-label={m.chats_in_name({
+                  name: project.fullName,
+                })}
               >
                 {conversations
                   .filter(
@@ -199,12 +206,12 @@ export function ProjectNavigation({
             {project.state !== "ready" && (
               <p className="project-state" role="status">
                 {project.state === "importing"
-                  ? "Importing…"
+                  ? m.importing()
                   : project.state === "uncertain"
-                    ? "Import interrupted. Stop the workspace and recover it before retrying."
+                    ? m.import_interrupted_stop_the_workspace_and_recover_it_before_retry()
                     : project.state === "deleting"
-                      ? "Deletion interrupted. Delete again to finish."
-                      : "Import needs attention."}
+                      ? m.deletion_interrupted_delete_again_to_finish()
+                      : m.import_needs_attention()}
               </p>
             )}
             {project.id === workspace.selectedProjectId &&
@@ -213,14 +220,13 @@ export function ProjectNavigation({
               workspace.selectedVerification !== "checking" && (
                 <p className="project-state" role="status">
                   {workspace.selectedVerification === "changed"
-                    ? "The original GitHub address changed or is inaccessible. Check the Git remote before pushing."
-                    : "GitHub address not verified; check your Git remote before pushing."}
+                    ? m.the_original_github_address_changed_or_is_inaccessible_check_the()
+                    : m.github_address_not_verified_check_your_git_remote_before_pushing()}
                 </p>
               )}
             {project.renamedSinceClone && (
               <p className="project-state" role="status">
-                Repository renamed since import. Verify the Git remote before
-                pushing.
+                {m.repository_renamed_since_import_verify_the_git_remote_before_push()}{" "}
               </p>
             )}
             {project.state === "failed" && (
@@ -230,7 +236,7 @@ export function ProjectNavigation({
                 disabled={!available || workspace.busy}
                 onClick={() => workspace.retry(project.id)}
               >
-                Retry import
+                {m.retry_import()}{" "}
               </Button>
             )}
           </div>
@@ -243,19 +249,19 @@ export function ProjectNavigation({
           disabled={!available || workspace.busy || workspace.loading}
           onClick={workspace.loadMoreProjects}
         >
-          Older projects
+          {m.older_projects()}{" "}
         </Button>
       )}
       {workspace.message && (
         <div className="project-message" role="status">
-          <p>{workspace.message}</p>
+          <p>{translateMessage(workspace.message)}</p>
           {workspace.needsCheck && (
             <Button
               variant="ghost"
               disabled={!available || workspace.busy}
               onClick={workspace.refresh}
             >
-              Check projects
+              {m.check_projects()}{" "}
             </Button>
           )}
         </div>
@@ -263,19 +269,18 @@ export function ProjectNavigation({
       <Modal
         open={Boolean(target)}
         onClose={() => setDeleteTarget(undefined)}
-        title="Delete project?"
+        title={m.delete_project()}
         returnFocusRef={deleteFocus}
         className="project-delete-dialog"
       >
         <p>
-          This permanently deletes <strong>{target?.fullName}</strong>, its
-          local folder in Documents, and all its chats. Unpushed changes are
-          lost. Stop terminal commands before deleting. The GitHub repository
-          stays intact.
+          {m.this_permanently_deletes_name_its_local_folder_in_documents_and_a({
+            name: target?.fullName ?? "",
+          })}
         </p>
         <div className="project-delete-actions">
           <Button data-autofocus onClick={() => setDeleteTarget(undefined)}>
-            Cancel
+            {m.cancel()}{" "}
           </Button>
           <Button
             variant="danger"
@@ -289,14 +294,14 @@ export function ProjectNavigation({
               })
             }}
           >
-            Delete project
+            {m.delete_project_9c0b617e()}{" "}
           </Button>
         </div>
       </Modal>
       <Modal
         open={workspace.pickerOpen}
         onClose={workspace.closePicker}
-        title={progress ? "Import project" : "Add a project"}
+        title={progress ? m.import_project() : m.add_a_project()}
         returnFocusRef={addButton}
         className="project-picker"
       >
@@ -305,19 +310,19 @@ export function ProjectNavigation({
             {importInterrupted ? (
               <div role="status" aria-live="polite">
                 <p className="project-import-title">
-                  Import could not be confirmed
+                  {m.import_could_not_be_confirmed()}{" "}
                 </p>
                 <p>
-                  Check the project list before trying again. If the import was
-                  interrupted, stop the workspace and recover it before
-                  retrying.
+                  {m.check_the_project_list_before_trying_again_if_the_import_was_inte()}{" "}
                 </p>
               </div>
             ) : (
               <>
-                <LoadingState title="Importing project…" />
+                <LoadingState title={m.importing_project()} />
                 <p>
-                  Cloning <strong>{progress.fullName}</strong> into Documents.
+                  {m.cloning_name_into_documents({
+                    name: progress.fullName,
+                  })}
                 </p>
               </>
             )}
@@ -325,10 +330,10 @@ export function ProjectNavigation({
         ) : workspace.connection?.status === "connected" ? (
           <>
             <p className="project-picker-caption">
-              Choose a GitHub repository to clone into your workspace.
+              {m.choose_a_github_repository_to_clone_into_your_workspace()}{" "}
             </p>
             <label className="project-search">
-              Search repositories
+              {m.search_repositories()}{" "}
               <input
                 data-autofocus
                 type="search"
@@ -339,7 +344,7 @@ export function ProjectNavigation({
             </label>
             <div
               className="project-repositories"
-              aria-label="Importable repositories"
+              aria-label={m.importable_repositories()}
               aria-busy={workspace.repositoryLoading || workspace.busy}
             >
               {matching.map((repository) => (
@@ -352,7 +357,9 @@ export function ProjectNavigation({
                 >
                   <span>{repository.fullName}</span>
                   <span className="project-repository-meta">
-                    <small>{repository.private ? "Private" : "Public"}</small>
+                    <small>
+                      {repository.private ? m.private() : m.public()}
+                    </small>
                     <ChevronRight size={16} aria-hidden="true" />
                   </span>
                 </Button>
@@ -362,38 +369,38 @@ export function ProjectNavigation({
                 !workspace.repositoryMessage && (
                   <p className="project-hint">
                     {search
-                      ? "No matches in the loaded repositories."
-                      : "No repositories to import."}
+                      ? m.no_matches_in_the_loaded_repositories()
+                      : m.no_repositories_to_import()}
                   </p>
                 )}
             </div>
             <p className="project-hint">
-              Search includes loaded repositories.{" "}
+              {m.search_includes_loaded_repositories()}{" "}
               {workspace.nextPage
-                ? "Load more to search additional repositories."
+                ? m.load_more_to_search_additional_repositories()
                 : ""}
             </p>
             {workspace.repositoryLoading && (
               <p className="project-hint" role="status">
-                Loading repositories…
+                {m.loading_repositories()}{" "}
               </p>
             )}
             {workspace.repositoryMessage && (
               <div className="project-message" role="status">
-                <p>{workspace.repositoryMessage}</p>
+                <p>{translateMessage(workspace.repositoryMessage)}</p>
                 <Button
                   variant="ghost"
                   disabled={workspace.busy}
                   onClick={workspace.refreshRepositories}
                 >
-                  Try again
+                  {m.try_again()}{" "}
                 </Button>
                 <Button
                   variant="ghost"
                   disabled={workspace.busy}
                   onClick={workspace.connect}
                 >
-                  Reconnect GitHub
+                  {m.reconnect_github()}{" "}
                 </Button>
               </div>
             )}
@@ -403,49 +410,43 @@ export function ProjectNavigation({
                 disabled={workspace.repositoryLoading || workspace.busy}
                 onClick={workspace.loadMoreRepositories}
               >
-                Load more
+                {m.load_more()}{" "}
               </Button>
             )}
             <details className="project-account">
-              <summary>GitHub access</summary>
+              <summary>{m.github_access()}</summary>
               <p>
-                Connected as {workspace.connection.login}. Git commits include
-                your GitHub email. Disconnecting here keeps your projects and
-                may leave the SSH key active on GitHub.
+                {m.connected_as_login_git_commits_include_your_github_email_disconne(
+                  { login: workspace.connection.login ?? "" }
+                )}
               </p>
               <Button
                 variant="ghost"
                 disabled={workspace.busy}
                 onClick={workspace.disconnect}
               >
-                Disconnect GitHub access
+                {m.disconnect_github_access()}{" "}
               </Button>
               <a
                 href="https://github.com/settings/keys"
                 target="_blank"
                 rel="noreferrer"
               >
-                Review SSH keys on GitHub
+                {m.review_ssh_keys_on_github()}{" "}
               </a>
             </details>
           </>
         ) : workspace.connectionLoading && !workspace.connection ? (
           <p className="project-picker-caption" role="status">
-            Checking GitHub access…
+            {m.checking_github_access()}{" "}
           </p>
         ) : workspace.connection?.status === "disconnected" ? (
           <div className="project-connect">
             <p>
-              Connect the same GitHub account to list and clone your
-              repositories.
+              {m.connect_the_same_github_account_to_list_and_clone_your_repositori()}{" "}
             </p>
             <p>
-              The GitHub authorization grants Factory broad read and write
-              access to your private repositories and some organization
-              resources. It also allows Factory to add an SSH key and read your
-              GitHub email. The SSH key lets the workspace use your GitHub
-              permissions. Your commit email is visible to anyone who can read
-              those commits.
+              {m.the_github_authorization_grants_factory_broad_read_and_write_acce()}
             </p>
             <Button
               data-autofocus
@@ -453,26 +454,26 @@ export function ProjectNavigation({
               disabled={!available || workspace.busy}
               onClick={workspace.connect}
             >
-              {workspace.busy ? "Connecting…" : "Connect GitHub"}
+              {workspace.busy ? m.connecting() : m.connect_github()}
             </Button>
           </div>
         ) : (
           <div className="project-connect">
-            <p role="status">GitHub connection status is unavailable.</p>
+            <p role="status">{m.github_connection_status_is_unavailable()}</p>
             <Button
               data-autofocus
               disabled={workspace.busy}
               onClick={workspace.refresh}
             >
-              Try again
+              {m.try_again()}{" "}
             </Button>
           </div>
         )}
         <div className="ui-modal-actions">
           <Button ref={closeButton} onClick={workspace.closePicker}>
             {progress && !importInterrupted
-              ? "Continue in background"
-              : "Close"}
+              ? m.continue_in_background()
+              : m.close()}
           </Button>
         </div>
       </Modal>

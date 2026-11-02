@@ -1,3 +1,5 @@
+import * as m from "@workspace/i18n/messages"
+import { useLocale, translateMessage } from "../../lib/i18n"
 import {
   useEffect,
   useRef,
@@ -5,6 +7,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react"
+import { setLanguage, type Language } from "../../lib/i18n"
 import {
   PanelLeft,
   PanelLeftClose,
@@ -43,6 +46,7 @@ function subscribeCompact(listener: () => void) {
 const readCompact = () => window.matchMedia(compactQuery).matches
 
 export function WorkspacePage() {
+  const locale = useLocale()
   const environment = useEnvironment(hasRecoverableWork)
   const available =
     environment.state.environment?.status === "running" &&
@@ -191,10 +195,10 @@ export function WorkspacePage() {
                   ref={navigationToggle}
                   label={
                     compact
-                      ? "Open chats"
+                      ? m.open_chats()
                       : sidebarVisible
-                        ? "Hide chats"
-                        : "Show chats"
+                        ? m.hide_chats()
+                        : m.show_chats()
                   }
                   aria-expanded={compact ? drawerOpen : sidebarVisible}
                   aria-controls={
@@ -214,10 +218,12 @@ export function WorkspacePage() {
                     <PanelLeftOpen aria-hidden="true" />
                   )}
                 </IconButton>
-                <h1>{parts?.title ?? "New chat"}</h1>
+                <h1>{parts?.title ?? m.new_chat()}</h1>
                 <IconButton
                   ref={terminalToggle}
-                  label={terminalVisible ? "Hide terminal" : "Show terminal"}
+                  label={
+                    terminalVisible ? m.hide_terminal() : m.show_terminal()
+                  }
                   aria-expanded={terminalVisible}
                   aria-controls="workspace-terminal"
                   onClick={() => changeTerminal(!terminalVisible)}
@@ -228,7 +234,7 @@ export function WorkspacePage() {
             </div>
             {resumeIssue && (
               <div className="workspace-notice" role="status">
-                <p>{resumeIssue}</p>
+                <p>{translateMessage(resumeIssue)}</p>
                 {available && connection.state.message && (
                   <Button
                     variant="ghost"
@@ -238,7 +244,7 @@ export function WorkspacePage() {
                     }
                     onClick={() => void connection.controller.refresh()}
                   >
-                    Check again
+                    {m.check_again()}
                   </Button>
                 )}
               </div>
@@ -291,13 +297,13 @@ export function WorkspacePage() {
         <Modal
           open={compact && drawerOpen && showWorkspace}
           onClose={() => setDrawerOpen(false)}
-          title="Chats"
+          title={m.chats()}
           className="workspace-drawer"
         >
           <div className="workspace-drawer-top">
             <Brand />
             <IconButton
-              label="Close chats"
+              label={m.close_chats()}
               data-autofocus
               onClick={() => setDrawerOpen(false)}
             >
@@ -326,10 +332,22 @@ export function WorkspacePage() {
           returnFocusRef={compact ? navigationToggle : undefined}
           open={settingsOpen}
           onClose={() => setSettingsOpen(false)}
-          title="Settings"
+          title={m.settings()}
         >
           <div className="workspace-settings">
-            <p>Dark · Space Mono</p>
+            <p>Space Mono</p>
+            <label>
+              {m.language()}
+              <select
+                value={locale}
+                onChange={(event) =>
+                  setLanguage(event.target.value as Language)
+                }
+              >
+                <option value="en">English</option>
+                <option value="fr">Français</option>
+              </select>
+            </label>
             {available ? (
               <>
                 {codexConnected ? (
@@ -345,20 +363,20 @@ export function WorkspacePage() {
               </>
             ) : (
               <p>
-                Provider settings are available when your workspace is running.
+                {m.provider_settings_are_available_when_your_workspace_is_running()}
               </p>
             )}
           </div>
           <div className="ui-modal-actions">
             <Button data-autofocus onClick={() => setSettingsOpen(false)}>
-              Done
+              {m.done()}
             </Button>
           </div>
         </Modal>
         <Modal
           open={claudeSetup && connected}
           onClose={() => void closeClaudeSetup()}
-          title="Connect Claude Code"
+          title={m.connect_claude_code()}
         >
           <ClaudeLogin
             connection={claude}
@@ -369,17 +387,15 @@ export function WorkspacePage() {
           returnFocusRef={compact ? navigationToggle : undefined}
           open={stopOpen}
           onClose={() => setStopOpen(false)}
-          title="Stop your environment?"
+          title={m.stop_your_environment()}
           descriptionId="stop-environment-description"
         >
           <p id="stop-environment-description">
-            Running tasks and terminal processes will stop. Saved files and
-            completed chat messages are kept. You can return to your workspace
-            later.
+            {m.running_tasks_and_terminal_processes_will_stop_saved_files_and_co()}
           </p>
           <div className="ui-modal-actions">
             <Button data-autofocus onClick={() => setStopOpen(false)}>
-              Cancel
+              {m.cancel()}
             </Button>
             <Button
               variant="danger"
@@ -389,7 +405,7 @@ export function WorkspacePage() {
                 void environment.controller.stop()
               }}
             >
-              Stop environment
+              {m.stop_environment()}
             </Button>
           </div>
         </Modal>

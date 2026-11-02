@@ -1,3 +1,5 @@
+import * as m from "@workspace/i18n/messages"
+import { useLocale } from "../../lib/i18n"
 import { useEffect, useRef, useState, type ReactNode } from "react"
 import "./split-pane.css"
 
@@ -26,6 +28,7 @@ export function SplitPane({
   compact: boolean
   secondaryId: string
 }) {
+  useLocale()
   const host = useRef<HTMLDivElement>(null)
   const primaryPane = useRef<HTMLDivElement>(null)
   const drag = useRef<{
@@ -112,7 +115,7 @@ export function SplitPane({
         <div
           className="split-pane-separator"
           role="separator"
-          aria-label="Side panel size"
+          aria-label={m.side_panel_size()}
           aria-controls={secondaryId}
           aria-orientation="vertical"
           aria-valuemin={Number(minimum.toFixed(2))}

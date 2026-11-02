@@ -31,7 +31,7 @@ export default defineConfig({
         id: "/",
         name: "Factory",
         short_name: "Factory",
-        description: "Your private workspace",
+        description: "Factory",
         start_url: "/app",
         scope: "/",
         display: "standalone",

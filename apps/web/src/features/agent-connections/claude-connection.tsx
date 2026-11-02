@@ -1,3 +1,5 @@
+import * as m from "@workspace/i18n/messages"
+import { useLocale, translateMessage } from "../../lib/i18n"
 import { useEffect, useId, useRef, useState } from "react"
 
 import { Button } from "../../components/ui/button"
@@ -15,6 +17,7 @@ export function ClaudeSettings({
   available: boolean
   onConnect: () => void
 }) {
+  useLocale()
   const { state } = useSession()
   const [confirming, setConfirming] = useState(false)
   const [pending, setPending] = useState(false)
@@ -60,39 +63,38 @@ export function ClaudeSettings({
         aria-live="polite"
       >
         {pending
-          ? "Disconnecting Claude…"
+          ? m.disconnecting_claude()
           : connection.isFetching && !connection.data
-            ? "Checking the account…"
+            ? m.checking_the_account()
             : connected
-              ? "Connected"
+              ? m.connected()
               : connection.data?.status === "connecting"
-                ? "Waiting for authorization"
+                ? m.waiting_for_authorization_738e149b()
                 : connection.data?.status === "disconnected"
-                  ? "Not connected"
+                  ? m.not_connected()
                   : (claudeConnectionProblem(connection.data) ??
-                    "The account status could not be confirmed.")}
+                    m.the_account_status_could_not_be_confirmed())}
       </p>
       {connection.data?.account && (
         <dl className="provider-account">
           <div>
-            <dt>Account</dt>
+            <dt>{m.account()}</dt>
             <dd>
-              {connection.data.account.email ?? "Personal Claude account"}
+              {connection.data.account.email ?? m.personal_claude_account()}
             </dd>
           </div>
           <div>
-            <dt>Plan</dt>
+            <dt>{m.plan()}</dt>
             <dd>{connection.data.account.plan}</dd>
           </div>
         </dl>
       )}
-      {error && <p role="alert">{error}</p>}
+      {error && <p role="alert">{translateMessage(error)}</p>}
       {connected ? (
         confirming ? (
           <div className="provider-disconnect-confirmation">
             <p>
-              Disconnect Claude Code? Your files remain. Terminal processes may
-              continue until the environment stops.
+              {m.disconnect_claude_code_your_files_remain_terminal_processes_may_c()}{" "}
             </p>
             <div className="provider-actions">
               <Button
@@ -101,14 +103,14 @@ export function ClaudeSettings({
                 disabled={pending}
                 onClick={() => setConfirming(false)}
               >
-                Cancel
+                {m.cancel()}{" "}
               </Button>
               <Button
                 variant="danger"
                 disabled={pending}
                 onClick={() => void disconnect()}
               >
-                Disconnect Claude
+                {m.disconnect_claude()}{" "}
               </Button>
             </div>
           </div>
@@ -119,28 +121,28 @@ export function ClaudeSettings({
             disabled={!available || pending}
             onClick={() => setConfirming(true)}
           >
-            Disconnect Claude
+            {m.disconnect_claude()}{" "}
           </Button>
         )
       ) : connection.data?.status === "connecting" ? (
         <Button variant="secondary" disabled={!available} onClick={onConnect}>
-          Continue sign-in
+          {m.continue_sign_in()}{" "}
         </Button>
       ) : connection.data?.status === "disconnected" ? (
         <Button variant="secondary" disabled={!available} onClick={onConnect}>
-          Connect Claude
+          {m.connect_claude()}{" "}
         </Button>
       ) : (
         <div className="provider-actions">
           <Button variant="secondary" disabled={!available} onClick={onConnect}>
-            Connect Claude
+            {m.connect_claude()}{" "}
           </Button>
           <Button
             variant="ghost"
             disabled={!available || connection.isFetching}
             onClick={() => void connection.refetch()}
           >
-            Check again
+            {m.check_again()}{" "}
           </Button>
         </div>
       )}

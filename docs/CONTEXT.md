@@ -75,3 +75,8 @@ separate human acceptance; temporary QA scripts and observations remain local an
 Performance under concurrent agents and production hosting requirements remain unverified.
 
 See [architecture](ARCHITECTURE.md), [product](PRODUCT.md) and [development](DEVELOPMENT.md).
+
+The web interface has English and French language selection in profile settings. Browser
+language preferences determine the initial selection, falling back to English; an explicit
+choice is stored in that browser and synchronized across open tabs. Provider responses
+and terminal output are not translated.

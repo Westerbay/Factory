@@ -1,4 +1,6 @@
-import { memo } from "react"
+import * as m from "@workspace/i18n/messages"
+import { useLocale } from "../../lib/i18n"
+import { memo, type ReactNode } from "react"
 import Markdown, { type Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
 
@@ -43,21 +45,31 @@ const components: Components = {
       {alt ? `Image: ${alt}` : "Image"}
     </span>
   ),
-  pre: ({ children }) => (
-    <pre tabIndex={0} aria-label="Code block">
+  pre: CodeBlock,
+  table: AccessibleTable,
+}
+
+function CodeBlock({ children }: { children?: ReactNode }) {
+  useLocale()
+  return (
+    <pre tabIndex={0} aria-label={m.code_block()}>
       {children}
     </pre>
-  ),
-  table: ({ children }) => (
+  )
+}
+
+function AccessibleTable({ children }: { children?: ReactNode }) {
+  useLocale()
+  return (
     <div
       className="message-markdown-table"
       role="region"
-      aria-label="Table"
+      aria-label={m.table()}
       tabIndex={0}
     >
       <table>{children}</table>
     </div>
-  ),
+  )
 }
 
 /** Render completed and in-progress agent text without executing embedded content. */

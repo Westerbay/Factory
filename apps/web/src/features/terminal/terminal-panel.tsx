@@ -1,3 +1,5 @@
+import * as m from "@workspace/i18n/messages"
+import { useLocale, translateMessage } from "../../lib/i18n"
 import { lazy, Suspense, useEffect, useRef, useState } from "react"
 import "./terminal.css"
 
@@ -20,6 +22,7 @@ export function TerminalPanel({
   expanded: boolean
   onExpandedChange: (expanded: boolean) => void
 }) {
+  useLocale()
   const [opened, setOpened] = useState(visible)
   const detached = useRef(new Map<string, number>())
   const terminalKey = conversationId ?? "documents"
@@ -32,14 +35,14 @@ export function TerminalPanel({
     <section className="terminal-pane" aria-label="Terminal">
       {projectWarnings?.map((warning) => (
         <p key={warning} className="terminal-project-warning" role="status">
-          {warning}
+          {translateMessage(warning)}
         </p>
       ))}
       {opened && available ? (
         <Suspense
           fallback={
             <p className="terminal-status" role="status">
-              Loading terminal…
+              {m.loading_terminal()}{" "}
             </p>
           }
         >
@@ -66,7 +69,7 @@ export function TerminalPanel({
         </Suspense>
       ) : !available ? (
         <p className="terminal-status" role="status">
-          Waiting for your environment…
+          {m.waiting_for_your_environment()}{" "}
         </p>
       ) : null}
     </section>

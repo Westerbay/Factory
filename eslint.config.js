@@ -11,6 +11,7 @@ export default tseslint.config(
       "docs/plans/**",
       ".factory/**",
       "target/**",
+      "packages/i18n/src/generated/**",
     ],
   },
   js.configs.recommended,

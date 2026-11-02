@@ -6,6 +6,7 @@ import { RouterProvider } from "@tanstack/react-router"
 import { createQueryClient } from "./lib/query/query-client"
 import { router } from "./router"
 import { AppUpdates } from "./pwa/AppUpdates"
+import "./lib/i18n"
 import "./styles/app.css"
 import "./lib/theme/theme"
 

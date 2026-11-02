@@ -107,12 +107,36 @@
           /></svg
         >factory
       </p>
-      <h1>You are offline</h1>
-      <p>
+      <h1 id="offline-title">You are offline</h1>
+      <p id="offline-description">
         Connect to the internet to open your workspace. Account and workspace
         data are not available offline.
       </p>
-      <a href="/app">Try again</a>
+      <a id="offline-retry" href="/app">Try again</a>
     </main>
+    <script>
+      let preference
+      try {
+        preference = localStorage.getItem("factory.language")
+      } catch {}
+      const languages = ["en", "fr"]
+      const language = languages.includes(preference)
+        ? preference
+        : (navigator.languages?.length
+            ? navigator.languages
+            : [navigator.language]
+          )
+            .map((value) => value.toLowerCase().split("-")[0])
+            .find((value) => languages.includes(value)) || "en"
+      if (language === "fr") {
+        document.documentElement.lang = "fr"
+        document.title = "Factory — Hors ligne"
+        document.getElementById("offline-title").textContent =
+          "Vous êtes hors ligne"
+        document.getElementById("offline-description").textContent =
+          "Connectez-vous à Internet pour ouvrir votre espace de travail. Les données du compte et de l’espace de travail ne sont pas disponibles hors ligne."
+        document.getElementById("offline-retry").textContent = "Réessayer"
+      }
+    </script>
   </body>
 </html>

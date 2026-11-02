@@ -1,13 +1,18 @@
+import * as m from "@workspace/i18n/messages"
+import { useLocale, getLanguage } from "../../lib/i18n"
 import { Button } from "../../components/ui/button"
 import type { Conversation } from "./api"
 
 export function conversationLabel(conversation: Conversation): string {
-  return `Chat · ${new Date(conversation.createdAt).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  })}`
+  return `${m.chat()} · ${new Date(conversation.createdAt).toLocaleString(
+    getLanguage(),
+    {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }
+  )}`
 }
 
 export function ConversationNavigation({
@@ -33,12 +38,13 @@ export function ConversationNavigation({
   onLoadOlder: () => void
   onRetry: () => void
 }) {
+  useLocale()
   return (
     <div className="conversation-navigation">
       {(conversations.length > 0 || hasOlder || failed) && (
-        <p className="conversation-list-label">Other chats</p>
+        <p className="conversation-list-label">{m.other_chats()}</p>
       )}
-      <nav className="conversation-list" aria-label="Conversations">
+      <nav className="conversation-list" aria-label={m.conversations()}>
         {conversations.map((conversation) => {
           const label = conversationLabel(conversation)
           return (
@@ -62,15 +68,15 @@ export function ConversationNavigation({
             disabled={!available || loadingMore}
             onClick={onLoadOlder}
           >
-            {loadingMore ? "Loading…" : "Older chats"}
+            {loadingMore ? m.loading() : m.older_chats()}
           </Button>
         )}
       </nav>
       {failed && (
         <div className="conversation-list-error" role="status">
-          <p>Chats could not be loaded.</p>
+          <p>{m.chats_could_not_be_loaded()}</p>
           <Button variant="ghost" disabled={!available} onClick={onRetry}>
-            Retry
+            {m.retry()}{" "}
           </Button>
         </div>
       )}

@@ -1,3 +1,5 @@
+import * as m from "@workspace/i18n/messages"
+import { useLocale, translateMessage } from "../../lib/i18n"
 import { useEffect, useId, useRef, useState } from "react"
 import { ArrowUpRight, Check, Copy } from "lucide-react"
 
@@ -5,6 +7,7 @@ import { Button } from "../../components/ui/button"
 import type { LoginChallenge } from "./api"
 
 export function DeviceCode({ challenge }: { challenge: LoginChallenge }) {
+  const locale = useLocale()
   const codeId = useId()
   const [copied, setCopied] = useState(false)
   const [message, setMessage] = useState("")
@@ -37,15 +40,15 @@ export function DeviceCode({ challenge }: { challenge: LoginChallenge }) {
 
   return (
     <div className="provider-device-code">
-      <p>Enter this code on OpenAI to connect your account.</p>
+      <p>{m.enter_this_code_on_openai_to_connect_your_account()}</p>
       <div className="provider-code-row">
         <span className="sr-only" id={codeId}>
-          Authorization code
+          {m.authorization_code()}{" "}
         </span>
         <code aria-labelledby={codeId}>{userCode}</code>
-        <Button variant="ghost" onClick={copy} aria-label="Copy code">
+        <Button variant="ghost" onClick={copy} aria-label={m.copy_code()}>
           {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
-          {copied ? "Copied" : "Copy"}
+          {copied ? m.copied() : m.copy()}
         </Button>
       </div>
       <a
@@ -54,18 +57,17 @@ export function DeviceCode({ challenge }: { challenge: LoginChallenge }) {
         target="_blank"
         rel="noopener noreferrer"
       >
-        Continue to OpenAI
-        <ArrowUpRight aria-hidden="true" />
-        <span className="sr-only"> (opens a new tab)</span>
+        {m.continue_to_openai()} <ArrowUpRight aria-hidden="true" />
+        <span className="sr-only"> {m.opens_a_new_tab()}</span>
       </a>
       <p className="provider-expiry">
-        Expires at{" "}
+        {m.expires_at()}{" "}
         <time dateTime={challenge.expiresAt}>
-          {new Date(challenge.expiresAt).toLocaleTimeString()}
+          {new Date(challenge.expiresAt).toLocaleTimeString(locale)}
         </time>
       </p>
       <p className="provider-copy-status" role="status" aria-live="polite">
-        {message}
+        {message && translateMessage(message)}
       </p>
     </div>
   )
