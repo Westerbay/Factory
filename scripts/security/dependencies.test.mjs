@@ -9,8 +9,8 @@ import { pathToFileURL } from "node:url"
 const require = createRequire(import.meta.url)
 
 const expected = {
-  minimatch: ["10.2.6"],
-  glob: ["11.1.0"],
+  minimatch: ["11.0.4"],
+  glob: ["14.0.3"],
   deepmerge: ["4.3.1"],
 }
 // Follow reachable dependency links; obsolete virtual-store entries are not installed dependencies.
@@ -60,7 +60,19 @@ function installedPackages() {
   return [...found.values()]
 }
 const packages = installedPackages()
-test("every security-patched dependency version is installed", () => {
+test("every reviewed dependency version is installed", () => {
+  for (const pkg of packages) {
+    if (
+      (pkg.name === "glob" || pkg.name === "minimatch") &&
+      Number(pkg.version.split(".")[0]) >= 9 &&
+      Number(pkg.version.split(".")[0]) < (pkg.name === "glob" ? 14 : 11)
+    ) {
+      assert.ok(
+        expected[pkg.name].includes(pkg.version),
+        `unreviewed ${pkg.name}@${pkg.version}; check transitive overrides`
+      )
+    }
+  }
   for (const [name, versions] of Object.entries(expected))
     for (const version of versions) {
       assert.ok(
