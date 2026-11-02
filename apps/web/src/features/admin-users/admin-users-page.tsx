@@ -1,3 +1,5 @@
+import * as m from "@workspace/i18n/messages"
+import { useLocale, translateMessage } from "../../lib/i18n"
 import { useEffect, useRef, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
@@ -17,14 +19,15 @@ type Props = {
 }
 
 export function AdminUsersPage(props: Props) {
+  useLocale()
   const { state } = useSession()
   if (state.status !== "active") return null
   if (state.session.user.role !== "admin")
     return (
       <section>
-        <h1>Administrator access required</h1>
-        <p>Your account cannot manage other users.</p>
-        <Link to="/app">Return to your workspace</Link>
+        <h1>{m.administrator_access_required()}</h1>
+        <p>{m.your_account_cannot_manage_other_users()}</p>
+        <Link to="/app">{m.return_to_your_workspace()}</Link>
       </section>
     )
   return <AdminUsersList {...props} session={state.session} />
@@ -37,6 +40,7 @@ function AdminUsersList({
   onPage,
   session,
 }: Props & { session: Session }) {
+  useLocale()
   const [notice, setNotice] = useState<{ message: string; focus: boolean }>()
   const noticeRef = useRef<HTMLParagraphElement>(null)
   useEffect(() => {
@@ -52,16 +56,15 @@ function AdminUsersList({
   return (
     <section className="admin-users" aria-labelledby="users-title">
       <p className="eyebrow">Administration</p>
-      <h1 id="users-title">User access</h1>
+      <h1 id="users-title">{m.user_access()}</h1>
       <p className="introduction">
-        Review requests and manage access to Factory. Activating an account
-        requires the member to sign in again.
+        {m.review_requests_and_manage_access_to_factory_activating_an_accoun()}{" "}
       </p>
       <div className="admin-toolbar">
         <div
           className="admin-filters"
           role="group"
-          aria-label="Filter users by access status"
+          aria-label={m.filter_users_by_access_status()}
         >
           {(["pending", "active", "suspended"] as const).map((filter) => (
             <Button
@@ -73,7 +76,9 @@ function AdminUsersList({
                 onFilter(filter)
               }}
             >
-              {filter.charAt(0).toUpperCase() + filter.slice(1)}
+              {translateMessage(
+                filter.charAt(0).toUpperCase() + filter.slice(1)
+              )}
             </Button>
           ))}
         </div>
@@ -82,19 +87,19 @@ function AdminUsersList({
           disabled={users.isFetching}
           onClick={() => void users.refetch()}
         >
-          Refresh list
+          {m.refresh_list()}{" "}
         </Button>
       </div>
       {notice && (
         <p className="admin-notice" role="status" ref={noticeRef} tabIndex={-1}>
-          {notice.message}
+          {translateMessage(notice.message)}
         </p>
       )}
       {users.isPending ? (
-        <p role="status">Loading users…</p>
+        <p role="status">{m.loading_users()}</p>
       ) : users.isError ? (
         <p className="admin-notice" role="alert">
-          The user list could not be loaded. Use Refresh list to try again.
+          {m.the_user_list_could_not_be_loaded_use_refresh_list_to_try_again()}{" "}
         </p>
       ) : (
         <>
@@ -110,17 +115,27 @@ function AdminUsersList({
               ))}
             </ul>
           ) : (
-            <p className="admin-empty">No {status} users on this page.</p>
+            <p className="admin-empty">
+              {m.no_status_users_on_this_page({
+                status: translateMessage(
+                  status.charAt(0).toUpperCase() + status.slice(1)
+                ),
+              })}
+            </p>
           )}
-          <nav className="admin-pagination" aria-label="User list pages">
+          <nav className="admin-pagination" aria-label={m.user_list_pages()}>
             <Button
               type="button"
               disabled={!cursor || users.isFetching}
               onClick={() => onPage()}
             >
-              First page
+              {m.first_page()}{" "}
             </Button>
-            <span>{users.data.items.length} shown · Up to 20 per page</span>
+            <span>
+              {m.count_shown_up_to_20_per_page({
+                count: users.data.items.length,
+              })}
+            </span>
             <Button
               type="button"
               disabled={!users.data.nextCursor || users.isFetching}
@@ -128,7 +143,7 @@ function AdminUsersList({
                 if (users.data.nextCursor) onPage(users.data.nextCursor)
               }}
             >
-              Next page
+              {m.next_page()}{" "}
             </Button>
           </nav>
         </>

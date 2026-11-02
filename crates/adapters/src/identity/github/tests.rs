@@ -102,6 +102,39 @@ async fn fixture(state: Fixture) -> (GitHubProvider, Arc<Fixture>, Server) {
 }
 
 #[tokio::test]
+async fn initial_login_requests_repository_and_key_permissions_and_retains_token() {
+    let (provider, _, _server) = fixture(Fixture {
+        token_body: r#"{"access_token":"fixture-token","token_type":"bearer","scope":"read:user,repo,write:public_key,user:email"}"#.into(),
+        ..Default::default()
+    }).await;
+    let url = provider
+        .authorization_url(&"s".repeat(43), &"c".repeat(43))
+        .unwrap();
+    let url = Url::parse(&url).unwrap();
+    let scope = url.query_pairs().find(|(key, _)| key == "scope").unwrap().1;
+    for required in ["read:user", "repo", "write:public_key", "user:email"] {
+        assert!(scope.split_whitespace().any(|item| item == required));
+    }
+    let (identity, token) = provider
+        .exchange_login("code", &"v".repeat(43))
+        .await
+        .unwrap();
+    assert_eq!(identity.handle, "fixture-user");
+    assert_eq!(token.unwrap().secret(), "fixture-token");
+}
+
+#[tokio::test]
+async fn initial_login_rejects_token_without_required_permissions() {
+    let (provider, _, _server) = fixture(Fixture::default()).await;
+    assert!(
+        provider
+            .exchange_login("code", &"v".repeat(43))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn operator_lookup_uses_public_identity_without_credentials_and_rejects_non_users() {
     let (provider, state, _server) = fixture(Fixture {
         profile_body:
@@ -173,7 +206,7 @@ async fn operator_lookup_uses_public_identity_without_credentials_and_rejects_no
 }
 
 #[test]
-fn authorization_requests_only_identity_with_state_and_s256() {
+fn authorization_requests_identity_and_repository_access_with_state_and_s256() {
     let provider = GitHubProvider::new(
         "client".into(),
         "secret".into(),
@@ -191,7 +224,10 @@ fn authorization_requests_only_identity_with_state_and_s256() {
     let params: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
     assert_eq!(url.origin().ascii_serialization(), "https://github.com");
     assert_eq!(url.path(), "/login/oauth/authorize");
-    assert_eq!(params["scope"], "read:user");
+    assert_eq!(
+        params["scope"],
+        "read:user repo write:public_key user:email"
+    );
     assert_eq!(params["code_challenge_method"], "S256");
     assert_eq!(params["code_challenge"], challenge.as_str());
     assert_eq!(params["state"], state);

@@ -1,10 +1,16 @@
 # Product
 
+## Interface language
+
+The profile settings offer English and French. Without a saved choice, Factory uses the
+first supported browser language, falling back to English. A manual choice is retained
+in that browser and synchronized across its open tabs. Agent responses and terminal output remain in their original language.
+
 ## Current capabilities
 
 Factory offers a private member space and an administrator backoffice. Sign-in uses
 GitHub only; there are no passwords or email invitations. A successful GitHub identity
-check does not itself grant membership. Connecting Codex is a separate explicit action
+check does not itself grant membership. Connecting an agent provider is a separate explicit action
 inside an active member's private environment.
 
 An operator configures the first administrator with the local CLI, selecting a GitHub
@@ -16,21 +22,64 @@ can activate that account, after which the member must begin a new sign-in. Hand
 display names identify people visually but never determine authorization.
 
 After GitHub sign-in, workspace preparation starts automatically. An unconnected member
-sees Codex as the sole provider choice; a confirmed saved account opens the workspace
+chooses Codex or Claude Code; a saved connected account opens the workspace
 directly. The workspace has conversation history on the left, chat in the center and a
 collapsible terminal on the right. The GitHub profile at the bottom left exposes Settings,
-Stop environment and Sign out, plus User access for administrators. Provider account
-details and Disconnect Codex belong in Settings. Repository selection, cloning and global
-skills are not available. The shared graphite interface uses Space Mono and concise
+Stop environment, a light/dark theme choice and Sign out, plus User access for administrators.
+The initial theme follows the browser preference and the choice is stored on the device;
+there is no separate system mode. Provider account
+details, additional connections and disconnect actions belong in Settings. GitHub sign-in
+requests repository access as well as identity. Global skills are not available. The interface uses Space Mono and concise
 contextual status instead of an environment dashboard or permanent refresh controls.
-GitHub sign-in does not request repository permissions or save a provider access token.
+
+## GitHub projects
+
+A member authorizes repository access during GitHub sign-in. The app requests GitHub
+`repo`, `write:public_key` and `user:email` permissions; the classic `repo` scope grants
+broad read/write access. Once the environment is ready, Factory automatically registers its
+dedicated SSH public key. Codex and the
+terminal can use its private key with that member's GitHub permissions, including push;
+repository rules and organization SSO still apply. The account's verified primary email
+is used as the default Git author email, which is visible to readers of commits. Existing
+explicit Git identity settings take precedence.
+
+Accessible repositories can be imported into the environment's `~/Documents` using
+the repository name as the folder name, such as `~/Documents/Factory`. If that name is
+already occupied, import reports the conflict without overwriting it. The import picker
+excludes existing projects and shows progress until the clone is ready; users may continue
+in the background. Deleting a local project folder leaves its project and chats
+listed, but the folder must be restored before its project sessions can run. Import
+reserves the stable GitHub repository ID before cloning; concurrent requests never launch another clone. Interrupted or
+uncertain imports require an observed environment stop and explicit recovery before a
+retry. Factory never overwrites or adopts unrecognized folders. The sidebar groups chats
+under independently expandable projects and offers a new-chat action on each project. Project chats start and
+resume Codex or Claude Code in the selected repository; an unavailable folder is reported rather than
+replacing it with a different directory.
+
+A confirmed project deletion removes its local checkout and chats, including unpushed changes,
+but leaves the GitHub repository untouched. Deletion is refused while an import or project
+run is active or uncertain. Members must stop terminal commands first; terminal access to
+project chats closes when deletion starts. An interrupted deletion can be retried from the
+project row. Unrecognized or replaced folders are never deleted.
+
+When a member opens a project, Factory checks whether its original GitHub path still
+identifies the same repository. A redirect, inaccessible path or different repository
+is reported for review; an unavailable check is shown as unverified, without blocking
+local work. This check does not inspect the Git remote or establish that a push is safe:
+GitHub may change after the check, and the member may have configured a different remote
+or push URL. Factory never changes those Git settings automatically.
+
+Disconnecting repository access locally removes the saved OAuth token but does not itself
+remove the SSH key. Members can inspect or revoke SSH keys in GitHub settings. Revoking
+all GitHub OAuth app permissions also removes keys created by that app; GitHub removes
+keys unused for one year. Reconnection recovers a confirmed missing registered key.
 
 ## Private local environments
 
 Creating or activating an account creates no Docker resources. On entry to the workspace,
 an active member automatically initializes a missing environment or starts a stopped one.
 An existing running environment is reused. Before starting a stopped environment,
-Factory checks for recoverable runs; a failed check or outstanding recovery keeps it
+Factory checks for recoverable runs and imports; a failed check or outstanding recovery keeps it
 stopped with an explicit recovery path. Initialization creates a private home volume.
 Files under `/home/factory`, including the working directory `/home/factory/Documents`,
 survive stop/start, sign-out and suspension. There is no volume deletion or reset action.
@@ -66,17 +115,19 @@ Factory imposes no limit on the number of started environments, CPU, memory or p
 counts. They share available host resources; Docker Desktop and operating-system limits
 still apply. Containers retain a non-root user and a read-only root
 filesystem. Temporary storage and logs remain bounded; persistent named volumes have no
-portable disk quota. Each user has an isolated internal network; only approved Codex
-HTTPS destinations are reachable through the shared installation proxy. General Internet,
-host/LAN and other-user access are blocked. There is no file editor.
+portable disk quota. Each user has an isolated internal network; approved OpenAI and
+Anthropic HTTPS destinations and GitHub SSH on port 443 are reachable through the shared
+installation proxy. General Internet, host/LAN and other-user access are blocked. There is no file editor.
 
 Existing environments with a different image or policy are never silently replaced.
 A local database reset removes database records but does not delete Docker homes.
 
-## Terminal and personal Codex account
+## Terminal and personal provider accounts
 
-The terminal opens in `~/Documents` with zsh and Oh My Zsh in the current image,
-and attaches to a persistent tmux shell. Closing the
+A project chat’s terminal starts in that project repository; a projectless chat starts in
+`~/Documents`. Each chat attaches to its own persistent zsh/tmux shell and shows Neofetch
+when its shell starts. Switching chats or reconnecting preserves the shell and a directory
+changed by the member. Closing the
 page, losing the connection or restarting the API detaches the display without stopping
 the shell. Stop environment ends its processes; saved files remain. One view owns input
 at a time, and another view must explicitly take over. Reconnection never replays unsent
@@ -108,26 +159,36 @@ Disconnect does not guarantee interruption of Codex processes launched from the 
 Stop environment is the explicit way to end all its processes. If an account controller
 is abandoned during API failure, its watchdog bounds recovery to at most ten minutes.
 
+A member can connect Claude Code using the CLI's official sign-in link. After authorizing
+with Anthropic, the member enters the browser-issued one-time code in Factory, which
+forwards it to the same CLI process without persisting it. The CLI must confirm the
+account before Factory marks it connected. Settings can add either
+provider after the first connection or disconnect one while retaining the other. Claude
+logout, like Codex logout, is blocked while a Factory run is active or uncertain.
+
 A missing or stopped proxy makes Codex status/login unavailable. The local terminal
 and local account cancellation/logout remain independent of proxy availability, subject
-to the active-run guard. Members can also deliberately run Codex in the terminal.
+to the active-run guard. Members can also deliberately run either CLI in the terminal.
 
-## Codex conversations
+## Provider conversations
 
-After a confirmed Codex connection, a member can create and select conversations, choose
-an available model, send messages, view streamed output, answer questions and request
+After at least one provider connection, a member can create and select conversations,
+choose from models reported by the connected providers, see and choose an advertised reasoning effort
+for models that support it, send messages, view streamed output, answer questions and request
 cancellation. Completed messages and run states are retained for that user; reading
 history does not replay a message or start tools. The conversation list loads older
 pages on request. Each conversation shows a bounded recent history and indicates when older runs, messages or requests are omitted. A submitted
 question answer can remain pending or uncertain until its receipt is confirmed; it is
 not automatically resent. The last successful model list stays in browser memory for the
-current session and is refreshed when stale after five minutes; account and session
-changes clear it. Concurrent discovery requests share one provider operation. Temporary
+current session, including when changing tabs. Confirmed provider connection changes
+refresh it; session changes clear it. Concurrent discovery requests share one provider operation. Temporary
+provider discovery failures leave other providers' models usable and offer a retry for missing models. Temporary
 model conflicts recover in the background with progressively slower retries, retaining
 the current model selection. A prolonged conflict without a loaded list shows a small
 status message and continues checking while the workspace is available and visible.
 Models and conversations have no permanent refresh buttons; other failures offer
-contextual retry. A listed model is not a guarantee that
+contextual retry. The model selector shows the resolved version when the provider reports it;
+aliases and provider fallbacks can still change the actual model used. A listed model is not a guarantee that
 the account can use it. Provider failures and interrupted or uncertain work remain visible.
 
 Enter sends a message, Shift+Enter inserts a line, and IME composition does not send.
@@ -137,12 +198,15 @@ Assistant replies render Markdown during streaming and after completion, includi
 links, lists, tables and code blocks. Raw HTML cannot execute and embedded images do
 not load remote resources automatically. User messages remain plain text.
 
-Codex runs with full access inside the member's container: commands and file changes do
+Both providers run with full access inside the member's container: commands and file changes do
 not ask for per-action approval, and the agent can read, change or delete any files
-accessible to that container user, including the saved Codex credentials. Docker's
+accessible to that container user, including saved provider credentials. Docker's
 user isolation and network controls still apply, but do not protect a member's own home
 from that member's agent. Treat repository content and external instructions accordingly.
-Claude and multiple accounts per provider are not yet available.
+Multiple accounts per provider are not yet available. When switching providers, the
+visible saved conversation messages are sent as context to the selected provider. A
+switch is refused if that history is truncated or too large to transfer safely. Tool
+activity and answers to interactive questions are not included in the transfer.
 
 An interrupt acknowledgement alone does not prove that all work stopped. If cleanup is
 uncertain, the run remains blocking. Stop the environment, wait until the stopped state
@@ -191,8 +255,8 @@ tab; another tab's choice does not automatically reload it.
 
 ## Direction and preserved execution behavior
 
-Future work will connect each user's isolated server environment to repository providers
-and global skills. Providers should remain replaceable.
+Future work includes global skills and additional repository providers. Providers should
+remain replaceable.
 Repository authorization and agent execution remain explicit capabilities, never hidden
 actions of sign-in.
 

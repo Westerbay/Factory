@@ -148,7 +148,9 @@ async fn lost_postgres_supervisor_recovers_without_restarting_the_router() {
     .await
     .unwrap();
     assert_eq!(count, 0, "the fixture must not dispatch any Docker work");
-    let factory = EnvironmentHostFactory::prepare(&config, database.clone()).unwrap();
+    let factory = EnvironmentHostFactory::prepare(&config, database.clone())
+        .await
+        .unwrap();
     let initial = factory.start().await.unwrap();
     let old_service = initial.service();
     let old_router = runtime_router(old_service.clone(), "original");
@@ -223,7 +225,11 @@ async fn lost_postgres_supervisor_recovers_without_restarting_the_router() {
     .await
     .unwrap();
     expect_response(&router, StatusCode::SERVICE_UNAVAILABLE, "original").await;
-    assert!(EnvironmentHostFactory::prepare(&config, database.clone()).is_err());
+    assert!(
+        EnvironmentHostFactory::prepare(&config, database.clone())
+            .await
+            .is_err()
+    );
     allow_attempt.send(()).unwrap();
     assert_eq!(
         tokio::time::timeout(DEADLINE, failures.recv())
@@ -247,7 +253,11 @@ async fn lost_postgres_supervisor_recovers_without_restarting_the_router() {
         response(&old_router).await.0,
         StatusCode::SERVICE_UNAVAILABLE
     );
-    assert!(EnvironmentHostFactory::prepare(&config, database.clone()).is_err());
+    assert!(
+        EnvironmentHostFactory::prepare(&config, database.clone())
+            .await
+            .is_err()
+    );
 
     factory.close();
     assert!(

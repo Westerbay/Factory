@@ -1,3 +1,5 @@
+import * as m from "@workspace/i18n/messages"
+import { useLocale, translateMessage } from "../../lib/i18n"
 import {
   useEffect,
   useRef,
@@ -5,6 +7,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react"
+import { setLanguage, type Language } from "../../lib/i18n"
 import {
   PanelLeft,
   PanelLeftClose,
@@ -14,9 +17,13 @@ import {
 } from "lucide-react"
 
 import { ConnectedProvider } from "../../features/agent-connections/connected-provider"
+import { ClaudeSettings } from "../../features/agent-connections/claude-connection"
+import { ClaudeLogin } from "../../features/agent-connections/claude-login"
+import { useClaudeConnection } from "../../features/agent-connections/use-claude-connection"
 import { ProviderConnection } from "../../features/agent-connections/provider-connection"
 import { useConnection } from "../../features/agent-connections/use-connection"
-import { listRecoverable } from "../../features/conversations/api"
+import { hasRecoverableWork } from "../../features/projects/api"
+import { useProjects } from "../../features/projects/use-projects"
 import { Chat } from "../../features/conversations/chat"
 import { canStopEnvironment } from "../../features/environments/environment-controller"
 import { useEnvironment } from "../../features/environments/use-environment"
@@ -27,6 +34,7 @@ import { Modal } from "../ui/modal"
 import { SplitPane } from "../ui/split-pane"
 import { EnvironmentView } from "./environment-view"
 import { ProfileMenu } from "./profile-menu"
+import { WorkspaceSidebar } from "./workspace-sidebar"
 import "./workspace.css"
 
 const compactQuery = "(max-width: 900px)"
@@ -36,21 +44,26 @@ function subscribeCompact(listener: () => void) {
   return () => query.removeEventListener("change", listener)
 }
 const readCompact = () => window.matchMedia(compactQuery).matches
-const hasRecoverableRuns = async (signal: AbortSignal) =>
-  (await listRecoverable(signal)).length > 0
 
 export function WorkspacePage() {
-  const environment = useEnvironment(hasRecoverableRuns)
+  const locale = useLocale()
+  const environment = useEnvironment(hasRecoverableWork)
   const available =
     environment.state.environment?.status === "running" &&
     environment.state.pending !== "stop"
+  const projects = useProjects(available)
   const connection = useConnection(available)
-  const connected = connection.state.connection?.status === "connected"
+  const [claudeSetup, setClaudeSetup] = useState(false)
+  const claude = useClaudeConnection(available, claudeSetup)
+  const codexConnected = connection.state.connection?.status === "connected"
+  const claudeConnected = claude.data?.status === "connected"
+  const connected = codexConnected || claudeConnected
   const [wasConnected, setWasConnected] = useState(false)
   if (connected && !wasConnected) setWasConnected(true)
   if (
     available &&
     connection.state.connection?.status === "disconnected" &&
+    claude.data?.status === "disconnected" &&
     wasConnected
   )
     setWasConnected(false)
@@ -62,7 +75,18 @@ export function WorkspacePage() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [stopOpen, setStopOpen] = useState(false)
+  useEffect(() => {
+    if (claudeSetup && claudeConnected) setClaudeSetup(false)
+  }, [claudeConnected, claudeSetup])
   const entryContent = useRef<HTMLDivElement>(null)
+  const claudeHeading = useRef<HTMLHeadingElement>(null)
+  const previousClaudeSetup = useRef(false)
+  useEffect(() => {
+    if (claudeSetup && !connected) claudeHeading.current?.focus()
+    else if (previousClaudeSetup.current && !connected)
+      entryContent.current?.focus()
+    previousClaudeSetup.current = claudeSetup
+  }, [claudeSetup, connected])
   const previousAvailable = useRef(available)
   useEffect(() => {
     if (previousAvailable.current && !available) entryContent.current?.focus()
@@ -107,6 +131,16 @@ export function WorkspacePage() {
     setDrawerOpen(false)
     setStopOpen(true)
   }
+  function connectClaude() {
+    setSettingsOpen(false)
+    setClaudeSetup(true)
+    if (claude.data?.status !== "connecting") void claude.begin()
+  }
+  async function closeClaudeSetup() {
+    if (claude.pending) return
+    if (claude.data?.challenge && !(await claude.cancel())) return
+    setClaudeSetup(false)
+  }
   const profile = (
     <ProfileMenu
       canStop={canStop}
@@ -118,37 +152,37 @@ export function WorkspacePage() {
     navigation: ReactNode
     conversation: ReactNode
     title: string
+    conversationId?: string
+    projectName?: string
+    projectWarnings?: string[]
   }) {
     return (
       <div
         className={showWorkspace ? "workspace" : "workspace workspace-entry"}
         data-terminal-expanded={expanded ? "" : undefined}
       >
-        {showWorkspace && !compact ? (
-          <div
-            className="workspace-sidebar-track t-resize"
-            data-collapsed={!sidebarVisible || expanded ? "" : undefined}
-            inert={!sidebarVisible || expanded}
-            aria-hidden={!sidebarVisible || expanded}
+        {showWorkspace ? (
+          <WorkspaceSidebar
+            visible={sidebarVisible && !expanded}
+            compact={compact}
+            terminalVisible={terminalVisible}
+            onCollapse={() => {
+              setSidebarVisible(false)
+              navigationToggle.current?.focus({ preventScroll: true })
+            }}
           >
-            <aside
-              id="workspace-sidebar"
-              className="workspace-sidebar"
-              aria-label="Workspace navigation"
-            >
-              <Brand />
-              {parts?.navigation}
-              {profile}
-            </aside>
-          </div>
-        ) : !showWorkspace ? (
+            <Brand />
+            {parts?.navigation}
+            {profile}
+          </WorkspaceSidebar>
+        ) : (
           <>
             <div className="workspace-entry-brand">
               <Brand />
             </div>
             <div className="workspace-entry-profile">{profile}</div>
           </>
-        ) : null}
+        )}
         {showWorkspace ? (
           <div className="workspace-body">
             <div
@@ -161,10 +195,10 @@ export function WorkspacePage() {
                   ref={navigationToggle}
                   label={
                     compact
-                      ? "Open chats"
+                      ? m.open_chats()
                       : sidebarVisible
-                        ? "Hide chats"
-                        : "Show chats"
+                        ? m.hide_chats()
+                        : m.show_chats()
                   }
                   aria-expanded={compact ? drawerOpen : sidebarVisible}
                   aria-controls={
@@ -184,10 +218,12 @@ export function WorkspacePage() {
                     <PanelLeftOpen aria-hidden="true" />
                   )}
                 </IconButton>
-                <h1>{parts?.title ?? "New chat"}</h1>
+                <h1>{parts?.title ?? m.new_chat()}</h1>
                 <IconButton
                   ref={terminalToggle}
-                  label={terminalVisible ? "Hide terminal" : "Show terminal"}
+                  label={
+                    terminalVisible ? m.hide_terminal() : m.show_terminal()
+                  }
                   aria-expanded={terminalVisible}
                   aria-controls="workspace-terminal"
                   onClick={() => changeTerminal(!terminalVisible)}
@@ -198,7 +234,7 @@ export function WorkspacePage() {
             </div>
             {resumeIssue && (
               <div className="workspace-notice" role="status">
-                <p>{resumeIssue}</p>
+                <p>{translateMessage(resumeIssue)}</p>
                 {available && connection.state.message && (
                   <Button
                     variant="ghost"
@@ -208,7 +244,7 @@ export function WorkspacePage() {
                     }
                     onClick={() => void connection.controller.refresh()}
                   >
-                    Check again
+                    {m.check_again()}
                   </Button>
                 )}
               </div>
@@ -219,6 +255,9 @@ export function WorkspacePage() {
               secondary={
                 <TerminalPanel
                   available={available}
+                  conversationId={parts?.conversationId}
+                  projectName={parts?.projectName}
+                  projectWarnings={parts?.projectWarnings}
                   visible={terminalVisible}
                   expanded={expanded}
                   onExpandedChange={setTerminalExpanded}
@@ -237,7 +276,19 @@ export function WorkspacePage() {
             className="workspace-entry-content"
           >
             {available ? (
-              <ProviderConnection {...connection} />
+              claudeSetup ? (
+                <ClaudeLogin
+                  connection={claude}
+                  headingRef={claudeHeading}
+                  onClose={() => setClaudeSetup(false)}
+                />
+              ) : (
+                <ProviderConnection
+                  {...connection}
+                  onClaude={connectClaude}
+                  claudeAvailable={available}
+                />
+              )
             ) : (
               <EnvironmentView {...environment} />
             )}
@@ -246,13 +297,13 @@ export function WorkspacePage() {
         <Modal
           open={compact && drawerOpen && showWorkspace}
           onClose={() => setDrawerOpen(false)}
-          title="Chats"
+          title={m.chats()}
           className="workspace-drawer"
         >
           <div className="workspace-drawer-top">
             <Brand />
             <IconButton
-              label="Close chats"
+              label={m.close_chats()}
               data-autofocus
               onClick={() => setDrawerOpen(false)}
             >
@@ -265,7 +316,7 @@ export function WorkspacePage() {
             onClick={(event) => {
               if (
                 (event.target as Element).closest(
-                  ".conversation-row, .conversation-new"
+                  ".conversation-row, .conversation-new, .project-create-chat"
                 )
               ) {
                 setMobileTerminal(false)
@@ -273,7 +324,7 @@ export function WorkspacePage() {
               }
             }}
           >
-            {parts?.navigation}
+            {compact ? parts?.navigation : null}
           </div>
           {profile}
         </Modal>
@@ -281,39 +332,70 @@ export function WorkspacePage() {
           returnFocusRef={compact ? navigationToggle : undefined}
           open={settingsOpen}
           onClose={() => setSettingsOpen(false)}
-          title="Settings"
+          title={m.settings()}
         >
           <div className="workspace-settings">
-            <p>Dark · Space Mono</p>
+            <p>Space Mono</p>
+            <label>
+              {m.language()}
+              <select
+                value={locale}
+                onChange={(event) =>
+                  setLanguage(event.target.value as Language)
+                }
+              >
+                <option value="en">English</option>
+                <option value="fr">Français</option>
+              </select>
+            </label>
             {available ? (
-              <ConnectedProvider {...connection} />
+              <>
+                {codexConnected ? (
+                  <ConnectedProvider {...connection} />
+                ) : (
+                  <ProviderConnection {...connection} inSettings />
+                )}
+                <ClaudeSettings
+                  connection={claude}
+                  available={available}
+                  onConnect={connectClaude}
+                />
+              </>
             ) : (
               <p>
-                Provider settings are available when your workspace is running.
+                {m.provider_settings_are_available_when_your_workspace_is_running()}
               </p>
             )}
           </div>
           <div className="ui-modal-actions">
             <Button data-autofocus onClick={() => setSettingsOpen(false)}>
-              Done
+              {m.done()}
             </Button>
           </div>
+        </Modal>
+        <Modal
+          open={claudeSetup && connected}
+          onClose={() => void closeClaudeSetup()}
+          title={m.connect_claude_code()}
+        >
+          <ClaudeLogin
+            connection={claude}
+            onClose={() => setClaudeSetup(false)}
+          />
         </Modal>
         <Modal
           returnFocusRef={compact ? navigationToggle : undefined}
           open={stopOpen}
           onClose={() => setStopOpen(false)}
-          title="Stop your environment?"
+          title={m.stop_your_environment()}
           descriptionId="stop-environment-description"
         >
           <p id="stop-environment-description">
-            Running tasks and terminal processes will stop. Saved files and
-            completed chat messages are kept. You can return to your workspace
-            later.
+            {m.running_tasks_and_terminal_processes_will_stop_saved_files_and_co()}
           </p>
           <div className="ui-modal-actions">
             <Button data-autofocus onClick={() => setStopOpen(false)}>
-              Cancel
+              {m.cancel()}
             </Button>
             <Button
               variant="danger"
@@ -323,7 +405,7 @@ export function WorkspacePage() {
                 void environment.controller.stop()
               }}
             >
-              Stop environment
+              {m.stop_environment()}
             </Button>
           </div>
         </Modal>
@@ -333,7 +415,13 @@ export function WorkspacePage() {
   return connected || wasConnected ? (
     <Chat
       available={workspaceReady}
+      projectWorkspace={projects}
+      connectedProviders={[
+        ...(codexConnected ? [{ id: "codex", name: "Codex" }] : []),
+        ...(claudeConnected ? [{ id: "claude", name: "Claude" }] : []),
+      ]}
       resuming={resuming}
+      navigationVisible={!compact || drawerOpen}
       renderLayout={layout}
     />
   ) : (

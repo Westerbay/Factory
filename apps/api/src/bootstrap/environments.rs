@@ -1,20 +1,28 @@
 use super::recovery::RecoveryHost;
 use crate::config::RuntimeConfig;
 use crate::conversations::runtime::ConversationRuntime;
+use crate::projects::runtime::{KeySource, ProjectsRuntime};
+use factory_adapters::claude_account::ClaudeAccountAdapter;
+use factory_adapters::claude_execution::ClaudeExecutionAdapter;
 use factory_adapters::codex_account::CodexAccountAdapter;
 use factory_adapters::codex_execution::CodexExecutionAdapter;
 use factory_adapters::egress::EgressMetadata;
 use factory_adapters::environments::{
     DockerEnvironmentRuntime, InstallationGuard, PreparationMetadata,
 };
+use factory_adapters::identity::{GitHubRepositoryProvider, RepositoryAeadCipher};
+use factory_adapters::projects::DockerProjectRuntime;
 use factory_adapters::terminals::DockerTerminalRuntime;
 use factory_application::agent_connections::AgentConnectionService;
 use factory_application::conversations::ConversationService;
+use factory_application::conversations::coordinator::ExecutionProvider;
 use factory_application::environments::{
     EnvironmentAvailability, EnvironmentReconciler, EnvironmentService,
 };
 use factory_application::terminals::TerminalService;
+use factory_application::{identity::RepositoryAccessService, projects::ProjectService};
 use factory_core::environments::{EnvironmentError, EnvironmentStart, EnvironmentSupervisor};
+use factory_core::identity::{RepositoryAccessProvider, RepositoryTokenCipher};
 use factory_database::environments::PgEnvironmentSupervisor;
 use factory_database::identity::IdentityDatabase;
 use std::{
@@ -39,7 +47,9 @@ pub struct EnvironmentHost {
     service: Arc<EnvironmentService>,
     terminal: Arc<TerminalService>,
     accounts: Arc<AgentConnectionService>,
+    claude_accounts: Arc<AgentConnectionService>,
     conversations: Arc<ConversationRuntime>,
+    projects: Arc<ProjectsRuntime>,
     availability: EnvironmentAvailability,
     stop: watch::Sender<bool>,
     workers: Vec<JoinHandle<()>>,
@@ -72,6 +82,8 @@ pub(super) struct EnvironmentHostFactory {
     egress: EgressMetadata,
     installation: Arc<InstallationGuard>,
     state: Arc<StdMutex<FactoryState>>,
+    repository_provider: Option<Arc<dyn RepositoryAccessProvider>>,
+    repository_cipher: Option<Arc<dyn RepositoryTokenCipher>>,
 }
 
 #[derive(Default)]
@@ -81,7 +93,7 @@ struct FactoryState {
 }
 
 impl EnvironmentHostFactory {
-    pub(super) fn prepare(
+    pub(super) async fn prepare(
         config: &RuntimeConfig,
         database: Arc<IdentityDatabase>,
     ) -> Result<Self, EnvironmentError> {
@@ -89,12 +101,49 @@ impl EnvironmentHostFactory {
         let metadata = PreparationMetadata::load(&directory)?;
         let egress = EgressMetadata::load(&directory)?;
         let installation = Arc::new(InstallationGuard::acquire(&directory)?);
+        let key = if config.identity().is_some() {
+            super::repository_key::load(&directory, || async {
+                database.has_repository_credentials().await.map_err(|_| ())
+            })
+            .await
+            .ok()
+        } else {
+            None
+        };
+        if config.identity().is_some() && key.is_none() {
+            tracing::error!(
+                event = "api.projects.encryption_key_unavailable",
+                guidance = "Restore the installation key or check local permissions; existing credentials were not changed."
+            );
+        }
+        let configured = match (config.identity(), key) {
+            (Some(identity), Some(key)) => {
+                let provider = GitHubRepositoryProvider::new(
+                    identity.client_id.clone(),
+                    identity.client_secret.clone(),
+                    format!("{}/api/auth/github/callback", config.api_origin()),
+                );
+                let cipher = RepositoryAeadCipher::new("factory-v1".into(), &key);
+                match (provider, cipher) {
+                    (Ok(provider), Ok(cipher)) => Some((
+                        Arc::new(provider) as Arc<dyn RepositoryAccessProvider>,
+                        Arc::new(cipher) as Arc<dyn RepositoryTokenCipher>,
+                    )),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let (repository_provider, repository_cipher) =
+            configured.map_or((None, None), |(p, c)| (Some(p), Some(c)));
         Ok(Self {
             database,
             metadata,
             egress,
             installation,
             state: Arc::new(StdMutex::new(FactoryState::default())),
+            repository_provider,
+            repository_cipher,
         })
     }
 
@@ -155,23 +204,69 @@ impl EnvironmentHostFactory {
             request.clone(),
             availability.clone(),
         )?);
-        let terminal = Arc::new(TerminalService::new(
+        let project_store = Arc::new(self.database.project_store());
+        let projects = Arc::new(ProjectService::new(service.clone(), project_store.clone()));
+        let project_docker = Arc::new(DockerProjectRuntime::new(runtime.clone()));
+        let repository_access = match (&self.repository_provider, &self.repository_cipher) {
+            (Some(provider), Some(cipher)) => Some(Arc::new(RepositoryAccessService::new(
+                Arc::new(self.database.store()),
+                provider.clone(),
+                cipher.clone(),
+                Arc::new(KeySource {
+                    environments: service.clone(),
+                    runtime: project_docker.clone(),
+                }),
+            ))),
+            _ => None,
+        };
+        let project_runtime = Arc::new(ProjectsRuntime {
+            environments: service.clone(),
+            projects: projects.clone(),
+            store: project_store,
+            docker: project_docker,
+            access: repository_access,
+            availability: availability.clone(),
+            installation: self.installation.clone(),
+            jobs: Arc::new(tokio::sync::Semaphore::new(4)),
+            active: Arc::new(StdMutex::new(std::collections::HashSet::new())),
+        });
+        let conversation_service = Arc::new(ConversationService::new_with_projects(
+            service.clone(),
+            Arc::new(self.database.conversation_store()),
+            projects,
+        ));
+        let terminal = Arc::new(TerminalService::new_with_conversations(
             service.clone(),
             Arc::new(DockerTerminalRuntime::new(runtime.clone())),
+            conversation_service.clone(),
         ));
         let job_guard = guard.clone();
         let accounts = Arc::new(AgentConnectionService::new(
             service.clone(),
             Arc::new(CodexAccountAdapter::new(runtime.clone())),
         ));
-        let conversations = crate::conversations::runtime::new(
-            Arc::new(ConversationService::new(
-                service.clone(),
-                Arc::new(self.database.conversation_store()),
-            )),
-            Arc::new(CodexExecutionAdapter::new(runtime.clone())),
-            accounts.clone(),
-        );
+        let claude_accounts = Arc::new(AgentConnectionService::new(
+            service.clone(),
+            Arc::new(ClaudeAccountAdapter::new(runtime.clone())),
+        ));
+        let conversations = crate::conversations::runtime::with_providers(
+            conversation_service,
+            vec![
+                ExecutionProvider {
+                    id: "codex",
+                    display_name: "Codex",
+                    accounts: accounts.clone(),
+                    runtime: Arc::new(CodexExecutionAdapter::new(runtime.clone())),
+                },
+                ExecutionProvider {
+                    id: "claude",
+                    display_name: "Claude",
+                    accounts: claude_accounts.clone(),
+                    runtime: Arc::new(ClaudeExecutionAdapter::new(runtime.clone())),
+                },
+            ],
+        )
+        .map_err(|_| EnvironmentError::InvalidConfiguration)?;
         let job_availability = availability.clone();
         let create_reconciler = move || {
             EnvironmentReconciler::new(
@@ -205,7 +300,9 @@ impl EnvironmentHostFactory {
             service,
             terminal,
             accounts,
+            claude_accounts,
             conversations,
+            projects: project_runtime,
             availability,
             stop,
             workers,
@@ -228,8 +325,15 @@ impl EnvironmentHost {
         self.accounts.clone()
     }
 
+    pub fn claude_accounts(&self) -> Arc<AgentConnectionService> {
+        self.claude_accounts.clone()
+    }
+
     pub(crate) fn conversations(&self) -> Arc<ConversationRuntime> {
         self.conversations.clone()
+    }
+    pub(crate) fn projects(&self) -> Arc<ProjectsRuntime> {
+        self.projects.clone()
     }
 
     /// Drain bounded in-flight operations. Stopping the API never deletes user data.

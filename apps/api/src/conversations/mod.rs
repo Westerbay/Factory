@@ -85,7 +85,7 @@ fn error(e: ConversationError) -> Response {
     let status = match e {
         ConversationError::Unauthorized => StatusCode::UNAUTHORIZED,
         ConversationError::NotFound => StatusCode::NOT_FOUND,
-        ConversationError::Conflict => StatusCode::CONFLICT,
+        ConversationError::Conflict | ConversationError::ContextLimit => StatusCode::CONFLICT,
         ConversationError::Invalid => StatusCode::BAD_REQUEST,
         ConversationError::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
     };
@@ -119,21 +119,25 @@ async fn list(
         next_cursor: page.next_cursor,
     }))
 }
-#[utoipa::path(post,path="/api/conversations",operation_id="createConversation",params(("Origin"=String,Header,description="Exact configured frontend Origin required"),("X-CSRF-Token"=String,Header,description="Session CSRF token required")),security(("sessionCookie"=[])),responses((status=200,body=ConversationView),(status=400,description="Invalid path or body",body=ApiError),(status=401,description="Active session required",body=ApiError),(status=403,description="Exact Origin or CSRF rejected",body=ApiError),(status=429,description="Request rate limit",body=ApiError),(status=503,description="Service unavailable",body=ApiError),(status=409,body=ApiError)))]
+#[utoipa::path(post,path="/api/conversations",operation_id="createConversation",request_body=Option<CreateConversationBody>,params(("Origin"=String,Header,description="Exact configured frontend Origin required"),("X-CSRF-Token"=String,Header,description="Session CSRF token required")),security(("sessionCookie"=[])),responses((status=200,body=ConversationView),(status=400,description="Invalid path or body",body=ApiError),(status=401,description="Active session required",body=ApiError),(status=403,description="Exact Origin or CSRF rejected",body=ApiError),(status=429,description="Request rate limit",body=ApiError),(status=503,description="Service unavailable",body=ApiError),(status=409,body=ApiError)))]
 async fn create(
     State(s): State<StateData>,
     h: HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Json<ConversationView>, Response> {
-    let (_, a) = s.authenticate(&h, Some(false)).await?;
-    if !body.is_empty() {
-        return Err(error(ConversationError::Invalid));
-    }
+    let (_, a) = s.authenticate(&h, Some(!body.is_empty())).await?;
+    let project_id = if body.is_empty() {
+        None
+    } else {
+        serde_json::from_slice::<CreateConversationBody>(&body)
+            .map_err(|_| error(ConversationError::Invalid))?
+            .project_id
+    };
     Ok(Json(
         s.runtime()
             .map_err(error)?
             .service
-            .create(a)
+            .create_in_project(a, project_id)
             .await
             .map_err(error)?
             .into(),
@@ -180,6 +184,9 @@ async fn models(
             .map(|m| ModelView {
                 id: m.id,
                 name: m.name,
+                resolved_model: m.resolved_model,
+                effort_levels: m.effort_levels,
+                default_effort: m.default_effort,
             })
             .collect(),
     ))
@@ -195,7 +202,10 @@ async fn start(
     let Path(id) = path.map_err(|_| error(ConversationError::Invalid))?;
     let Json(b) = body.map_err(|_| error(ConversationError::Invalid))?;
     let rt = s.runtime().map_err(error)?;
-    let task = tokio::spawn(async move { rt.begin(a, id, b.operation_id, b.model, b.input).await });
+    let task = tokio::spawn(async move {
+        rt.begin(a, id, b.operation_id, b.model, b.effort, b.input)
+            .await
+    });
     let run = task
         .await
         .map_err(|_| error(ConversationError::Unavailable))?

@@ -263,19 +263,24 @@ async fn unavailable_identity_keeps_api_contracts_and_exact_write_cors() {
             assert_eq!(response_json(response).await["code"], "unavailable");
         }
     }
-    for method in ["POST", "PATCH"] {
+    for method in ["POST", "PATCH", "DELETE"] {
         for origin in [
             WEB_ORIGIN,
             "http://localhost:4000",
             "https://evil.test",
             "null",
         ] {
+            let path = if method == "DELETE" {
+                "/api/projects/00000000-0000-0000-0000-000000000001"
+            } else {
+                "/api/admin/users/00000000-0000-0000-0000-000000000001/access"
+            };
             let response = app
                 .clone()
                 .oneshot(
                     Request::builder()
                         .method(Method::OPTIONS)
-                        .uri("/api/admin/users/00000000-0000-0000-0000-000000000001/access")
+                        .uri(path)
                         .header(header::ORIGIN, origin)
                         .header(header::ACCESS_CONTROL_REQUEST_METHOD, method)
                         .header(

@@ -10,6 +10,7 @@ pub const MAX_MESSAGE_BYTES: usize = 128 * 1024;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AttachmentRequest {
     pub take_over: bool,
+    pub conversation_id: Option<uuid::Uuid>,
 }
 
 #[derive(Serialize, ToSchema)]

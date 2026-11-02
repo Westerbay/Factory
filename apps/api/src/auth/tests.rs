@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use axum::{
     Router,
     body::{Body, to_bytes},
-    http::{Method, Request, header},
+    http::{Method, Request, StatusCode, header},
     response::Response,
 };
 use chrono::{Duration, Utc};
@@ -132,6 +132,7 @@ impl IdentityStore for Store {
 struct Provider {
     calls: AtomicUsize,
     unavailable: AtomicBool,
+    repository_token: AtomicBool,
 }
 
 #[async_trait]
@@ -161,6 +162,18 @@ impl IdentityProvider for Provider {
             display_name: "Fixture user".into(),
             handle: "fixture".into(),
         })
+    }
+    async fn exchange_login(
+        &self,
+        code: &str,
+        verifier: &str,
+    ) -> Result<(VerifiedIdentity, Option<RepositoryAccessToken>), IdentityError> {
+        let identity = self.exchange(code, verifier).await?;
+        let token = self
+            .repository_token
+            .load(Ordering::SeqCst)
+            .then(|| RepositoryAccessToken::new("fixture-token".into()).unwrap());
+        Ok((identity, token))
     }
 }
 
@@ -326,6 +339,59 @@ async fn browser_binding_pkce_cookie_and_replay_are_enforced() {
         "http://localhost:3000/sign-in?reason=invalid-login"
     );
     assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn login_never_issues_session_when_repository_token_cannot_be_saved() {
+    let (app, store, provider) = fixture();
+    provider.repository_token.store(true, Ordering::SeqCst);
+    let (state, binding) = start(&app).await;
+    let response = call(
+        &app,
+        Method::GET,
+        &format!("/api/auth/github/callback?state={state}&code=fixture"),
+        &binding,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        response.headers()[header::LOCATION],
+        "http://localhost:3000/sign-in?reason=unavailable"
+    );
+    assert!(store.sessions.lock().unwrap().is_empty());
+    assert!(
+        !response
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .any(
+                |header| header.to_str().unwrap().starts_with("factory_session=")
+                    && !header.to_str().unwrap().starts_with("factory_session=;")
+            )
+    );
+}
+
+#[tokio::test]
+async fn pending_member_does_not_receive_a_repository_session() {
+    let (app, store, provider) = fixture();
+    provider.repository_token.store(true, Ordering::SeqCst);
+    store.admission.store(1, Ordering::SeqCst);
+    let (state, binding) = start(&app).await;
+    let response = call(
+        &app,
+        Method::GET,
+        &format!("/api/auth/github/callback?state={state}&code=fixture"),
+        &binding,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        response.headers()[header::LOCATION],
+        "http://localhost:3000/sign-in?reason=pending"
+    );
+    assert!(store.sessions.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -639,5 +705,173 @@ async fn ambiguous_origins_and_oversized_bodies_have_safe_json_errors() {
             .await
             .status(),
         200
+    );
+}
+
+#[tokio::test]
+async fn repository_callback_dispatch_keeps_concurrent_login_cookie_and_session_untouched() {
+    let repo_state = format!("repo.{}", random_token().unwrap());
+    let store = Arc::new(Store::default());
+    let provider = Arc::new(Provider::default());
+    let service = Arc::new(IdentityService::new(store.clone(), provider.clone()));
+    let state = AuthState::new(service, &RuntimeConfig::from_values(|_| None).unwrap());
+    let app = router(state);
+    let login = call(&app, Method::GET, "/api/auth/github/start", "", None, None).await;
+    let login_cookie = returned_cookie(&login, LOGIN_COOKIE);
+    let location = Url::parse(login.headers()[header::LOCATION].to_str().unwrap()).unwrap();
+    let login_state = location
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .unwrap()
+        .1
+        .into_owned();
+    let connect_cookie = format!("factory_github_connect={}", random_token().unwrap());
+    let cookies = format!("{login_cookie}; {connect_cookie}");
+    let repo = call(
+        &app,
+        Method::GET,
+        &format!("/api/auth/github/callback?state={repo_state}&code=synthetic"),
+        &cookies,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(repo.status(), StatusCode::FOUND);
+    assert!(
+        repo.headers()[header::LOCATION]
+            .to_str()
+            .unwrap()
+            .contains("/app?github=unavailable")
+    );
+    let all_cookies = repo
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .map(|v| v.to_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        all_cookies
+            .iter()
+            .any(|v| v.starts_with("factory_github_connect="))
+    );
+    assert!(
+        !all_cookies
+            .iter()
+            .any(|v| v.starts_with("factory_login=") || v.starts_with("factory_session="))
+    );
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+    // An expired, removed or replayed repository state retains its type without
+    // consulting persistence and cannot clear an unrelated login binding.
+    let replay = call(
+        &app,
+        Method::GET,
+        &format!("/api/auth/github/callback?state={repo_state}&code=synthetic"),
+        &cookies,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(replay.status(), StatusCode::FOUND);
+    assert!(
+        replay
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .all(|v| !v.to_str().unwrap().starts_with("factory_login="))
+    );
+    let malformed = call(
+        &app,
+        Method::GET,
+        "/api/auth/github/callback?state=repo.invalid&code=synthetic",
+        &cookies,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(malformed.status(), StatusCode::FOUND);
+    assert!(
+        malformed.headers()[header::LOCATION]
+            .to_str()
+            .unwrap()
+            .contains("/app?github=authorization-invalid")
+    );
+    let missing_binding = call(
+        &app,
+        Method::GET,
+        &format!("/api/auth/github/callback?state={repo_state}&code=synthetic"),
+        &login_cookie,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(missing_binding.status(), StatusCode::FOUND);
+    assert!(
+        missing_binding.headers()[header::LOCATION]
+            .to_str()
+            .unwrap()
+            .contains("/app?github=authorization-invalid")
+    );
+    assert!(
+        missing_binding
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .all(|v| !v.to_str().unwrap().starts_with("factory_login="))
+    );
+    assert!(
+        malformed
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .all(|v| !v.to_str().unwrap().starts_with("factory_login="))
+    );
+    let response = call(
+        &app,
+        Method::GET,
+        &format!("/api/auth/github/callback?state={login_state}&code=synthetic"),
+        &cookies,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(
+        response.headers()[header::LOCATION],
+        "http://localhost:3000/app"
+    );
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn rate_limited_repository_callback_never_clears_the_login_cookie() {
+    let store = Arc::new(Store::default());
+    let provider = Arc::new(Provider::default());
+    let service = Arc::new(IdentityService::new(store, provider));
+    let state = AuthState::new(service, &RuntimeConfig::from_values(|_| None).unwrap());
+    for _ in 0..60 {
+        assert!(state.check_quota(true).is_ok());
+    }
+    let app = router(state);
+    let cookies = format!(
+        "factory_login={}; factory_github_connect={}",
+        random_token().unwrap(),
+        random_token().unwrap()
+    );
+    let response = call(
+        &app,
+        Method::GET,
+        "/api/auth/github/callback?state=repo.invalid&code=synthetic",
+        &cookies,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(
+        response
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .all(|v| !v.to_str().unwrap().starts_with("factory_login="))
     );
 }

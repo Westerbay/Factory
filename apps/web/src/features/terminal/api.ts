@@ -32,11 +32,12 @@ export const serverMessageSchema: z.ZodType<ServerMessage> =
 export async function requestAttachment(
   takeOver: boolean,
   csrfToken: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  conversationId?: string
 ) {
   const { data, response } = await apiClient.POST("/api/terminal/attachments", {
     params: { header: { "X-CSRF-Token": csrfToken } },
-    body: { takeOver },
+    body: { takeOver, ...(conversationId ? { conversationId } : {}) },
     signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
   })
   if (!response.ok) throw new ApiFailure(response.status)

@@ -1,20 +1,31 @@
-import { lazy, Suspense, useEffect, useState } from "react"
+import * as m from "@workspace/i18n/messages"
+import { useLocale, translateMessage } from "../../lib/i18n"
+import { lazy, Suspense, useEffect, useRef, useState } from "react"
 import "./terminal.css"
 
 const TerminalSession = lazy(() => import("./terminal-session"))
 
 export function TerminalPanel({
   available,
+  conversationId,
+  projectName,
+  projectWarnings,
   visible = true,
   expanded,
   onExpandedChange,
 }: {
   available: boolean
+  conversationId?: string
+  projectName?: string
+  projectWarnings?: string[]
   visible?: boolean
   expanded: boolean
   onExpandedChange: (expanded: boolean) => void
 }) {
+  useLocale()
   const [opened, setOpened] = useState(visible)
+  const detached = useRef(new Map<string, number>())
+  const terminalKey = conversationId ?? "documents"
 
   useEffect(() => {
     if (visible) setOpened(true)
@@ -22,22 +33,43 @@ export function TerminalPanel({
 
   return (
     <section className="terminal-pane" aria-label="Terminal">
+      {projectWarnings?.map((warning) => (
+        <p key={warning} className="terminal-project-warning" role="status">
+          {translateMessage(warning)}
+        </p>
+      ))}
       {opened && available ? (
         <Suspense
           fallback={
             <p className="terminal-status" role="status">
-              Loading terminal…
+              {m.loading_terminal()}{" "}
             </p>
           }
         >
           <TerminalSession
+            key={terminalKey}
+            conversationId={conversationId}
+            projectName={projectName}
+            onOwnDetach={() => {
+              // Bound memory to terminals actually switched in this panel.
+              detached.current.set(terminalKey, Date.now())
+              if (detached.current.size > 100) {
+                const oldest = detached.current.keys().next().value
+                if (oldest !== undefined) detached.current.delete(oldest)
+              }
+            }}
+            consumeRecentOwnDetach={() => {
+              const last = detached.current.get(terminalKey)
+              detached.current.delete(terminalKey)
+              return last !== undefined && Date.now() - last < 5000
+            }}
             expanded={expanded}
             onExpandedChange={onExpandedChange}
           />
         </Suspense>
       ) : !available ? (
         <p className="terminal-status" role="status">
-          Waiting for your environment…
+          {m.waiting_for_your_environment()}{" "}
         </p>
       ) : null}
     </section>

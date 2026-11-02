@@ -6,3 +6,5 @@ pub mod identity;
 pub mod terminals;
 
 pub mod conversations;
+
+pub mod projects;

@@ -14,7 +14,6 @@
 }
 .workspace-sidebar-track {
   flex: none;
-  width: 224px;
   height: 100%;
   overflow: hidden;
 }
@@ -24,13 +23,25 @@
 .workspace-sidebar {
   display: flex;
   flex-direction: column;
-  flex: 0 0 224px;
-  width: 224px;
+  flex: none;
   height: 100%;
   min-width: 0;
   padding: 1.5rem 0.75rem 0.75rem;
   background: var(--surface-sidebar);
-  border-right: 1px solid var(--border);
+}
+.workspace-sidebar-separator {
+  flex: 0 0 1px;
+  height: 100%;
+}
+.workspace-sidebar-separator[data-resizing] {
+  background: var(--text-muted);
+}
+.workspace:has(.workspace-sidebar-separator[data-resizing]) {
+  cursor: col-resize;
+  user-select: none;
+}
+.workspace-sidebar-track[data-resizing] {
+  transition: none;
 }
 .workspace-sidebar > .ui-brand {
   margin: 0 0.75rem 2rem;
@@ -152,6 +163,9 @@
   filter: invert(1);
   opacity: 0.9;
 }
+:root[data-theme="light"] .profile-avatar img {
+  filter: none;
+}
 .profile-handle {
   flex: 1;
   min-width: 0;
@@ -200,6 +214,10 @@
 .workspace-settings {
   display: grid;
   gap: 1.5rem;
+}
+.workspace-settings > .provider-connection {
+  width: 100%;
+  margin-inline: 0;
 }
 .workspace-settings > p {
   margin: 0 0 0.5rem;
@@ -293,5 +311,59 @@
   .workspace-entry-content > *,
   .workspace-body {
     animation: none;
+  }
+}
+
+.profile-theme {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border: 0;
+  font-size: 0.8125rem;
+}
+.profile-theme legend {
+  float: left;
+  margin-right: auto;
+}
+.profile-theme label {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  cursor: pointer;
+}
+.profile-theme input {
+  accent-color: var(--text);
+}
+.workspace-settings > label {
+  display: grid;
+  justify-items: start;
+  gap: 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+}
+.workspace-settings select {
+  max-width: 100%;
+  min-height: 2.25rem;
+  padding: 0.25rem;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.75rem;
+}
+.workspace-settings select:hover {
+  background: var(--surface-hover);
+}
+.workspace-settings select:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 3px;
+}
+@media (max-width: 600px), (pointer: coarse) {
+  .workspace-settings select {
+    min-height: 2.75rem;
   }
 }

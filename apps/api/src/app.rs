@@ -2,7 +2,7 @@ use crate::{
     admin, agent_connections,
     auth::{self, AuthState},
     config::RuntimeConfig,
-    conversations, environments, health, http, terminals,
+    conversations, environments, health, http, projects, terminals,
 };
 use axum::{
     Router,
@@ -46,7 +46,15 @@ pub fn router_with_user_services(
     terminal: Option<Arc<TerminalService>>,
     accounts: Option<Arc<AgentConnectionService>>,
 ) -> Result<Router, &'static str> {
-    router_with_conversations(config, identity, environments, terminal, accounts, None)
+    router_with_conversations(
+        config,
+        identity,
+        environments,
+        terminal,
+        accounts,
+        None,
+        None,
+    )
 }
 
 pub(crate) fn router_with_conversations(
@@ -55,20 +63,53 @@ pub(crate) fn router_with_conversations(
     environments: Option<Arc<EnvironmentService>>,
     terminal: Option<Arc<TerminalService>>,
     accounts: Option<Arc<AgentConnectionService>>,
+    claude_accounts: Option<Arc<AgentConnectionService>>,
     conversations: Option<Arc<conversations::runtime::ConversationRuntime>>,
 ) -> Result<Router, &'static str> {
+    router_with_projects(
+        config,
+        identity,
+        environments,
+        terminal,
+        (accounts, claude_accounts),
+        conversations,
+        None,
+    )
+}
+
+pub(crate) fn router_with_projects(
+    config: &RuntimeConfig,
+    identity: Option<IdentityRuntime>,
+    environments: Option<Arc<EnvironmentService>>,
+    terminal: Option<Arc<TerminalService>>,
+    accounts: (
+        Option<Arc<AgentConnectionService>>,
+        Option<Arc<AgentConnectionService>>,
+    ),
+    conversations: Option<Arc<conversations::runtime::ConversationRuntime>>,
+    project_runtime: Option<Arc<projects::runtime::ProjectsRuntime>>,
+) -> Result<Router, &'static str> {
+    let (accounts, claude_accounts) = accounts;
     let origin = HeaderValue::from_str(config.web_origin()).map_err(|_| "WEB_ORIGIN_INVALID")?;
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list([origin]))
         .allow_credentials(true)
-        .allow_methods([Method::GET, Method::POST, Method::PATCH])
+        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
         .allow_headers([
             header::CONTENT_TYPE,
             axum::http::HeaderName::from_static("x-csrf-token"),
         ])
         .max_age(Duration::from_secs(60));
-    let (routes, _) = documented_router(identity, environments, terminal, accounts, conversations)
-        .split_for_parts();
+    let (routes, _) = documented_router_with_projects(
+        identity,
+        environments,
+        terminal,
+        accounts,
+        claude_accounts,
+        conversations,
+        project_runtime,
+    )
+    .split_for_parts();
     Ok(routes
         .fallback(http::not_found)
         .layer(middleware::from_fn_with_state(
@@ -85,10 +126,31 @@ pub(crate) fn documented_router(
     environments: Option<Arc<EnvironmentService>>,
     terminal: Option<Arc<TerminalService>>,
     accounts: Option<Arc<AgentConnectionService>>,
+    claude_accounts: Option<Arc<AgentConnectionService>>,
     conversations: Option<Arc<conversations::runtime::ConversationRuntime>>,
 ) -> OpenApiRouter {
+    documented_router_with_projects(
+        identity,
+        environments,
+        terminal,
+        accounts,
+        claude_accounts,
+        conversations,
+        None,
+    )
+}
+
+fn documented_router_with_projects(
+    identity: Option<IdentityRuntime>,
+    environments: Option<Arc<EnvironmentService>>,
+    terminal: Option<Arc<TerminalService>>,
+    accounts: Option<Arc<AgentConnectionService>>,
+    claude_accounts: Option<Arc<AgentConnectionService>>,
+    conversations: Option<Arc<conversations::runtime::ConversationRuntime>>,
+    project_runtime: Option<Arc<projects::runtime::ProjectsRuntime>>,
+) -> OpenApiRouter {
     let database = identity.as_ref().map(|runtime| runtime.database.clone());
-    let auth = identity.map(|runtime| runtime.auth);
+    let auth = identity.map(|runtime| runtime.auth.with_projects(project_runtime.clone()));
     auth::documented_router(auth.clone())
         .merge(admin::documented_router(auth.clone()))
         .merge(environments::documented_router(auth.clone(), environments))
@@ -96,11 +158,16 @@ pub(crate) fn documented_router(
         .merge(agent_connections::documented_router(
             auth.clone(),
             accounts,
+            claude_accounts,
             conversations
                 .clone()
                 .map(|v| v as Arc<dyn agent_connections::DisconnectGuard>),
         ))
-        .merge(conversations::documented_router(auth, conversations))
+        .merge(conversations::documented_router(
+            auth.clone(),
+            conversations,
+        ))
+        .merge(projects::documented_router(auth, project_runtime))
         .merge(health::documented_router(database))
 }
 

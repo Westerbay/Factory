@@ -9,8 +9,12 @@ out/
 # Planning documents stay local unless publication is explicitly requested.
 docs/plans/
 
-# Local non-secret database ownership marker.
+# Local installation state, including secrets; never commit this directory.
 .factory/
 
 # Rust build output is local; Cargo.lock is versioned.
 target/
+
+# Generated Paraglide output and inlang cache
+packages/i18n/src/generated/
+packages/i18n/project.inlang/cache/

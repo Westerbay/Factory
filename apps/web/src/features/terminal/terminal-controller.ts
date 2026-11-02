@@ -24,6 +24,9 @@ type Display = {
   reset: () => void
 }
 type Dependencies = {
+  conversationId?: string
+  consumeRecentOwnDetach?: () => boolean
+  onOwnDetach?: () => void
   session: Pick<
     SessionController,
     "getSnapshot" | "subscribe" | "authorizationFailed"
@@ -36,7 +39,22 @@ const INPUT_QUEUE_BYTES = 64 * 1024
 const OUTPUT_QUEUE_BYTES = 1024 * 1024
 const OUTPUT_CHUNK_BYTES = 16 * 1024
 const INPUT_BATCH_MS = 20
+const OWN_DETACH_RETRY_MS = [200, 500, 1000]
 const encoder = new TextEncoder()
+
+function waitForRetry(ms: number, signal: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve(false)
+    const finish = (ready: boolean) => {
+      clearTimeout(timer)
+      signal.removeEventListener("abort", abort)
+      resolve(ready)
+    }
+    const abort = () => finish(false)
+    const timer = setTimeout(() => finish(true), ms)
+    signal.addEventListener("abort", abort, { once: true })
+  })
+}
 
 /** Owns only the browser attachment. Closing it never sends an environment Stop. */
 export class TerminalController {
@@ -116,11 +134,36 @@ export class TerminalController {
     this.set({ status: "opening", message: "Opening your terminal…" })
     this.request = new AbortController()
     try {
-      const ticket = await this.dependencies.request(
-        takeOver,
-        auth.session.csrfToken,
-        this.request.signal
-      )
+      const signal = this.request.signal
+      const retries =
+        !takeOver && this.dependencies.consumeRecentOwnDetach?.()
+          ? OWN_DETACH_RETRY_MS
+          : []
+      let ticket: Awaited<ReturnType<typeof requestAttachment>>
+      for (let attempt = 0; ; attempt++) {
+        try {
+          ticket = await this.dependencies.request(
+            takeOver,
+            auth.session.csrfToken,
+            signal,
+            this.dependencies.conversationId
+          )
+          break
+        } catch (error) {
+          const delay = retries[attempt]
+          if (
+            !(error instanceof ApiFailure) ||
+            error.status !== 409 ||
+            delay === undefined
+          )
+            throw error
+          if (
+            !(await waitForRetry(delay, signal)) ||
+            generation !== this.generation
+          )
+            return
+        }
+      }
       if (generation !== this.generation) return
       const socket = this.dependencies.openSocket()
       this.socket = socket
@@ -290,6 +333,7 @@ export class TerminalController {
     this.set({ status: "error", message })
   }
   dispose() {
+    if (this.socket) this.dependencies.onOwnDetach?.()
     this.closeTransport()
     this.unsubscribe?.()
     this.unsubscribe = undefined

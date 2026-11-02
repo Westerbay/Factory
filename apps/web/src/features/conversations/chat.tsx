@@ -1,3 +1,5 @@
+import * as m from "@workspace/i18n/messages"
+import { useLocale, translateMessage } from "../../lib/i18n"
 import {
   useCallback,
   useEffect,
@@ -9,10 +11,15 @@ import {
 } from "react"
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowDown } from "lucide-react"
+import { ArrowDown, SquarePen } from "lucide-react"
 
 import { Button } from "../../components/ui/button"
 import { LoadingState } from "../../components/ui/loading-state"
+import { ProjectNavigation } from "../projects/project-navigation"
+import type { ProjectWorkspace } from "../projects/use-projects"
+import { projectWarnings } from "../projects/state"
+import { useProjectVerification } from "../projects/use-project-verification"
+import * as projectApi from "../projects/api"
 import { ChatComposer } from "./chat-composer"
 import {
   ConversationNavigation,
@@ -29,6 +36,7 @@ import {
   runOutcome,
   questionReceipt,
   mergeOlderConversations,
+  selectedEffort,
 } from "./state"
 import "./conversations.css"
 
@@ -36,6 +44,7 @@ type PendingSend = {
   operationId: string
   input: string
   model: string
+  effort: string
   conversation: string
 }
 
@@ -43,29 +52,48 @@ type ChatLayout = {
   navigation: ReactNode
   conversation: ReactNode
   title: string
+  conversationId?: string
+  projectName?: string
+  projectWarnings?: string[]
 }
 
 export function Chat({
   available,
+  projectWorkspace,
+  connectedProviders,
   resuming = false,
+  navigationVisible = true,
   renderLayout,
 }: {
   available: boolean
+  projectWorkspace: ProjectWorkspace
+  connectedProviders: { id: string; name: string }[]
   resuming?: boolean
+  navigationVisible?: boolean
   renderLayout: (parts: ChatLayout) => ReactNode
 }) {
+  const locale = useLocale()
   const { state: session, controller: sessionController } = useSession()
   const queryClient = useQueryClient()
+  const closeProjectPicker = projectWorkspace.setPickerOpen
+  useEffect(() => {
+    if (!navigationVisible) closeProjectPicker(false)
+  }, [navigationVisible, closeProjectPicker])
   const [conversations, setConversations] = useState<api.Conversation[]>([])
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
   const listGeneration = useRef(0)
   const [selected, setSelected] = useState<string>()
+  const [referencedProject, setReferencedProject] = useState<{
+    project: projectApi.Project
+    version: number
+  }>()
   const selectedRef = useRef<string | undefined>(undefined)
   selectedRef.current = selected
   const [history, setHistory] = useState<api.History>()
   const [verifiedHistory, setVerifiedHistory] = useState<string>()
   const [model, setModel] = useState("")
+  const [efforts, setEfforts] = useState<Record<string, string>>({})
   const [input, setInput] = useState("")
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState("")
@@ -98,8 +126,16 @@ export function Chat({
     enabled: available && Boolean(userId),
   })
   const models = modelQuery.data ?? []
+  const selectedModel = models.find((item) => item.id === model)
+  const effort = selectedEffort(selectedModel, efforts[model] ?? "")
   // A refetch can retain the previous failure while recovering successfully.
   const modelError = modelQuery.isError && modelQuery.fetchStatus === "idle"
+  const missingProviders = modelQuery.data
+    ? connectedProviders.filter(
+        (provider) =>
+          !models.some((item) => item.id.startsWith(`factory:${provider.id}:`))
+      )
+    : []
   useEffect(() => {
     // Disabling a query alone does not stop a retry already in progress.
     if (!available)
@@ -124,9 +160,11 @@ export function Chat({
       }
       if (!showMessage) return
       setMessage(
-        error instanceof ApiFailure && error.status === 409
-          ? "The conversation changed or is still starting. Check its status before trying again."
-          : "The conversation could not be updated. Check its status before trying again."
+        error instanceof api.ContextTransferFailure
+          ? "This conversation is too long to transfer. Start a new chat to use another provider."
+          : error instanceof ApiFailure && error.status === 409
+            ? "The conversation changed or is still starting. Check its status before trying again."
+            : "The conversation could not be updated. Check its status before trying again."
       )
     },
     [sessionController]
@@ -330,9 +368,13 @@ export function Chat({
       if (!signal.aborted) setLoadingMore(false)
     }
   }
-  function newConversation() {
+  function newConversation(projectId?: string) {
     void perform(async () => {
-      const created = await api.create(csrf, lifetime.current!.signal)
+      const created = await api.create(
+        csrf,
+        lifetime.current!.signal,
+        projectId
+      )
       if (!lifetime.current || lifetime.current.signal.aborted) return
       setConversations((items) => [created, ...items])
       setSelected(created.id)
@@ -348,7 +390,7 @@ export function Chat({
       !currentHistory ||
       verifiedHistory !== selected ||
       !input.trim() ||
-      !model ||
+      !selectedModel ||
       activeRun ||
       uncertain ||
       !available
@@ -359,12 +401,14 @@ export function Chat({
       previous &&
       previous.conversation === selected &&
       previous.input === input &&
-      previous.model === model
+      previous.model === model &&
+      previous.effort === effort
         ? previous
         : {
             operationId: crypto.randomUUID(),
             input,
             model,
+            effort,
             conversation: selected,
           }
     pendingSend.current = operation
@@ -375,6 +419,7 @@ export function Chat({
           operationId: operation.operationId,
           input: operation.input,
           model: operation.model,
+          effort: operation.effort || null,
         },
         csrf,
         lifetime.current!.signal
@@ -524,18 +569,62 @@ export function Chat({
   const selectedConversation = conversations.find(
     (item) => item.id === selected
   )
+  const projectId = selectedConversation?.projectId ?? undefined
+  const listedProject = projectWorkspace.projects.find(
+    (item) => item.id === projectId
+  )
+  const project =
+    listedProject ??
+    (referencedProject &&
+    referencedProject.project.id === projectId &&
+    referencedProject.version === projectWorkspace.refreshVersion
+      ? referencedProject.project
+      : undefined)
+  useEffect(() => {
+    if (listedProject?.id)
+      projectWorkspace.setSelectedProjectId(listedProject.id)
+  }, [listedProject?.id, projectWorkspace.setSelectedProjectId])
+  const projectVerification = useProjectVerification(
+    projectId,
+    available &&
+      projectWorkspace.connection?.status !== "disconnected" &&
+      project?.state === "ready",
+    selected
+  )
+  const warnings = projectWarnings(
+    projectId,
+    projectVerification,
+    project?.renamedSinceClone ?? false
+  )
+  useEffect(() => {
+    if (!projectId || listedProject || !available) return
+    const controller = new AbortController()
+    void projectApi
+      .get(projectId, controller.signal)
+      .then((value) => {
+        if (!controller.signal.aborted)
+          setReferencedProject({
+            project: value,
+            version: projectWorkspace.refreshVersion,
+          })
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setReferencedProject(undefined)
+      })
+    return () => controller.abort()
+  }, [projectId, listedProject, available, projectWorkspace.refreshVersion])
   const title = selectedConversation
-    ? conversationLabel(selectedConversation)
-    : "New chat"
+    ? `${project?.fullName ? `${project.fullName} · ` : ""}${conversationLabel(selectedConversation)}`
+    : m.new_chat()
   const outcome = resuming
-    ? "Checking workspace…"
-    : runOutcome(currentHistory, available)
+    ? m.checking_workspace()
+    : translateMessage(runOutcome(currentHistory, available))
   const latestRun = currentHistory?.runs[currentHistory.runs.length - 1]
   const historyReady = Boolean(currentHistory) && verifiedHistory === selected
   const submitDisabled =
     !selected ||
     !historyReady ||
-    !model ||
+    !selectedModel ||
     !input.trim() ||
     busy ||
     !available ||
@@ -559,54 +648,101 @@ export function Chat({
 
   return renderLayout({
     title,
+    conversationId: selected,
+    projectName: project?.fullName,
+    projectWarnings: warnings,
     navigation: (
-      <ConversationNavigation
-        conversations={conversations}
-        selected={selected}
-        available={available}
-        busy={busy}
-        hasOlder={Boolean(nextCursor)}
-        loadingMore={loadingMore}
-        failed={listError}
-        onCreate={newConversation}
-        onSelect={selectConversation}
-        onLoadOlder={() => void loadOlder()}
-        onRetry={retryList}
-      />
+      <div className="workspace-navigation">
+        <Button
+          variant="ghost"
+          className="conversation-new"
+          onClick={() => newConversation()}
+          disabled={!available || busy}
+        >
+          <SquarePen aria-hidden="true" size={16} />
+          {m.new_chat()}{" "}
+        </Button>
+        <ProjectNavigation
+          workspace={projectWorkspace}
+          available={available}
+          busy={busy}
+          onNewChat={newConversation}
+          conversations={conversations}
+          selectedConversation={selected}
+          onSelectConversation={selectConversation}
+          onProjectRemoved={(id) => {
+            const removed = conversations.filter(
+              (item) => item.projectId === id
+            )
+            setConversations((items) =>
+              items.filter((item) => item.projectId !== id)
+            )
+            if (removed.some((item) => item.id === selectedRef.current)) {
+              setSelected(undefined)
+              setHistory(undefined)
+              setVerifiedHistory(undefined)
+              setInput("")
+            }
+          }}
+        />
+        <ConversationNavigation
+          conversations={conversations.filter(
+            (conversation) =>
+              !conversation.projectId ||
+              !projectWorkspace.projects.some(
+                (project) => project.id === conversation.projectId
+              )
+          )}
+          selected={selected}
+          available={available}
+          busy={busy}
+          hasOlder={Boolean(nextCursor)}
+          loadingMore={loadingMore}
+          failed={listError}
+          onSelect={selectConversation}
+          onLoadOlder={() => void loadOlder()}
+          onRetry={retryList}
+        />
+      </div>
     ),
     conversation: (
       <section
         className="chat"
-        aria-label="Codex conversation"
+        aria-label={m.assistant_conversation()}
         aria-busy={resuming}
       >
+        {warnings.map((warning) => (
+          <p key={warning} className="chat-project-warning" role="status">
+            {translateMessage(warning)}
+          </p>
+        ))}
         <div
           className="chat-messages"
           ref={observeMessages}
           role="region"
           tabIndex={0}
-          aria-label="Conversation messages"
+          aria-label={m.conversation_messages()}
           onScroll={onMessageScroll}
         >
           <div className="chat-transcript">
             {!selected && (
               <div className="chat-empty">
-                <h2>What are we building?</h2>
+                <h2>{m.what_are_we_building()}</h2>
                 <Button
                   variant="primary"
-                  onClick={newConversation}
+                  onClick={() => newConversation()}
                   disabled={!available || busy}
                 >
-                  New chat
+                  {m.new_chat()}{" "}
                 </Button>
               </div>
             )}
             {selected && !currentHistory && !message && available && (
-              <LoadingState title="Loading chat…" />
+              <LoadingState title={m.loading_chat()} />
             )}
             {selected && currentHistory?.messages.length === 0 && !delta && (
               <div className="chat-empty">
-                <h2>What are we building?</h2>
+                <h2>{m.what_are_we_building()}</h2>
               </div>
             )}
             {currentHistory &&
@@ -614,15 +750,21 @@ export function Chat({
                 currentHistory.messagesTruncated ||
                 currentHistory.requestsTruncated) && (
                 <p className="chat-history-note" role="status">
-                  Only recent history is shown. Older{" "}
-                  {[
-                    currentHistory.runsTruncated && "runs",
-                    currentHistory.messagesTruncated && "messages",
-                    currentHistory.requestsTruncated && "requests",
-                  ]
-                    .filter(Boolean)
-                    .join(", ")}{" "}
-                  are not displayed.
+                  {m.only_recent_history_is_shown_older_items_are_not_displayed(
+                    {
+                      items: new Intl.ListFormat(locale, {
+                        type: "disjunction",
+                      }).format([
+                        ...(currentHistory.runsTruncated ? [m.runs()] : []),
+                        ...(currentHistory.messagesTruncated
+                          ? [m.messages()]
+                          : []),
+                        ...(currentHistory.requestsTruncated
+                          ? [m.requests()]
+                          : []),
+                      ]),
+                    }
+                  )}
                 </p>
               )}
             {currentHistory?.messages.map((item) => (
@@ -630,10 +772,12 @@ export function Chat({
                 className={`chat-message chat-message-${item.role}`}
                 key={item.id}
                 aria-label={
-                  item.role === "user" ? "Your message" : "Codex message"
+                  item.role === "user"
+                    ? m.your_message()
+                    : m.assistant_message()
                 }
               >
-                {item.role === "assistant" && <strong>Codex</strong>}
+                {item.role === "assistant" && <strong>Assistant</strong>}
                 {item.role === "assistant" ? (
                   <MessageMarkdown>{item.content}</MessageMarkdown>
                 ) : (
@@ -644,9 +788,9 @@ export function Chat({
             {delta && currentHistory && (
               <article
                 className="chat-message chat-message-assistant"
-                aria-label="Codex response in progress"
+                aria-label={m.assistant_response_in_progress()}
               >
-                <strong>Codex</strong>
+                <strong>Assistant</strong>
                 <MessageMarkdown>{delta}</MessageMarkdown>
               </article>
             )}
@@ -664,8 +808,10 @@ export function Chat({
                     respond(request)
                   }}
                 >
-                  <h2>Codex has a question</h2>
-                  {receipt.message && <p role="status">{receipt.message}</p>}
+                  <h2>{m.assistant_has_a_question()}</h2>
+                  {receipt.message && (
+                    <p role="status">{translateMessage(receipt.message)}</p>
+                  )}
                   {request.questions.map((question) => (
                     <fieldset
                       key={question.id}
@@ -699,7 +845,7 @@ export function Chat({
                       ))}
                       {question.allowFreeText && (
                         <label className="chat-free-answer">
-                          Other answer
+                          {m.other_answer()}{" "}
                           <input
                             value={
                               question.options.some(
@@ -724,7 +870,7 @@ export function Chat({
                     type="submit"
                     disabled={receipt.disabled || busy || !available}
                   >
-                    Send answers
+                    {m.send_answers()}{" "}
                   </Button>
                 </form>
               )
@@ -738,21 +884,21 @@ export function Chat({
             onClick={showLatest}
           >
             <ArrowDown aria-hidden="true" size={14} />
-            Jump to latest
+            {m.jump_to_latest()}{" "}
           </Button>
         )}
         <div className="chat-bottom">
           {modelQuery.failureCount > 5 && !modelError && !models.length && (
             <p className="chat-status" role="status">
-              Model discovery is still busy. Retrying automatically.
+              {m.model_discovery_is_still_busy_retrying_automatically()}{" "}
             </p>
           )}
           {modelError && (
             <div className="chat-notice" role="status">
               <p>
                 {models.length
-                  ? "Models could not be updated. Your previous selection remains available."
-                  : "Models could not be loaded. Existing chats remain available."}
+                  ? m.models_could_not_be_updated_your_previous_selection_remains_avail()
+                  : m.models_could_not_be_loaded_existing_chats_remain_available()}
               </p>
               <Button
                 variant="ghost"
@@ -761,29 +907,47 @@ export function Chat({
                   void modelQuery.refetch({ cancelRefetch: false })
                 }
               >
-                Retry models
+                {m.retry_models()}{" "}
+              </Button>
+            </div>
+          )}
+          {!modelError && missingProviders.length > 0 && (
+            <div className="chat-notice" role="status">
+              <p>
+                {m.models_from_providers_could_not_be_loaded({
+                  providers: missingProviders
+                    .map((provider) => provider.name)
+                    .join(", "),
+                })}
+              </p>
+              <Button
+                variant="ghost"
+                disabled={!available || modelQuery.isFetching}
+                onClick={() =>
+                  void modelQuery.refetch({ cancelRefetch: false })
+                }
+              >
+                {m.retry_models()}{" "}
               </Button>
             </div>
           )}
           {message && (
             <div className="chat-notice" role="status">
-              <p>{message}</p>
+              <p>{translateMessage(message)}</p>
               {selected && (
                 <Button
                   variant="ghost"
                   disabled={!available || busy}
                   onClick={retryHistory}
                 >
-                  Check status
+                  {m.check_status()}{" "}
                 </Button>
               )}
             </div>
           )}
           {uncertain && (
             <p className="chat-notice" role="status">
-              This run is not confirmed stopped. Use Stop environment in your
-              profile, then recover the run before continuing. Some launches
-              need administrator help.
+              {m.this_run_is_not_confirmed_stopped_use_stop_environment_in_your_pr()}{" "}
             </p>
           )}
           {outcome && !uncertain && (
@@ -803,12 +967,16 @@ export function Chat({
             input={input}
             model={model}
             models={models}
+            effort={effort}
             disabled={!selected || !historyReady || !available || busy}
             sendDisabled={submitDisabled}
             running={Boolean(activeRun)}
             stopDisabled={busy || !available}
             onInput={setInput}
             onModel={setModel}
+            onEffort={(value) =>
+              setEfforts((current) => ({ ...current, [model]: value }))
+            }
             onSend={send}
             onStop={stop}
           />

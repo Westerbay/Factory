@@ -44,7 +44,7 @@ impl IsolationPolicy {
             "Env": ["HOME=/home/factory", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                 format!("HTTP_PROXY={PROXY_URL}"), format!("HTTPS_PROXY={PROXY_URL}"),
                 format!("http_proxy={PROXY_URL}"), format!("https_proxy={PROXY_URL}"), "NO_PROXY=", "no_proxy="],
-            "Entrypoint": ["/bin/sleep"], "Cmd": ["infinity"], "NetworkDisabled": false,
+            "Entrypoint": ["/usr/local/bin/factory-project-controller"], "Cmd": ["--bootstrap"], "NetworkDisabled": false,
             "Labels": labels(env),
             "HostConfig": {
                 "Memory": 0, "MemorySwap": 0, "NanoCpus": 0,

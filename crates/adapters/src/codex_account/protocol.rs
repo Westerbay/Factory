@@ -211,7 +211,7 @@ pub(super) fn challenge(
     value: Value,
     operation_id: Uuid,
     expires_at: DateTime<Utc>,
-) -> Result<(DeviceChallenge, String), AgentConnectionError> {
+) -> Result<(LoginChallenge, String), AgentConnectionError> {
     if value["type"] != "chatgptDeviceCode" {
         return Err(AgentConnectionError::Protocol);
     }
@@ -237,10 +237,10 @@ pub(super) fn challenge(
     }
     let login_id = text(&value["loginId"], 256)?;
     Ok((
-        DeviceChallenge {
+        LoginChallenge {
             operation_id,
             verification_url,
-            user_code,
+            user_code: Some(user_code),
             expires_at,
         },
         login_id,

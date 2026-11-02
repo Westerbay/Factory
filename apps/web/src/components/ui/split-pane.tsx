@@ -1,9 +1,13 @@
+import * as m from "@workspace/i18n/messages"
+import { useLocale } from "../../lib/i18n"
 import { useEffect, useRef, useState, type ReactNode } from "react"
 import "./split-pane.css"
 
 const SEPARATOR_WIDTH = 1
-const PRIMARY_MIN_WIDTH = 320
+export const PRIMARY_MIN_WIDTH = 320
 const SECONDARY_MIN_WIDTH = 280
+export const MIN_SPLIT_WIDTH =
+  PRIMARY_MIN_WIDTH + SECONDARY_MIN_WIDTH + SEPARATOR_WIDTH
 const MIN_PERCENT = 25
 const MAX_PERCENT = 65
 
@@ -24,6 +28,7 @@ export function SplitPane({
   compact: boolean
   secondaryId: string
 }) {
+  useLocale()
   const host = useRef<HTMLDivElement>(null)
   const primaryPane = useRef<HTMLDivElement>(null)
   const drag = useRef<{
@@ -39,8 +44,7 @@ export function SplitPane({
   const primaryHidden = secondaryExpanded || (compact && secondaryVisible)
   const split = !compact && secondaryVisible && !secondaryExpanded
   const availableWidth = Math.max(0, width - SEPARATOR_WIDTH)
-  const canFitMinimums =
-    availableWidth >= PRIMARY_MIN_WIDTH + SECONDARY_MIN_WIDTH
+  const canFitMinimums = width >= MIN_SPLIT_WIDTH
   const minimum = canFitMinimums
     ? Math.max(MIN_PERCENT, (SECONDARY_MIN_WIDTH / availableWidth) * 100)
     : MIN_PERCENT
@@ -111,7 +115,7 @@ export function SplitPane({
         <div
           className="split-pane-separator"
           role="separator"
-          aria-label="Side panel size"
+          aria-label={m.side_panel_size()}
           aria-controls={secondaryId}
           aria-orientation="vertical"
           aria-valuemin={Number(minimum.toFixed(2))}

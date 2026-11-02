@@ -75,12 +75,21 @@
 }
 
 .ui-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
   color: var(--text);
   font-family: var(--font-ui);
   font-size: 1.125rem;
   font-weight: 700;
   letter-spacing: -0.05em;
   text-decoration: none;
+}
+
+.ui-brand svg {
+  width: 1.375rem;
+  height: 1.375rem;
+  flex: none;
 }
 
 .ui-brand:hover {

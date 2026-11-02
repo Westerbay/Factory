@@ -33,10 +33,10 @@ fn only_connecting_observations_survive_repeated_reads() {
     }
     let mut snapshot = ConnectionSnapshot::account(None, Utc::now());
     snapshot.status = ConnectionStatus::Connecting;
-    snapshot.challenge = Some(DeviceChallenge {
+    snapshot.challenge = Some(LoginChallenge {
         operation_id: Uuid::new_v4(),
         verification_url: "https://auth.openai.com/codex/device".into(),
-        user_code: "FIXTURE-ONLY".into(),
+        user_code: Some("FIXTURE-ONLY".into()),
         expires_at: Utc::now() + chrono::Duration::minutes(1),
     });
     let mut pending = Some(observation(snapshot));
@@ -46,8 +46,9 @@ fn only_connecting_observations_survive_repeated_reads() {
                 .unwrap()
                 .challenge
                 .unwrap()
-                .user_code,
-            "FIXTURE-ONLY"
+                .user_code
+                .as_deref(),
+            Some("FIXTURE-ONLY")
         );
         assert!(pending.is_some());
     }

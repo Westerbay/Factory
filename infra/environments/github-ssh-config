@@ -1,0 +1,12 @@
+# GitHub SSH over the installation proxy. User SSH configuration remains higher priority.
+Host github.com
+    HostName ssh.github.com
+    User git
+    Port 443
+    IdentityFile /home/factory/.factory/ssh/active/github_ed25519
+    IdentitiesOnly yes
+    BatchMode yes
+    StrictHostKeyChecking yes
+    UserKnownHostsFile /dev/null
+    GlobalKnownHostsFile /etc/factory/github-known-hosts
+    ProxyCommand /usr/bin/nc -w 15 -X connect -x factory-egress:3128 %h %p

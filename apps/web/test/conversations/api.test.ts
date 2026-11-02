@@ -3,9 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { apiClient, ApiFailure } from "../../src/lib/api/client"
 import {
   cancel,
+  ContextTransferFailure,
+  create,
   list,
   listRecoverable,
   recoverModelProbe,
+  start,
   stream,
 } from "../../src/features/conversations/api"
 
@@ -13,7 +16,44 @@ const userRun = "f7eae12b-e8f7-4ee3-a27c-a9c84a12962b"
 const conversation = "9bf3cbec-9818-44c2-bd7a-a9c722b910e6"
 afterEach(() => vi.restoreAllMocks())
 
+it("distinguishes a transfer limit from ordinary conversation conflicts", async () => {
+  const post = vi.spyOn(apiClient, "POST")
+  post.mockResolvedValueOnce({
+    error: { code: "ContextLimit" },
+    response: new Response(null, { status: 409 }),
+  } as never)
+  post.mockResolvedValueOnce({
+    error: { code: "Conflict" },
+    response: new Response(null, { status: 409 }),
+  } as never)
+  const body = {
+    operationId: userRun,
+    model: "factory:claude:sonnet",
+    input: "hello",
+  }
+  const send = () =>
+    start(conversation, body, "csrf", new AbortController().signal)
+  await expect(send()).rejects.toBeInstanceOf(ContextTransferFailure)
+  await expect(send()).rejects.toBeInstanceOf(ApiFailure)
+})
+
 describe("conversation pages", () => {
+  it("creates a project-scoped chat and preserves its association in the response", async () => {
+    const projectId = "b8903ea3-3e05-4780-a2b6-d05b9227b078"
+    const post = vi.spyOn(apiClient, "POST")
+    post.mockResolvedValueOnce({
+      data: { id: conversation, createdAt: "2026-01-01T00:00:00Z", projectId },
+      response: new Response(null, { status: 200 }),
+    } as never)
+    const signal = new AbortController().signal
+    expect((await create("csrf", signal, projectId)).projectId).toBe(projectId)
+    expect(post).toHaveBeenCalledWith("/api/conversations", {
+      params: { header: { "X-CSRF-Token": "csrf" } },
+      body: { projectId },
+      signal,
+    })
+  })
+
   it("requests an older page using the cursor and validates the response", async () => {
     const get = vi.spyOn(apiClient, "GET")
     get.mockResolvedValueOnce({

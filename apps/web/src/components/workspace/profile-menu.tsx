@@ -1,7 +1,10 @@
-import { useEffect, useRef } from "react"
+import * as m from "@workspace/i18n/messages"
+import { useLocale } from "../../lib/i18n"
+import { useEffect, useId, useRef } from "react"
 import { Link } from "@tanstack/react-router"
 import { ChevronUp, LogOut, Power, Settings, Users } from "lucide-react"
 
+import { setTheme, useTheme } from "../../lib/theme/theme"
 import { useSession } from "../../lib/auth/session-context"
 import { Button } from "../ui/button"
 
@@ -14,7 +17,10 @@ export function ProfileMenu({
   onSettings: () => void
   onStop: () => void
 }) {
+  useLocale()
   const { state, controller } = useSession()
+  const theme = useTheme()
+  const themeGroup = useId()
   const ref = useRef<HTMLDetailsElement>(null)
   useEffect(() => {
     function dismiss(event: PointerEvent) {
@@ -46,7 +52,11 @@ export function ProfileMenu({
   const user = state.session.user
   return (
     <details className="profile-menu" ref={ref}>
-      <summary aria-label={`Profile options for ${user.handle}`}>
+      <summary
+        aria-label={m.profile_options_for_handle({
+          handle: user.handle,
+        })}
+      >
         <span className="profile-avatar">
           <img src="/brand/github.svg" alt="" width="20" height="20" />
         </span>
@@ -56,22 +66,38 @@ export function ProfileMenu({
       <div className="profile-options">
         <Button variant="ghost" onClick={onSettings}>
           <Settings aria-hidden="true" />
-          Settings
+          {m.settings()}
         </Button>
         {user.role === "admin" && (
           <Link to="/admin/users">
             <Users size={16} aria-hidden="true" />
-            User access
+            {m.user_access()}
           </Link>
         )}
         <Button variant="ghost" disabled={!canStop} onClick={onStop}>
           <Power aria-hidden="true" />
-          Stop environment
+          {m.stop_environment()}
         </Button>
+        <div className="profile-menu-divider" />
+        <fieldset className="profile-theme">
+          <legend>{m.theme()}</legend>
+          {(["light", "dark"] as const).map((choice) => (
+            <label key={choice}>
+              <input
+                type="radio"
+                name={themeGroup}
+                value={choice}
+                checked={theme === choice}
+                onChange={() => setTheme(choice)}
+              />
+              {choice === "light" ? m.light() : m.dark()}
+            </label>
+          ))}
+        </fieldset>
         <div className="profile-menu-divider" />
         <Button variant="ghost" onClick={() => void controller.logout()}>
           <LogOut aria-hidden="true" />
-          Sign out
+          {m.sign_out()}
         </Button>
       </div>
     </details>

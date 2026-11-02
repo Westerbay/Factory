@@ -1,0 +1,407 @@
+use super::*;
+use axum::{
+    Router,
+    extract::State,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
+
+struct Guard;
+impl RepositoryOperationGuard for Guard {
+    fn check(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Error>> + Send + '_>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+const KEY: &str =
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA factory";
+
+#[derive(Default)]
+struct Fixture {
+    keys: Mutex<Vec<String>>,
+    posts: AtomicUsize,
+    fail_post_response: bool,
+    no_verified_email: bool,
+    denied_scope: bool,
+    forbidden: bool,
+    quota: bool,
+    forbidden_message: Option<String>,
+    origin_status: u16,
+    origin_id: Option<u64>,
+    origin_name: Option<String>,
+}
+
+async fn token(State(state): State<Arc<Fixture>>) -> impl IntoResponse {
+    let scopes = if state.denied_scope {
+        "repo"
+    } else {
+        "repo,user:email,write:public_key"
+    };
+    (
+        StatusCode::OK,
+        axum::Json(
+            serde_json::json!({ "access_token":"fixture-token", "token_type":"bearer", "scope":scopes }),
+        ),
+    )
+}
+async fn profile() -> impl IntoResponse {
+    axum::Json(serde_json::json!({ "id":123, "login":"user", "name":null }))
+}
+async fn emails(State(state): State<Arc<Fixture>>) -> impl IntoResponse {
+    axum::Json(
+        serde_json::json!([{ "email":"user@example.test", "primary":true, "verified":!state.no_verified_email }]),
+    )
+}
+async fn repos(State(state): State<Arc<Fixture>>) -> impl IntoResponse {
+    if state.forbidden {
+        return (
+            StatusCode::FORBIDDEN,
+            [(
+                "x-ratelimit-remaining",
+                if state.quota { "0" } else { "12" },
+            )],
+            axum::Json(serde_json::json!({"message":state.forbidden_message.as_deref().unwrap_or("denied")})),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::OK,
+        [("x-ratelimit-remaining", "12")],
+        axum::Json(serde_json::json!([{ "id":3, "full_name":"user/example", "private":true }])),
+    )
+        .into_response()
+}
+async fn repo_at_origin(State(state): State<Arc<Fixture>>) -> impl IntoResponse {
+    let status = StatusCode::from_u16(if state.origin_status == 0 {
+        200
+    } else {
+        state.origin_status
+    })
+    .unwrap();
+    let body = serde_json::json!({"id":state.origin_id.unwrap_or(3), "full_name":state.origin_name.as_deref().unwrap_or("user/example"), "private":true});
+    (status, [(header::LOCATION, "/user")], axum::Json(body))
+}
+async fn keys(State(state): State<Arc<Fixture>>) -> impl IntoResponse {
+    let keys = state
+        .keys
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|key| serde_json::json!({"key":key}))
+        .collect::<Vec<_>>();
+    axum::Json(keys)
+}
+async fn add_key(
+    State(state): State<Arc<Fixture>>,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> impl IntoResponse {
+    state.posts.fetch_add(1, Ordering::SeqCst);
+    state
+        .keys
+        .lock()
+        .unwrap()
+        .push(body["key"].as_str().unwrap().into());
+    if state.fail_post_response {
+        StatusCode::INTERNAL_SERVER_ERROR
+    } else {
+        StatusCode::CREATED
+    }
+}
+struct Server(tokio::task::JoinHandle<()>);
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+async fn fixture(state: Fixture) -> (GitHubRepositoryProvider, Arc<Fixture>, Server) {
+    let state = Arc::new(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route("/token", post(token))
+        .route("/user", get(profile))
+        .route("/user/emails", get(emails))
+        .route("/user/repos", get(repos))
+        .route("/repos/{owner}/{repo}", get(repo_at_origin))
+        .route("/user/keys", get(keys).post(add_key))
+        .with_state(state.clone());
+    let server = Server(tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    }));
+    let mut provider = GitHubRepositoryProvider::new(
+        "fixture-client".into(),
+        "fixture-secret".into(),
+        "http://localhost:3001/api/auth/github/callback".into(),
+    )
+    .unwrap();
+    provider.inner.oauth = provider
+        .inner
+        .oauth
+        .set_token_uri(TokenUrl::new(format!("http://{address}/token")).unwrap());
+    provider.inner.profile = Url::parse(&format!("http://{address}/user")).unwrap();
+    (provider, state, server)
+}
+
+#[tokio::test]
+async fn requests_required_scopes_and_lists_verified_data() {
+    let (provider, _, _server) = fixture(Fixture::default()).await;
+    let url = provider
+        .authorization_url(&format!("repo.{}", "s".repeat(43)), &"c".repeat(43))
+        .unwrap();
+    let url = Url::parse(&url).unwrap();
+    let scope = url
+        .query_pairs()
+        .find(|(name, _)| name == "scope")
+        .unwrap()
+        .1;
+    for value in ["repo", "write:public_key", "user:email"] {
+        assert!(scope.split(' ').any(|s| s == value));
+    }
+    let (token, identity) = provider.exchange("code", &"v".repeat(43)).await.unwrap();
+    assert_eq!(identity.subject, "123");
+    assert_eq!(
+        provider.primary_email(&token, &Guard).await.unwrap(),
+        "user@example.test"
+    );
+    let page = provider.repositories(&token, 1).await.unwrap();
+    assert_eq!(page.items[0].full_name, "user/example");
+    assert!(page.items[0].private);
+    assert_eq!(page.next_page, None);
+    assert!(provider.repositories(&token, 0).await.is_err());
+}
+
+#[tokio::test]
+async fn missing_scope_and_unverified_email_fail_closed() {
+    let (provider, _, _server) = fixture(Fixture {
+        denied_scope: true,
+        ..Default::default()
+    })
+    .await;
+    assert!(matches!(
+        provider.exchange("code", &"v".repeat(43)).await,
+        Err(Error::Forbidden)
+    ));
+    let (provider, _, _server) = fixture(Fixture {
+        no_verified_email: true,
+        ..Default::default()
+    })
+    .await;
+    let token = RepositoryAccessToken::new("fixture".into()).unwrap();
+    assert!(matches!(
+        provider.primary_email(&token, &Guard).await,
+        Err(Error::EmailUnavailable)
+    ));
+}
+
+#[tokio::test]
+async fn lost_registration_response_reconciles_without_second_post() {
+    let (provider, state, _server) = fixture(Fixture {
+        fail_post_response: true,
+        ..Default::default()
+    })
+    .await;
+    let token = RepositoryAccessToken::new("fixture".into()).unwrap();
+    provider
+        .ensure_public_key(&token, KEY, &Guard)
+        .await
+        .unwrap();
+    provider
+        .ensure_public_key(&token, KEY, &Guard)
+        .await
+        .unwrap();
+    assert_eq!(state.posts.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        provider
+            .ensure_public_key(&token, "not-a-key", &Guard)
+            .await,
+        Err(Error::InvalidInput)
+    ));
+}
+
+#[tokio::test]
+async fn github_rate_limit_header_distinguishes_quota_from_denied_permissions() {
+    let token = RepositoryAccessToken::new("fixture".into()).unwrap();
+    let (quota, _, _server) = fixture(Fixture {
+        forbidden: true,
+        quota: true,
+        ..Default::default()
+    })
+    .await;
+    assert!(matches!(
+        quota.repositories(&token, 1).await,
+        Err(Error::RateLimited)
+    ));
+    let (denied, _, _server) = fixture(Fixture {
+        forbidden: true,
+        ..Default::default()
+    })
+    .await;
+    assert!(matches!(
+        denied.repositories(&token, 1).await,
+        Err(Error::ProviderForbidden)
+    ));
+}
+
+struct RevokedGuard(std::sync::atomic::AtomicUsize);
+impl RepositoryOperationGuard for RevokedGuard {
+    fn check(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Error>> + Send + '_>> {
+        Box::pin(async move {
+            if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+                Ok(())
+            } else {
+                Err(Error::ProviderUnauthorized)
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn revoked_epoch_prevents_a_post_after_the_initial_key_listing() {
+    let (provider, state, _server) = fixture(Fixture::default()).await;
+    let token = RepositoryAccessToken::new("fixture".into()).unwrap();
+    let guard = RevokedGuard(AtomicUsize::new(0));
+    assert!(matches!(
+        provider.ensure_public_key(&token, KEY, &guard).await,
+        Err(Error::ProviderUnauthorized)
+    ));
+    assert_eq!(state.posts.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn retry_after_on_403_reports_secondary_rate_limit() {
+    let mut headers = header::HeaderMap::new();
+    headers.insert(header::RETRY_AFTER, header::HeaderValue::from_static("60"));
+    assert_eq!(
+        check_status(StatusCode::FORBIDDEN, &headers),
+        Err(Error::RateLimited)
+    );
+    headers.insert(
+        header::RETRY_AFTER,
+        header::HeaderValue::from_static("not-a-delay"),
+    );
+    assert_eq!(
+        check_status(StatusCode::FORBIDDEN, &headers),
+        Err(Error::ProviderForbidden)
+    );
+}
+
+#[tokio::test]
+async fn secondary_limit_body_is_bounded_and_distinct_from_permission_denial() {
+    let token = RepositoryAccessToken::new("fixture".into()).unwrap();
+    let (quota, _, _server) = fixture(Fixture {
+        forbidden: true,
+        forbidden_message: Some(
+            "You have exceeded a secondary rate limit. Please wait before retrying.".into(),
+        ),
+        ..Default::default()
+    })
+    .await;
+    assert!(matches!(
+        quota.repositories(&token, 1).await,
+        Err(Error::RateLimited)
+    ));
+    let (denied, _, _server) = fixture(Fixture {
+        forbidden: true,
+        forbidden_message: Some("User has no access to this repository".into()),
+        ..Default::default()
+    })
+    .await;
+    assert!(matches!(
+        denied.repositories(&token, 1).await,
+        Err(Error::ProviderForbidden)
+    ));
+    let (oversized, _, _server) = fixture(Fixture {
+        forbidden: true,
+        forbidden_message: Some("x".repeat(ERROR_BODY_LIMIT + 1)),
+        ..Default::default()
+    })
+    .await;
+    assert!(matches!(
+        oversized.repositories(&token, 1).await,
+        Err(Error::ProviderForbidden)
+    ));
+}
+
+#[tokio::test]
+async fn clone_origin_is_matched_only_for_same_id_and_name_without_redirects() {
+    let token = RepositoryAccessToken::new("fixture".into()).unwrap();
+    for (state, expected) in [
+        (Fixture::default(), RepositoryOriginVerification::Matched),
+        (
+            Fixture {
+                origin_id: Some(4),
+                ..Default::default()
+            },
+            RepositoryOriginVerification::Changed,
+        ),
+        (
+            Fixture {
+                origin_name: Some("another/name".into()),
+                ..Default::default()
+            },
+            RepositoryOriginVerification::Changed,
+        ),
+        (
+            Fixture {
+                origin_status: 301,
+                ..Default::default()
+            },
+            RepositoryOriginVerification::Changed,
+        ),
+        (
+            Fixture {
+                origin_status: 404,
+                ..Default::default()
+            },
+            RepositoryOriginVerification::Changed,
+        ),
+    ] {
+        let (provider, _, _server) = fixture(state).await;
+        assert_eq!(
+            provider
+                .verify_clone_origin(&token, 3, "user/example")
+                .await
+                .unwrap(),
+            expected
+        );
+    }
+    for (status, expected) in [
+        (401, Error::ProviderUnauthorized),
+        (403, Error::ProviderForbidden),
+        (429, Error::RateLimited),
+        (500, Error::Unavailable),
+    ] {
+        let (provider, _, _server) = fixture(Fixture {
+            origin_status: status,
+            ..Default::default()
+        })
+        .await;
+        assert_eq!(
+            provider
+                .verify_clone_origin(&token, 3, "user/example")
+                .await,
+            Err(expected)
+        );
+    }
+    let (provider, _, server) = fixture(Fixture::default()).await;
+    drop(server);
+    assert!(matches!(
+        provider
+            .verify_clone_origin(&token, 3, "user/example")
+            .await,
+        Err(Error::Unavailable)
+    ));
+    assert!(matches!(
+        provider.verify_clone_origin(&token, 3, "../example").await,
+        Err(Error::InvalidInput)
+    ));
+}

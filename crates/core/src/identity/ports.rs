@@ -12,6 +12,15 @@ pub trait IdentityProvider: Send + Sync {
         code: &str,
         pkce_verifier: &str,
     ) -> Result<VerifiedIdentity, IdentityError>;
+
+    /// A provider can return a repository token for persistence after admission.
+    async fn exchange_login(
+        &self,
+        code: &str,
+        pkce_verifier: &str,
+    ) -> Result<(VerifiedIdentity, Option<RepositoryAccessToken>), IdentityError> {
+        Ok((self.exchange(code, pkce_verifier).await?, None))
+    }
 }
 
 #[async_trait]

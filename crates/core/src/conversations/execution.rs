@@ -1,6 +1,6 @@
 //! Actual provider execution capabilities consumed by the application.
 //! Provider references are internal and must not be exposed in HTTP projections.
-use crate::environments::Environment;
+use crate::{environments::Environment, projects::Project};
 use async_trait::async_trait;
 use uuid::Uuid;
 
@@ -8,6 +8,39 @@ use uuid::Uuid;
 pub struct ExecutionModel {
     pub id: String,
     pub name: String,
+    /// The provider's resolved model identifier, when it reports one.
+    pub resolved_model: Option<String>,
+    pub effort_levels: Vec<String>,
+    pub default_effort: Option<String>,
+}
+
+/// Encode the selected effort into the existing durable model selection. This
+/// preserves idempotency on old databases without changing their schema.
+pub fn encode_selection(model: &str, effort: Option<&str>) -> Result<String, ExecutionError> {
+    const MARKER: &str = "#factory-effort=";
+    if model.is_empty() || model.contains(MARKER) {
+        return Err(ExecutionError::Invalid);
+    }
+    let selection = match effort {
+        Some(value) if valid_effort(value) => format!("{model}{MARKER}{value}"),
+        Some(_) => return Err(ExecutionError::Invalid),
+        None => model.to_owned(),
+    };
+    if selection.len() > 256 {
+        return Err(ExecutionError::Invalid);
+    }
+    Ok(selection)
+}
+
+pub fn decode_selection(selection: &str) -> (&str, Option<&str>) {
+    selection
+        .rsplit_once("#factory-effort=")
+        .filter(|(_, effort)| valid_effort(effort))
+        .map_or((selection, None), |(model, effort)| (model, Some(effort)))
+}
+
+pub fn valid_effort(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 32 && value.bytes().all(|byte| byte.is_ascii_lowercase())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -143,6 +176,39 @@ pub trait ExecutionRuntime: Send + Sync {
         environment: &Environment,
         provider_thread: Option<&str>,
         model: &str,
+        effort: Option<&str>,
         input: &str,
     ) -> Result<ExecutionSession, ExecutionError>;
+    /// Implementations must reject project execution unless the directory was verified.
+    async fn open_project(
+        &self,
+        environment: &Environment,
+        project: Option<&Project>,
+        provider_thread: Option<&str>,
+        model: &str,
+        effort: Option<&str>,
+        input: &str,
+    ) -> Result<ExecutionSession, ExecutionError> {
+        if project.is_some() {
+            return Err(ExecutionError::PreflightUnavailable);
+        }
+        self.open(environment, provider_thread, model, effort, input)
+            .await
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    #[test]
+    fn selection_keeps_effort_distinct_for_idempotent_runs() {
+        let model = "factory:claude:opus";
+        let high = encode_selection(model, Some("high")).unwrap();
+        assert_eq!(decode_selection(&high), (model, Some("high")));
+        assert_ne!(high, encode_selection(model, Some("low")).unwrap());
+        assert_eq!(decode_selection(model), (model, None));
+        assert!(encode_selection(&high, None).is_err());
+        assert!(encode_selection(model, Some("--high")).is_err());
+    }
 }

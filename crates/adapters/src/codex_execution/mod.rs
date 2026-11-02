@@ -4,8 +4,13 @@ use crate::environments::{
     DockerEnvironmentRuntime,
     process::{DockerProcess, FixedProcess, ProcessStartError},
 };
+use crate::projects::{DockerProjectRuntime, ProjectDirectory};
 use async_trait::async_trait;
-use factory_core::{conversations::execution::*, environments::Environment};
+use factory_core::{
+    conversations::execution::*,
+    environments::Environment,
+    projects::{Project, ProjectState},
+};
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet},
@@ -67,7 +72,39 @@ impl ExecutionRuntime for CodexExecutionAdapter {
                     let id = text(&item["model"], 512)?;
                     let name = text(&item["displayName"], 512)?;
                     if seen.insert(id.clone()) {
-                        models.push(ExecutionModel { id, name });
+                        let levels = item["supportedReasoningEfforts"]
+                            .as_array()
+                            .ok_or(ExecutionError::Protocol)?;
+                        if levels.len() > 20 {
+                            return Err(ExecutionError::Protocol);
+                        }
+                        let effort_levels = levels
+                            .iter()
+                            .map(|level| {
+                                let value = text(&level["reasoningEffort"], 32)?;
+                                if valid_effort(&value) {
+                                    Ok(value)
+                                } else {
+                                    Err(ExecutionError::Protocol)
+                                }
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let default_effort = if item["defaultReasoningEffort"].is_null() {
+                            None
+                        } else {
+                            let value = text(&item["defaultReasoningEffort"], 32)?;
+                            if !effort_levels.contains(&value) {
+                                return Err(ExecutionError::Protocol);
+                            }
+                            Some(value)
+                        };
+                        models.push(ExecutionModel {
+                            resolved_model: Some(id.clone()),
+                            id,
+                            name,
+                            effort_levels,
+                            default_effort,
+                        });
                     }
                     if models.len() > 1000 {
                         return Err(ExecutionError::Protocol);
@@ -106,23 +143,52 @@ impl ExecutionRuntime for CodexExecutionAdapter {
         env: &Environment,
         provider_thread: Option<&str>,
         model: &str,
+        effort: Option<&str>,
+        input: &str,
+    ) -> Result<ExecutionSession, ExecutionError> {
+        self.open_project(env, None, provider_thread, model, effort, input)
+            .await
+    }
+    async fn open_project(
+        &self,
+        env: &Environment,
+        project: Option<&Project>,
+        provider_thread: Option<&str>,
+        model: &str,
+        effort: Option<&str>,
         input: &str,
     ) -> Result<ExecutionSession, ExecutionError> {
         if !valid(model, 512)
             || !valid(input, MAX_TEXT)
             || provider_thread.is_some_and(|id| !valid(id, 512))
+            || effort.is_some_and(|value| !valid_effort(value))
         {
             return Err(ExecutionError::Invalid);
         }
+        let cwd = if let Some(project) = project {
+            if project.state != ProjectState::Ready
+                || DockerProjectRuntime::new(self.runtime.clone())
+                    .inspect_project(env, project)
+                    .await
+                    != Ok(ProjectDirectory::Ready)
+            {
+                return Err(ExecutionError::PreflightUnavailable);
+            }
+            format!("/home/factory/Documents/{}", project.directory)
+        } else {
+            "/home/factory/Documents".to_owned()
+        };
         let (process_id, transport) = self.process(env).await?;
         let (commands, receiver) = mpsc::channel(LIMIT);
         let (sender, events) = mpsc::channel(LIMIT);
         let runtime = self.runtime.clone();
         let model = model.to_owned();
+        let effort = effort.map(str::to_owned);
         let input = input.to_owned();
         let thread = provider_thread.map(str::to_owned);
         tokio::spawn(async move {
-            let result = Worker::new(transport, receiver, sender.clone(), model, input)
+            let result = Worker::new(transport, receiver, sender.clone(), model, effort, input)
+                .with_cwd(cwd)
                 .run(thread)
                 .await;
             // Process exit is necessary, but never by itself proves descendant cleanup.
@@ -222,7 +288,9 @@ struct Worker {
     commands: mpsc::Receiver<Command>,
     events: mpsc::Sender<ExecutionEvent>,
     model: String,
+    effort: Option<String>,
     input: String,
+    cwd: String,
     thread: String,
     turn: Option<String>,
     requests: HashMap<Uuid, Request>,
@@ -242,6 +310,7 @@ impl Worker {
         commands: mpsc::Receiver<Command>,
         events: mpsc::Sender<ExecutionEvent>,
         model: String,
+        effort: Option<String>,
         input: String,
     ) -> Self {
         Self {
@@ -249,7 +318,9 @@ impl Worker {
             commands,
             events,
             model,
+            effort,
             input,
+            cwd: "/home/factory/Documents".to_owned(),
             thread: String::new(),
             turn: None,
             requests: HashMap::new(),
@@ -258,16 +329,17 @@ impl Worker {
             stopping: false,
         }
     }
+    fn with_cwd(mut self, cwd: String) -> Self {
+        self.cwd = cwd;
+        self
+    }
     async fn run(mut self, previous: Option<String>) -> Result<ExecutionEvent, ExecutionError> {
         self.transport.initialize().await?;
         let requested_thread = previous.clone();
         let (method, params) = if let Some(id) = previous {
-            (
-                "thread/resume",
-                json!({"threadId":id,"cwd":"/home/factory/Documents"}),
-            )
+            ("thread/resume", json!({"threadId":id,"cwd":&self.cwd}))
         } else {
-            ("thread/start", json!({"cwd":"/home/factory/Documents"}))
+            ("thread/start", json!({"cwd":&self.cwd}))
         };
         let started = self.transport.request(method, params).await?;
         self.thread = text(&started["thread"]["id"], 512)?;
@@ -335,7 +407,12 @@ impl Worker {
             .transport
             .request(
                 "turn/start",
-                turn_start(&self.thread, &self.model, &self.input),
+                turn_start(
+                    &self.thread,
+                    &self.model,
+                    self.effort.as_deref(),
+                    &self.input,
+                ),
             )
             .await?;
         self.turn = Some(text(&result["turn"]["id"], 512)?);
@@ -682,15 +759,20 @@ impl Worker {
         .await
     }
 }
-fn turn_start(thread: &str, model: &str, input: &str) -> Value {
-    json!({"threadId":thread,"model":model,"approvalPolicy":"never","sandboxPolicy":{"type":"dangerFullAccess"},"input":[{"type":"text","text":input,"text_elements":[]}]})
+fn turn_start(thread: &str, model: &str, effort: Option<&str>, input: &str) -> Value {
+    let mut result = json!({"threadId":thread,"model":model,"approvalPolicy":"never","sandboxPolicy":{"type":"dangerFullAccess"},"input":[{"type":"text","text":input,"text_elements":[]}]});
+    if let Some(effort) = effort {
+        result["effort"] = json!(effort);
+    }
+    result
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn explicit_full_access_is_attached_to_each_turn() {
-        let turn = turn_start("thread", "model", "hello");
+        let turn = turn_start("thread", "model", Some("high"), "hello");
+        assert_eq!(turn["effort"], "high");
         assert_eq!(turn["approvalPolicy"], "never");
         assert_eq!(turn["sandboxPolicy"]["type"], "dangerFullAccess");
         assert_eq!(turn["threadId"], "thread");
@@ -722,6 +804,59 @@ mod protocol_tests {
         .unwrap();
     }
     #[tokio::test]
+    async fn project_cwd_is_sent_for_thread_start_and_resume() {
+        for previous in [None, Some("existing-thread".to_owned())] {
+            let (client, server) = tokio::io::duplex(65536);
+            let (output_tx, output_rx) = mpsc::channel(8);
+            let output = stream::unfold(output_rx, |mut rx| async move {
+                rx.recv().await.map(|v| (v, rx))
+            });
+            let transport = Transport::new(Box::pin(client), Box::pin(output));
+            let (_command_tx, command_rx) = mpsc::channel(4);
+            let (event_tx, _event_rx) = mpsc::channel(4);
+            let requested = previous.clone();
+            let worker = tokio::spawn(
+                Worker::new(
+                    transport,
+                    command_rx,
+                    event_tx,
+                    "model".into(),
+                    None,
+                    "input".into(),
+                )
+                .with_cwd("/home/factory/Documents/project-fixture".into())
+                .run(previous),
+            );
+            let mut server = BufReader::new(server);
+            let init = read_request(&mut server).await;
+            write_frame(
+                &output_tx,
+                json!({"id":init["id"],"result":{"userAgent":"fixture"}}),
+            )
+            .await;
+            assert_eq!(read_request(&mut server).await["method"], "initialized");
+            let start = read_request(&mut server).await;
+            assert_eq!(
+                start["method"],
+                if requested.is_some() {
+                    "thread/resume"
+                } else {
+                    "thread/start"
+                }
+            );
+            assert_eq!(
+                start["params"]["cwd"],
+                "/home/factory/Documents/project-fixture"
+            );
+            if let Some(id) = requested {
+                assert_eq!(start["params"]["threadId"], id);
+            }
+            worker.abort();
+            let _ = worker.await;
+        }
+    }
+
+    #[tokio::test]
     async fn observed_child_stays_active_until_its_terminal_event() {
         let output = stream::empty::<Result<LogOutput, bollard::errors::Error>>();
         let transport = Transport::new(Box::pin(tokio::io::sink()), Box::pin(output));
@@ -732,6 +867,7 @@ mod protocol_tests {
             command_rx,
             event_tx,
             "model".into(),
+            None,
             "input".into(),
         );
         worker.thread = "root".into();
@@ -763,6 +899,7 @@ mod protocol_tests {
                 command_rx,
                 event_tx,
                 "chosen-model".into(),
+                Some("high".into()),
                 "hello".into(),
             )
             .run(None),
@@ -787,6 +924,7 @@ mod protocol_tests {
             .await;
             let turn = read_request(&mut server).await;
             assert_eq!(turn["params"]["model"], "chosen-model");
+            assert_eq!(turn["params"]["effort"], "high");
             assert_eq!(turn["params"]["approvalPolicy"], "never");
             assert_eq!(turn["params"]["sandboxPolicy"]["type"], "dangerFullAccess");
             // An event can precede the correlated turn/start response.
@@ -896,6 +1034,7 @@ mod protocol_tests {
                 command_rx,
                 event_tx,
                 "model".into(),
+                None,
                 "hello".into(),
             )
             .run(None),

@@ -1,4 +1,13 @@
-import type { Conversation, History } from "./api"
+import type { Conversation, History, Model } from "./api"
+
+/** Select only an advertised effort, keeping an explicit choice when possible. */
+export function selectedEffort(model: Model | undefined, requested: string) {
+  if (!model) return ""
+  for (const value of [requested, model.defaultEffort, "medium"]) {
+    if (value && model.effortLevels.includes(value)) return value
+  }
+  return model.effortLevels[0] ?? ""
+}
 
 /** Only the latest issued read may update a conversation snapshot. */
 export function latestReader<T>(
@@ -30,11 +39,11 @@ export function runOutcome(
   const run = history?.runs[history.runs.length - 1]
   switch (run?.status) {
     case "active":
-      return "Codex is working…"
+      return "Assistant is working…"
     case "completed":
-      return "Codex finished."
+      return "Assistant finished."
     case "failed":
-      return "Codex could not complete this run. Review the conversation and try again."
+      return "Assistant could not complete this run. Review the conversation and try again."
     case "interrupted":
       return "The run was interrupted. You can start another message."
     case "uncertain":
@@ -58,7 +67,7 @@ export function questionReceipt(
   if (state === "claimed" || sent)
     return {
       disabled: true,
-      message: "Answer sent. Waiting for Codex to confirm receipt.",
+      message: "Answer sent. Waiting for the provider to confirm receipt.",
     }
   return { disabled: false, message: "" }
 }

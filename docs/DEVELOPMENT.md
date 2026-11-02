@@ -85,16 +85,26 @@ Routine installation and checks neither read the real `.env` nor register an OAu
 
 ### GitHub OAuth setup
 
-The current adapter uses a GitHub **OAuth App** for identity with the `read:user`
-scope. Repository access and GitHub App installations are not implemented yet.
+The current adapter uses a GitHub **OAuth App** and requests `read:user`, `repo`,
+`write:public_key` and `user:email` together at sign-in; GitHub App installations are
+not implemented. After environment
+preparation, the API automatically creates a random encryption key in
+`.factory/environments/repository-token.key` and reuses it across restarts and database
+resets. It is a secret, separate from the SSH key: preserve the ignored `.factory`
+directory and never share or commit this file. On Unix the key has owner-only permissions.
+If the key is missing while encrypted credentials exist, invalid, or inaccessible, Factory
+does not replace it: repository access is disabled until the original key is restored. A
+fresh database without stored credentials permits creation of a new key. These failures do
+do not invalidate existing identity sessions, but a new sign-in requiring repository access
+cannot complete until the key is available. Never put the key in logs or client-side configuration.
 
 1. In GitHub, open **Settings > Developer settings > OAuth Apps > New OAuth App**
    ([registration page](https://github.com/settings/applications/new)).
 2. Set **Application name** to `Factory Local`, **Homepage URL** to
    `http://localhost:3000`, and **Authorization callback URL** to
    `http://localhost:3001/api/auth/github/callback`. Leave device flow and callback
-   wildcard matching disabled. Token expiration can remain enabled: the current
-   adapter uses the token immediately for identity lookup, then discards it.
+   wildcard matching disabled. Sign-in retains an encrypted token for repository operations
+   only for an admitted active member; the workspace registers its SSH key when ready.
 3. Register the application. Copy its **Client ID** into `FACTORY_GITHUB_CLIENT_ID`.
    Generate a **client secret** and put it only in `FACTORY_GITHUB_CLIENT_SECRET`
    in the local `.env`.
@@ -140,6 +150,11 @@ pnpm preview:web
 # In another terminal:
 pnpm start:api
 ```
+
+The web scripts compile the Paraglide catalogs in `packages/i18n/messages/` before
+starting, testing, typechecking or building the frontend. Restart the web development
+server after changing a catalog; the compiler uses the locally installed message-format
+plugin and does not fetch it at build time.
 
 The frontend output is `apps/web/dist`. Vite preview is local inspection tooling,
 not a production server. Development mode does not register the service worker; use
@@ -222,7 +237,8 @@ These regressions do not replace human acceptance or prove live OAuth behavior.
 For the PostgreSQL subset, run `pnpm db:build` followed by
 `node scripts/database/identity-integration.mjs`. Its disposable database covers
 supervisor connection loss and competing ownership, including recovery through the
-same HTTP router without restarting the API.
+same HTTP router without restarting the API. It also exercises project imports, deletion
+and associated conversations against PostgreSQL.
 
 ## Local PostgreSQL
 
@@ -284,8 +300,10 @@ pnpm environments:prepare
 
 This operator command builds the pinned [workspace image](../infra/environments/Dockerfile)
 and [egress proxy](../infra/egress/Dockerfile), so initial preparation requires network
-access and may take several minutes. The workspace contains zsh with Oh My Zsh, tmux and native Codex
-0.160.0; no host Codex installation or credentials are imported. Preparation
+access and may take several minutes. The workspace contains zsh with Oh My Zsh, tmux,
+Neofetch, native Codex 0.160.0 and Claude Code 2.1.284. The Claude binary's initialization and
+model-list response are checked during a build step with an empty home. No host
+provider installation or credentials are imported. Preparation
 stores the stable installation UUID in `.factory/environments/installation.json` and
 the immutable workspace image ID/policy in `prepared.json` and the proxy metadata in
 `egress.json`. Preserve this ignored directory while
@@ -316,9 +334,10 @@ Containers retain a fixed non-root user, read-only root, bounded tmpfs/logs, dro
 capabilities, no-new-privileges, isolated per-user internal networks and no published
 ports. They receive neither
 host bind mounts, platform credentials nor the Docker socket. Named volumes have no
-portable disk quota. Only the approved Codex HTTPS destinations pass through the shared
-proxy; direct Internet, host/LAN and other-user access remain blocked. Package downloads,
-GitHub cloning and development-server publishing are not enabled in this increment.
+portable disk quota. The approved OpenAI and Anthropic destinations and GitHub SSH at
+`ssh.github.com:443` pass through the shared proxy; direct Internet, host/LAN and
+other-user access remain blocked. Package downloads and development-server publishing
+are not enabled. Full-access agents can use the SSH key with the member’s GitHub permissions.
 
 A prepared image with a different policy is not applied to existing containers. During
 local development, a fresh database creates new environments; existing Docker homes are
@@ -375,13 +394,14 @@ WSL behavior remains unverified, and installation/checkout identities must
 not be assumed interchangeable. Integration commands create their own labeled fixtures
 and verify ownership before cleanup; they never prune or remove user volumes.
 
-## Terminal and Codex account
+## Terminal and provider accounts
 
-Wait for automatic workspace preparation and connect Codex. The header's terminal icon
+Wait for automatic workspace preparation and connect a provider. The header's terminal icon
 opens or folds the panel; opening loads xterm and attaches to its zsh tmux shell in
 `/home/factory/Documents`. Folding preserves the attached display and shell. Drag the
 separator to resize, or focus it and use arrow keys; Enter folds the terminal. Narrow
-screens switch between chat and terminal. The current image provides a colored prompt
+screens switch between chat and terminal. New terminal shells show Neofetch; reconnecting
+to an existing shell does not start it again. The current image provides a colored prompt
 without overwriting user dotfiles. Transport failure offers **Reconnect**. A second tab
 must choose **Take over terminal** before it can type. Closing the browser or restarting
 the API does not stop the shell; stopping the environment or Docker does. Files survive
@@ -396,10 +416,16 @@ session remains unexpired. The shell remains independent of this browser lifecyc
 
 Choose **Codex** on the provider screen to request a device code. Copy it and open the displayed official
 OpenAI link in a separate tab, then authorize your personal ChatGPT/Codex account there.
-Do not paste a password, API key or credentials into Factory. Keep the code private and
+Do not paste a password or API key into Factory. Keep the code private and
 cancel it if it is no longer needed. The connection controller polls pending authorization every two
 seconds while visible and shows Connected only after provider confirmation and account
 verification. The reported plan does not guarantee access to a particular model.
+
+Choose **Claude Code** to start the native CLI sign-in. Open its official link, complete
+Anthropic's sign-in, and enter the returned one-time code in Factory. The code is sent to
+that CLI process without persistence; Factory confirms the result with `claude auth status`.
+The profile settings can connect the other provider
+later. A saved local CLI sign-in does not prove the subscription can use every model.
 
 Only the initiating Factory session can retrieve a pending code. Reloading that page
 recovers its current state without starting another login. Expiry, logout or suspension
@@ -411,13 +437,14 @@ arbitrary container processes.
 Codex stores credentials under `/home/factory/.codex` with private permissions. The API
 does not read host credentials or store provider tokens in PostgreSQL or browser storage.
 In profile **Settings**, **Disconnect Codex** clears the saved sign-in through the account protocol and preserves
-the rest of the home. It is blocked for active or uncertain Factory runs. This does not
+the rest of the home. **Disconnect Claude** runs the native CLI logout independently.
+Both actions are blocked for active or uncertain Factory runs. This does not
 prove already-running manual Codex requests stopped;
 use **Stop environment** when all processes must end. Factory sign-out leaves an already
 connected Codex account saved in its owner's home.
 
-The initial proxy allows only `auth.openai.com`, `chatgpt.com` and `api.openai.com` over
-HTTPS CONNECT on port 443. Direct egress and private destinations are refused. If the
+The proxy allows the OpenAI, Anthropic and GitHub SSH hosts listed in [squid.conf](../infra/egress/squid.conf)
+over HTTPS CONNECT on port 443. Direct egress and private destinations are refused. If the
 proxy is down, provider settings report unavailable while local terminal work continues;
 local account cancellation/logout does not require the proxy. No HTTP endpoint can
 open an arbitrary Docker exec or target another user's container.
@@ -427,9 +454,11 @@ stream into the chat; completed messages and run state are retained. The visible
 is bounded and indicates when older entries are omitted; the conversation list can load
 older pages. Questions need an explicit
 reply; a submitted answer can remain claimed or uncertain until provider confirmation
-and is not automatically resent. Codex runs with full access inside the user's container and does not
+and is not automatically resent. Both providers run with full access inside the user's container and do not
 request per-action approval: its commands can read, modify or delete the user's home,
-including account credentials. A displayed model is not proof of account entitlement.
+including account credentials. Switching providers sends the saved conversation messages
+as context; a truncated or oversized history prevents the switch. A displayed model is
+not proof of account entitlement.
 Provider calls may consume the user's model allowance.
 
 If stopping a run does not confirm cleanup, it remains uncertain and blocks further work.
@@ -449,7 +478,7 @@ The integration commands exercise real PTYs, reattachment after adapter restart,
 detached 4-MiB output producer, account-controller cleanup with synthetic cache data,
 controlled DNS/private-address refusals. They neither
 authorize a real account nor consume model allowance. A successful real login and a
-small intentional Codex chat turn remain human acceptance.
+small intentional chat turn for each provider remain human acceptance.
 
 ## Execution reference and Codex diagnostics
 

@@ -2,17 +2,19 @@ import { queryOptions } from "@tanstack/react-query"
 
 import { ApiFailure } from "../../lib/api/client"
 import { models } from "./api"
+import { presentModels } from "./model-presentation"
 
 const conflictRetryDelays = [2_000, 4_000, 8_000, 16_000, 30_000]
 
 export const modelQueryKey = (userId: string) =>
-  ["codex-models", userId] as const
+  ["provider-models", userId] as const
 
 export function modelQueryOptions(userId: string) {
   return queryOptions({
     queryKey: modelQueryKey(userId),
     queryFn: ({ signal }) => models(signal),
-    staleTime: 5 * 60_000,
+    staleTime: Infinity,
+    select: presentModels,
     // Private session/account changes explicitly evict these queries. Navigation
     // should keep the last usable list even when the next discovery is busy.
     gcTime: Infinity,

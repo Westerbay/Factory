@@ -3,11 +3,17 @@ use crate::environments::{
     DockerEnvironmentRuntime,
     process::{FixedProcess, ProcessInput, ProcessOutput},
 };
+use crate::projects::{DockerProjectRuntime, ProjectDirectory};
 use async_trait::async_trait;
-use factory_core::{environments::Environment, terminals::*};
+use factory_core::{
+    environments::Environment,
+    projects::{Project, ProjectState},
+    terminals::*,
+};
 use futures_util::StreamExt;
 use std::{sync::Arc, time::Duration};
 use tokio::io::AsyncWriteExt;
+use uuid::Uuid;
 
 pub struct DockerTerminalRuntime(Arc<DockerEnvironmentRuntime>);
 
@@ -79,6 +85,61 @@ impl TerminalRuntime for DockerTerminalRuntime {
         })
     }
 
+    async fn attach_conversation(
+        &self,
+        environment: &Environment,
+        conversation_id: Uuid,
+        project: Option<&Project>,
+    ) -> Result<TerminalProcess, TerminalError> {
+        if conversation_id.is_nil() {
+            return Err(TerminalError::InvalidInput);
+        }
+        if let Some(project) = project
+            && (project.state != ProjectState::Ready
+                || DockerProjectRuntime::new(self.0.clone())
+                    .inspect_project(environment, project)
+                    .await
+                    != Ok(ProjectDirectory::Ready))
+        {
+            return Err(TerminalError::Unavailable);
+        }
+        let process = self
+            .0
+            .start_process(
+                environment,
+                FixedProcess::TerminalAttachConversation {
+                    conversation: conversation_id,
+                    project: project.map(|p| p.directory.clone()),
+                },
+            )
+            .await?;
+        Ok(TerminalProcess {
+            handle: process.id,
+            input: Box::new(Input(process.input)),
+            output: Box::new(Output {
+                stream: process.output,
+                pending: Vec::new(),
+                offset: 0,
+            }),
+        })
+    }
+
+    async fn detach_conversation(
+        &self,
+        environment: &Environment,
+        conversation_id: Uuid,
+        handle: &str,
+    ) -> Result<(), TerminalError> {
+        self.detach_process(
+            environment,
+            handle,
+            FixedProcess::TerminalDetachConversation {
+                conversation: conversation_id,
+            },
+        )
+        .await
+    }
+
     async fn resize(&self, handle: &str, size: TerminalSize) -> Result<(), TerminalError> {
         self.0
             .resize_process(handle, size.cols, size.rows)
@@ -87,6 +148,18 @@ impl TerminalRuntime for DockerTerminalRuntime {
     }
 
     async fn detach(&self, environment: &Environment, handle: &str) -> Result<(), TerminalError> {
+        self.detach_process(environment, handle, FixedProcess::TerminalDetach)
+            .await
+    }
+}
+
+impl DockerTerminalRuntime {
+    async fn detach_process(
+        &self,
+        environment: &Environment,
+        handle: &str,
+        command: FixedProcess,
+    ) -> Result<(), TerminalError> {
         // A natural shell exit or a fully closed Docker stream already detaches.
         if self
             .0
@@ -98,7 +171,7 @@ impl TerminalRuntime for DockerTerminalRuntime {
         }
         let detach = self
             .0
-            .start_process(environment, FixedProcess::TerminalDetach)
+            .start_process(environment, command)
             .await
             .map_err(|_| TerminalError::CleanupUncertain)?;
         let detach_id = detach.id.clone();

@@ -1,3 +1,5 @@
+import * as m from "@workspace/i18n/messages"
+import { useLocale, translateMessage } from "../../lib/i18n"
 import { useEffect, useId, useRef, useState } from "react"
 
 import { Button } from "../../components/ui/button"
@@ -15,6 +17,7 @@ export function ConnectedProvider({
   state: ConnectionState
   controller: ConnectionController
 }) {
+  useLocale()
   const headingId = useId()
   const statusElement = useRef<HTMLParagraphElement>(null)
   const disconnectButton = useRef<HTMLButtonElement>(null)
@@ -31,17 +34,17 @@ export function ConnectedProvider({
     connection?.status === "unavailable"
   const status =
     state.pending === "logout"
-      ? "Disconnecting Codex…"
+      ? m.disconnecting_codex()
       : state.pending === "read" && !connection
-        ? "Checking the account…"
+        ? m.checking_the_account()
         : (issue ??
           (connection?.status === "connected"
-            ? "Connected"
+            ? m.connected()
             : connection?.status === "disconnected"
-              ? "Not connected"
+              ? m.not_connected()
               : connection?.status === "connecting"
-                ? "Waiting for authorization"
-                : "The account status could not be confirmed."))
+                ? m.waiting_for_authorization_738e149b()
+                : m.the_account_status_could_not_be_confirmed()))
 
   useEffect(() => {
     if (confirming) cancelButton.current?.focus()
@@ -67,7 +70,7 @@ export function ConnectedProvider({
 
   return (
     <section className="provider-settings" aria-labelledby={headingId}>
-      <h2 id={headingId}>Codex</h2>
+      <h3 id={headingId}>Codex</h3>
       <p
         ref={statusElement}
         tabIndex={-1}
@@ -76,16 +79,16 @@ export function ConnectedProvider({
         aria-live="polite"
         aria-atomic="true"
       >
-        {status}
+        {translateMessage(status)}
       </p>
       {connection?.account && (
         <dl className="provider-account">
           <div>
-            <dt>Account</dt>
-            <dd>{connection.account.email ?? "Personal ChatGPT account"}</dd>
+            <dt>{m.account()}</dt>
+            <dd>{connection.account.email ?? m.personal_chatgpt_account()}</dd>
           </div>
           <div>
-            <dt>Plan</dt>
+            <dt>{m.plan()}</dt>
             <dd>{connection.account.plan}</dd>
           </div>
         </dl>
@@ -96,7 +99,7 @@ export function ConnectedProvider({
           onClick={check}
           disabled={state.pending !== null || state.paused}
         >
-          {state.pending === "read" ? "Checking…" : "Check again"}
+          {state.pending === "read" ? m.checking() : m.check_again()}
         </Button>
       )}
       {canDisconnect && (
@@ -104,9 +107,7 @@ export function ConnectedProvider({
           {confirming ? (
             <div className="provider-disconnect-confirmation">
               <p>
-                Disconnect Codex? This removes its saved sign-in and keeps your
-                files. Terminal processes may continue; Stop environment ends
-                all running processes.
+                {m.disconnect_codex_this_removes_its_saved_sign_in_and_keeps_your_fi()}{" "}
               </p>
               <div className="provider-actions">
                 <Button
@@ -115,14 +116,14 @@ export function ConnectedProvider({
                   onClick={cancelConfirmation}
                   disabled={busy || state.paused}
                 >
-                  Cancel
+                  {m.cancel()}{" "}
                 </Button>
                 <Button
                   variant="danger"
                   onClick={disconnect}
                   disabled={busy || state.paused}
                 >
-                  Disconnect Codex
+                  {m.disconnect_codex()}{" "}
                 </Button>
               </div>
             </div>
@@ -133,7 +134,7 @@ export function ConnectedProvider({
               onClick={showConfirmation}
               disabled={busy || state.paused}
             >
-              Disconnect Codex
+              {m.disconnect_codex()}{" "}
             </Button>
           )}
         </div>

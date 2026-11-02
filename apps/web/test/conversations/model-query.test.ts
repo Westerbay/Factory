@@ -10,7 +10,15 @@ import { ApiFailure } from "../../src/lib/api/client"
 import { modelQueryOptions } from "../../src/features/conversations/model-query"
 import * as api from "../../src/features/conversations/api"
 
-const models = [{ id: "model", name: "Model" }]
+const models = [
+  {
+    id: "model",
+    name: "Model",
+    effortLevels: [],
+    resolvedModel: null,
+    defaultEffort: null,
+  },
+]
 const clients: QueryClient[] = []
 beforeEach(() => {
   // Exercise QueryObserver's browser lifecycle without a DOM.
@@ -53,7 +61,7 @@ it("reuses a user's fresh model list but isolates users and account invalidation
   await cache.invalidateQueries({ queryKey: first.queryKey })
   await cache.fetchQuery(first)
   expect(read).toHaveBeenCalledTimes(3)
-  cache.removeQueries({ queryKey: ["codex-models"] })
+  cache.removeQueries({ queryKey: ["provider-models"] })
   await cache.fetchQuery(first)
   expect(read).toHaveBeenCalledTimes(4)
 })
@@ -126,17 +134,33 @@ it("keeps the last valid list and slows persistent conflicts to one attempt per 
   unsubscribe()
 })
 
-it("retains the session's model list across long navigation gaps and failed refreshes", async () => {
+it("keeps the session's model list across focus changes and long navigation gaps", async () => {
   vi.useFakeTimers()
   const cache = client()
+  cache.mount()
   const options = modelQueryOptions("user-one")
   const read = vi.spyOn(api, "models").mockResolvedValue(models)
   await cache.fetchQuery(options)
+  const observer = new QueryObserver(cache, options)
+  const unsubscribe = observer.subscribe(() => {})
   await vi.advanceTimersByTimeAsync(30 * 60_000)
+  focusManager.setFocused(false)
+  focusManager.setFocused(true)
+  await vi.advanceTimersByTimeAsync(0)
+  unsubscribe()
+  const reconnected = new QueryObserver(cache, options)
+  const stop = reconnected.subscribe(() => {})
+  await vi.advanceTimersByTimeAsync(0)
+  expect(read).toHaveBeenCalledTimes(1)
   expect(cache.getQueryData(options.queryKey)).toEqual(models)
   read.mockRejectedValue(new ApiFailure(503))
+  await cache.invalidateQueries({
+    queryKey: options.queryKey,
+    refetchType: "none",
+  })
   await expect(cache.fetchQuery(options)).rejects.toMatchObject({ status: 503 })
   expect(cache.getQueryData(options.queryKey)).toEqual(models)
+  stop()
 })
 
 it.each([401, 403, 429, 503])(

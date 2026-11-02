@@ -3,3 +3,6 @@
 !tmux.conf
 !zshrc
 !auth-controller.sh
+!project-controller.py
+!github-ssh-config
+!github-known-hosts

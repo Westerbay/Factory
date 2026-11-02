@@ -3,8 +3,9 @@
 ## Direction
 
 Factory is a private developer workspace for sustained conversations with a coding
-agent and a persistent terminal. The approved direction is graphite: flat, nearly
-neutral dark surfaces, quiet navigation and readable messages. Chat is the primary
+agent and a persistent terminal. The interface uses flat, nearly neutral surfaces, quiet navigation and readable messages
+in light and graphite themes. The initial theme follows the browser preference; the profile
+menu offers a direct light or dark choice, stored locally on the device. Chat is the primary
 work surface. Operational details appear when they require a decision.
 
 Sign-in, provider authorization, workspace, settings and administration share this
@@ -21,7 +22,7 @@ design decision, not an unfinished product preference picker.
 [app.css](../apps/web/src/styles/app.css) owns the semantic tokens. Components use
 these roles rather than repeating visual literals.
 
-| Role                         | Direction                                                          |
+| Role                         | Graphite direction                                                 |
 | ---------------------------- | ------------------------------------------------------------------ |
 | Canvas                       | Graphite, `oklch(0.208 0.003 265)`                                 |
 | Sidebar and terminal         | `oklch(0.174 0.003 265)`                                           |
@@ -36,13 +37,15 @@ these roles rather than repeating visual literals.
 | Spacing                      | 4px base; 8/12px control gaps, 16/24px content gutters             |
 | Shape                        | 6px controls, 8px composer/dialog, circular account avatar         |
 
+The light theme provides corresponding neutral surfaces and contrasting text through the same semantic roles.
+
 Keep prose within roughly 65 characters per line. Meaningful text is at least 12px.
 Pointer targets are at least 24px and touch targets at least 44px. Keyboard focus is
 visible and distinct from selection. Use one outline icon family; provider identity
 uses an unmodified brand asset or its written name.
 
 Scrollbars remain native and thin with a transparent track, a muted thumb and clearer
-hover feedback. Shared scrollbar colors also feed xterm's theme. Keep scrolling
+hover feedback. Shared scrollbar colors also feed xterm's theme. ANSI terminal text uses a minimum 4.5:1 contrast against its background. Keep scrolling
 available to pointer, touch and keyboard; forced-color mode uses system scrollbars.
 
 ## Reusable components
@@ -56,12 +59,23 @@ cross-application abstractions in `packages/ui`.
 | Button / IconButton | Native semantics, primary/secondary/ghost/danger variants, accessible labels for icon actions                  |
 | Modal               | Native dialog, named heading, safe initial focus, Escape/cancel and focus restoration; shutdown and suspension |
 | LoadingState        | Concise status and reduced-motion-safe indicator; session, environment and provider preparation                |
-| Brand               | Plain wordmark with real home/workspace navigation                                                             |
+| Brand               | Terminal prompt symbol and wordmark with real home/workspace navigation                                        |
 | SplitPane           | Pointer and keyboard resizing, one terminal toggle, no separate width toolbar                                  |
 
 Conversation rows, composer, device authorization and account options stay
 feature-owned. Share their real behavior rather than a universal card. Controls
 cover hover, focus, pressed, disabled, pending and error. Links remain links.
+
+The workspace navigation groups chats under independently expandable projects, with a
+new-chat and delete actions on each project. The active chat uses
+orange text without a selection background; keyboard focus remains visible. The project picker uses the
+shared modal, a labelled search over loaded GitHub pages and explicit loading,
+empty, unavailable and retry states. Import progress remains in the modal until confirmed,
+with an option to continue in the background. Already imported repositories are omitted.
+Show the selected project's name on its chat and terminal; switching chats detaches
+the terminal display while preserving each chat's shell. Explain GitHub permissions
+and commit email visibility before the explicit connection action. An interrupted
+import exposes recovery rather than an indefinite progress indicator.
 
 ## Entry and environment lifecycle
 
@@ -73,11 +87,11 @@ cover hover, focus, pressed, disabled, pending and error. Links remain links.
    never an effect of every poll, focus change or session recheck.
 3. Show **Starting your workspace…** while starting. Never invent a percentage.
    A failure stays visible and offers contextual retry.
-4. An unconnected account sees **Codex** as the sole provider choice. Device
+4. An unconnected account can choose **Codex** or **Claude Code**. Codex device
    authorization retains copy, cancel, expiry, the validated official OpenAI link
-   and uncertain completion. A displayed code does not mean connected. Returning
-   to a pending operation reads it without beginning another login.
-5. A confirmed saved Codex account proceeds directly to the workspace.
+   and uncertain completion. Claude sign-in shows the CLI's validated link and accepts
+   the one-time code returned by Claude. A displayed code does not mean connected.
+5. An account with at least one connected provider proceeds to the workspace.
 
 Explicit Stop suppresses automatic restart while the same app session remains open,
 including route remounts and focus checks. The automatic start opportunity is
@@ -92,8 +106,10 @@ shutdown/recovery, not a permanent Start control. Failed starts do not loop.
 
 ## Workspace
 
-Desktop has a 208–240px sidebar, flexible chat and optional right terminal. The
-sidebar holds the wordmark, New chat, history and GitHub profile at bottom left.
+Desktop has a sidebar starting at 280px, flexible chat and an optional right terminal.
+Drag the sidebar separator or use its keyboard controls to resize it; its width remains
+when the sidebar is hidden or the layout switches to compact mode. The sidebar holds
+the wordmark, New chat, history and GitHub profile at bottom left.
 Conversation labels use available data; never invent names or introduce a data
 migration just to match example content. Older history pages remain reachable.
 The header's chats toggle collapses and restores the desktop sidebar without resetting
@@ -143,15 +159,19 @@ Remove permanent Refresh models/Refresh conversation, the environment dashboard,
 visible width slider, Disconnect display and redundant setup controls. Remove
 obsolete components, CSS, props and exports after their last consumer is removed.
 Contextual retry/recovery are safeguards, not replacement toolbars. Keep the last
-successful model list in session memory while refreshing stale data in the background;
-account/session changes clear private cached data. Temporary model conflicts must not
+successful model list in session memory across tab changes; confirmed account changes
+refresh it and session changes clear private cached data. Temporary model conflicts must not
 replace a loaded selection with an error banner. If discovery remains blocked without
 any loaded models, use a compact status message while automatic recovery continues.
+The composer shows a concise model name and the provider-reported version when available, without a redundant identifier, and a labeled
+reasoning-effort selector only when the selected model advertises options. It shows and
+sends a concrete level: the advertised default when available, otherwise medium when
+supported, or the first supported level.
 
 ## Account and destructive actions
 
-The profile menu contains Settings, administrator-only User access, Stop environment
-and Sign out. Provider details and Disconnect Codex belong in Settings. Disconnect
+The profile menu contains Settings, administrator-only User access, Stop environment,
+a light/dark theme choice and Sign out. Provider details, additional connections and disconnect actions belong in Settings. Disconnect
 retains active/uncertain-run guards and explains its consequences when invoked.
 
 Stop opens **Stop your environment?** The confirmation explains that running tasks

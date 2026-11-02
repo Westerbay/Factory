@@ -1,4 +1,4 @@
-//! Provider-neutral account connection projections. Credentials never cross this port.
+//! Provider-neutral account connection projections and short-lived sign-in operations.
 use crate::environments::{Environment, EnvironmentError};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -68,17 +68,18 @@ pub struct AccountSummary {
 }
 /// Intentionally no Debug: a login code must not enter diagnostic logs.
 #[derive(Clone)]
-pub struct DeviceChallenge {
+pub struct LoginChallenge {
     pub operation_id: Uuid,
     pub verification_url: String,
-    pub user_code: String,
+    /// A device code to display, or None when the provider returns a code in its browser flow.
+    pub user_code: Option<String>,
     pub expires_at: DateTime<Utc>,
 }
 #[derive(Clone)]
 pub struct ConnectionSnapshot {
     pub status: ConnectionStatus,
     pub account: Option<AccountSummary>,
-    pub challenge: Option<DeviceChallenge>,
+    pub challenge: Option<LoginChallenge>,
     pub error: Option<AgentConnectionError>,
     pub observed_at: DateTime<Utc>,
 }
@@ -123,6 +124,15 @@ pub trait AgentConnectionPort: Send + Sync {
         environment: &Environment,
         operation_id: Uuid,
     ) -> Result<ConnectionSnapshot, AgentConnectionError>;
+    /// Submit a browser-issued code to the same native process that began sign-in.
+    async fn submit_login_code(
+        &self,
+        _environment: &Environment,
+        _operation_id: Uuid,
+        _code: &str,
+    ) -> Result<ConnectionSnapshot, AgentConnectionError> {
+        Err(AgentConnectionError::UnsupportedMethod)
+    }
     async fn logout(
         &self,
         environment: &Environment,

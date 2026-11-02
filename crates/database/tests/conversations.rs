@@ -75,6 +75,7 @@ async fn conversations_are_owned_idempotent_and_block_uncertain_runs() {
         input: "hello".into(),
     };
     assert!(!store.has_open_runs(one).await.unwrap());
+    assert_eq!(store.find_turn(one, input.clone()).await.unwrap(), None);
     let (run, new) = store.begin_turn(one, input.clone()).await.unwrap();
     assert!(store.has_open_runs(one).await.unwrap());
     assert!(!store.has_open_runs(two).await.unwrap());
@@ -82,8 +83,34 @@ async fn conversations_are_owned_idempotent_and_block_uncertain_runs() {
     let (repeated, new) = store.begin_turn(one, input.clone()).await.unwrap();
     assert!(!new);
     assert_eq!(run, repeated);
+    assert_eq!(
+        store.find_turn(one, input.clone()).await.unwrap(),
+        Some(run.clone())
+    );
+    assert!(matches!(
+        store.find_turn(two, input.clone()).await,
+        Err(ConversationError::Conflict)
+    ));
+    let mut other_user_turn = input.clone();
+    other_user_turn.environment_id = env2;
+    assert!(matches!(
+        store.find_turn(two, other_user_turn).await,
+        Err(ConversationError::NotFound)
+    ));
+    let revoked = EnvironmentActor {
+        user_id: one.user_id,
+        session_hash: CredentialHash([0; 32]),
+    };
+    assert!(matches!(
+        store.find_turn(revoked, input.clone()).await,
+        Err(ConversationError::Unauthorized)
+    ));
     let mut different = input.clone();
     different.input = "different".into();
+    assert!(matches!(
+        store.find_turn(one, different.clone()).await,
+        Err(ConversationError::Conflict)
+    ));
     assert!(matches!(
         store.begin_turn(one, different).await,
         Err(ConversationError::Conflict)
@@ -113,11 +140,27 @@ async fn conversations_are_owned_idempotent_and_block_uncertain_runs() {
             .1
     );
     store
-        .set_thread(one, env1, 1, run.id, "thread-1")
+        .set_thread(one, env1, 1, run.id, "thread-1", None)
         .await
         .unwrap();
     assert!(matches!(
-        store.set_thread(one, env1, 1, run.id, "thread-2").await,
+        store
+            .set_thread(one, env1, 1, run.id, "thread-2", None)
+            .await,
+        Err(ConversationError::Conflict)
+    ));
+    store
+        .set_thread(one, env1, 1, run.id, "thread-1", None)
+        .await
+        .unwrap();
+    store
+        .set_thread(one, env1, 1, run.id, "combined-threads", Some("thread-1"))
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .set_thread(one, env1, 1, run.id, "stale-update", Some("thread-1"))
+            .await,
         Err(ConversationError::Conflict)
     ));
     let request = PendingRequest {
@@ -925,4 +968,49 @@ async fn suspended_owner_cannot_release_unsettled_launch_but_supervisor_can_afte
         Err(ConversationError::Unauthorized)
     ));
     sql.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires the explicitly owned PostgreSQL integration fixture"]
+async fn project_conversation_requires_ready_owned_project_and_persists_association() {
+    let (db, sql) = fixture().await;
+    let store = db.conversation_store();
+    let (one, env1) = actor(&sql, 220).await;
+    let (two, env2) = actor(&sql, 221).await;
+    let project = Uuid::new_v4();
+    let operation = Uuid::new_v4();
+    sqlx::query("INSERT INTO factory_identity.projects(id,user_id,repository_id,full_name,cloned_full_name,directory,state,operation_id,environment_id,environment_generation) VALUES($1,$2,1,'owner/repo','owner/repo',$3,'importing',$4,$5,1)")
+        .bind(project).bind(one.user_id).bind("repo").bind(operation).bind(env1)
+        .execute(&sql).await.unwrap();
+    assert!(matches!(
+        store.create_in_project(one, env1, 1, Some(project)).await,
+        Err(ConversationError::NotFound)
+    ));
+    sqlx::query("UPDATE factory_identity.projects SET state='ready' WHERE id=$1")
+        .bind(project)
+        .execute(&sql)
+        .await
+        .unwrap();
+    assert!(matches!(
+        store.create_in_project(two, env2, 1, Some(project)).await,
+        Err(ConversationError::NotFound)
+    ));
+    let conversation = store
+        .create_in_project(one, env1, 1, Some(project))
+        .await
+        .unwrap();
+    assert_eq!(conversation.project_id, Some(project));
+    assert_eq!(
+        store
+            .history(one, env1, 1, conversation.id)
+            .await
+            .unwrap()
+            .conversation
+            .project_id,
+        Some(project)
+    );
+    assert!(matches!(
+        store.history(two, env2, 1, conversation.id).await,
+        Err(ConversationError::NotFound)
+    ));
 }

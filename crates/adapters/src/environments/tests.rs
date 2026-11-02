@@ -404,6 +404,11 @@ async fn old_policy_owned_container_can_still_be_stopped_by_immutable_id() {
 fn full_policy_rejects_unsafe_mutations_and_finite_resource_ceilings() {
     let env = environment(&metadata());
     let base = container(&env);
+    assert_eq!(
+        base["Config"]["Entrypoint"],
+        json!(["/usr/local/bin/factory-project-controller"])
+    );
+    assert_eq!(base["Config"]["Cmd"], json!(["--bootstrap"]));
     assert!(policy().verify_container(&env, &base).is_ok());
     let mut normalized = base.clone();
     normalized["HostConfig"]["PidsLimit"] = Value::Null;
@@ -429,6 +434,8 @@ fn full_policy_rejects_unsafe_mutations_and_finite_resource_ceilings() {
         ("/HostConfig/Init", json!(false)),
         ("/HostConfig/SecurityOpt", json!(["seccomp=unconfined"])),
         ("/Config/User", json!("root")),
+        ("/Config/Entrypoint", json!(["/bin/sleep"])),
+        ("/Config/Cmd", json!(["infinity"])),
         ("/Config/NetworkDisabled", json!(true)),
         ("/Config/Env", json!(["SECRET=bad"])),
         ("/Mounts/0/Name", json!("foreign")),
@@ -1118,7 +1125,9 @@ async fn codex_maps_process_phase_to_recoverable_or_uncertain_execution() {
     .await;
     let adapter = CodexExecutionAdapter::new(cloned_runtime(&fixture));
     assert!(matches!(
-        adapter.open(&env, None, "fixture-model", "hello").await,
+        adapter
+            .open(&env, None, "fixture-model", None, "hello")
+            .await,
         Err(ExecutionError::LaunchUncertain)
     ));
     assert_eq!(fixture.requests.load(Ordering::SeqCst), 3);

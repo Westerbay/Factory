@@ -146,7 +146,7 @@ async fn real_egress_isolation_and_capability_drop() {
         assert!(status.contains("CapBnd:\t0000000000000000"));
         assert!(status.contains("NoNewPrivs:\t1"));
         assert!(status.ends_with("0\n0\n"));
-        for authority in ["127.0.0.1:443", "169.254.169.254:443", "10.0.0.1:443", "[::1]:443", "api.openai.com:80", "example.com:443"] {
+        for authority in ["127.0.0.1:443", "169.254.169.254:443", "10.0.0.1:443", "[::1]:443", "api.openai.com:80", "ssh.github.com:22", "github.com:443", "example.com:443"] {
             let script = format!("timeout 3 bash -c 'exec 3<>/dev/tcp/factory-egress/3128; printf \"CONNECT {authority} HTTP/1.1\\r\\nHost: {authority}\\r\\n\\r\\n\" >&3; while IFS= read -r -t 1 line <&3; do printf \"%s\\n\" \"$line\"; done; true'");
             let (code, response) = command(&docker, &client_a, &script).await;
             assert_eq!(code, 0, "{authority}: {response}");
@@ -298,6 +298,21 @@ async fn real_egress_dns_rebinding_and_actual_destination() {
         let (code, response) = command(&docker,&dns.id,&connect).await;
         assert_eq!(code,0,"{response}");
         assert!(response.contains("200"),"DNS/allowed fixture tunnel failed: {response}");
+        for host in ["api.anthropic.com", "claude.ai", "claude.com", "platform.claude.com", "sso.claude.com"] {
+            let request = format!("timeout 4 bash -c 'exec 3<>/dev/tcp/{proxy_ip}/3128; printf \"CONNECT {host}:443 HTTP/1.1\\r\\nHost: {host}:443\\r\\n\\r\\n\" >&3; while IFS= read -r -t 1 line <&3; do printf \"%s\\n\" \"$line\"; done; true'");
+            let (code, response) = command(&docker, &dns.id, &request).await;
+            assert_eq!(code, 0, "{host}: {response}");
+            assert!(response.contains("200"), "{host}: {response}");
+        }
+        let denied = format!("timeout 4 bash -c 'exec 3<>/dev/tcp/{proxy_ip}/3128; printf \"CONNECT unrelated.example:443 HTTP/1.1\\r\\nHost: unrelated.example:443\\r\\n\\r\\n\" >&3; while IFS= read -r -t 1 line <&3; do printf \"%s\\n\" \"$line\"; done; true'");
+        let (code, response) = command(&docker, &dns.id, &denied).await;
+        assert_eq!(code, 0, "{response}");
+        assert!(response.contains("403"), "unexpected unrestricted egress: {response}");
+        // The same isolated DNS fixture also proves the exact GitHub SSH host is allowed.
+        let github_connect = connect.replace("auth.openai.com", "ssh.github.com");
+        let (code, response) = command(&docker, &dns.id, &github_connect).await;
+        assert_eq!(code, 0, "{response}");
+        assert!(response.contains("200"), "GitHub SSH tunnel failed: {response}");
         let (code, rules) = command(&docker, &proxy.id, "/usr/sbin/nft -n list chain inet factory_egress output").await;
         assert_eq!(code, 0);
         assert!(rules.lines().any(|line| {

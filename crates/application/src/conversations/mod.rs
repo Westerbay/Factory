@@ -1,10 +1,12 @@
 //! Conversation entry points validate the supervisor's current environment before storage.
 pub mod coordinator;
 mod model_probes;
-use crate::environments::EnvironmentService;
+mod provider_sessions;
+use crate::{environments::EnvironmentService, projects::ProjectService};
 use factory_core::{
     conversations::*,
     environments::{DesiredState, Environment, EnvironmentActor, EnvironmentError, ObservedState},
+    projects::{Project, ProjectState},
 };
 use std::sync::Arc;
 use uuid::Uuid;
@@ -12,14 +14,60 @@ use uuid::Uuid;
 pub struct ConversationService {
     environments: Arc<EnvironmentService>,
     store: Arc<dyn ConversationStore>,
+    projects: Option<Arc<ProjectService>>,
 }
 impl ConversationService {
     pub fn new(environments: Arc<EnvironmentService>, store: Arc<dyn ConversationStore>) -> Self {
         Self {
             environments,
             store,
+            projects: None,
         }
     }
+    /// The project-aware constructor is required for project conversations.
+    pub fn new_with_projects(
+        environments: Arc<EnvironmentService>,
+        store: Arc<dyn ConversationStore>,
+        projects: Arc<ProjectService>,
+    ) -> Self {
+        Self {
+            environments,
+            store,
+            projects: Some(projects),
+        }
+    }
+
+    /// Resolves an owned conversation and project under the current environment.
+    pub async fn context(
+        &self,
+        actor: EnvironmentActor,
+        id: Uuid,
+    ) -> Result<(Environment, Conversation, Option<Project>), ConversationError> {
+        let env = self.current_environment(actor).await?;
+        let conversation = self.store.get(actor, env.id, env.generation, id).await?;
+        let project = if let Some(project_id) = conversation.project_id {
+            let projects = self
+                .projects
+                .as_ref()
+                .ok_or(ConversationError::Unavailable)?;
+            let project = projects
+                .get(actor, project_id)
+                .await
+                .map_err(|_| ConversationError::Unavailable)?;
+            if project.user_id != actor.user_id
+                || project.environment_id != env.id
+                || project.state != ProjectState::Ready
+            {
+                return Err(ConversationError::Conflict);
+            }
+            Some(project)
+        } else {
+            None
+        };
+        self.same_environment(actor, &env).await?;
+        Ok((env, conversation, project))
+    }
+
     pub async fn current_environment(
         &self,
         actor: EnvironmentActor,
@@ -42,6 +90,19 @@ impl ConversationService {
         let env = self.current_environment(actor).await?;
         self.store.create(actor, env.id, env.generation).await
     }
+    pub async fn create_in_project(
+        &self,
+        actor: EnvironmentActor,
+        project_id: Option<Uuid>,
+    ) -> Result<Conversation, ConversationError> {
+        if project_id.is_some() && self.projects.is_none() {
+            return Err(ConversationError::Unavailable);
+        }
+        let env = self.current_environment(actor).await?;
+        self.store
+            .create_in_project(actor, env.id, env.generation, project_id)
+            .await
+    }
     pub async fn list(
         &self,
         actor: EnvironmentActor,
@@ -57,6 +118,29 @@ impl ConversationService {
     ) -> Result<ConversationHistory, ConversationError> {
         let env = self.current_environment(actor).await?;
         self.store.history(actor, env.id, env.generation, id).await
+    }
+    pub async fn find_turn(
+        &self,
+        actor: EnvironmentActor,
+        conversation_id: Uuid,
+        operation_id: Uuid,
+        model: String,
+        input: String,
+    ) -> Result<Option<Run>, ConversationError> {
+        let env = self.current_environment(actor).await?;
+        self.store
+            .find_turn(
+                actor,
+                StartTurn {
+                    conversation_id,
+                    operation_id,
+                    environment_id: env.id,
+                    generation: env.generation,
+                    model,
+                    input,
+                },
+            )
+            .await
     }
     /// Returns true only for a freshly reserved turn. The caller must not start the provider for an existing receipt.
     pub async fn begin_turn(
@@ -105,10 +189,11 @@ impl ConversationService {
         env: &Environment,
         run_id: Uuid,
         thread: &str,
+        previous: Option<&str>,
     ) -> Result<(), ConversationError> {
         self.same_environment(actor, env).await?;
         self.store
-            .set_thread(actor, env.id, env.generation, run_id, thread)
+            .set_thread(actor, env.id, env.generation, run_id, thread, previous)
             .await
     }
     pub async fn append_assistant(

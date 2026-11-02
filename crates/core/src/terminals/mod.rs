@@ -1,6 +1,10 @@
 //! Interactive terminal contracts, independent of HTTP and Docker.
-use crate::environments::{Environment, EnvironmentError};
+use crate::{
+    environments::{Environment, EnvironmentError},
+    projects::Project,
+};
 use async_trait::async_trait;
+use uuid::Uuid;
 
 pub const MAX_INPUT_BYTES: usize = 16 * 1024;
 pub const OUTPUT_CHUNK_BYTES: usize = 16 * 1024;
@@ -70,6 +74,24 @@ pub struct TerminalProcess {
 #[async_trait]
 pub trait TerminalRuntime: Send + Sync {
     async fn attach(&self, environment: &Environment) -> Result<TerminalProcess, TerminalError>;
+    /// Attach a conversation-specific shell after validating its project directory.
+    async fn attach_conversation(
+        &self,
+        _environment: &Environment,
+        _conversation_id: Uuid,
+        _project: Option<&Project>,
+    ) -> Result<TerminalProcess, TerminalError> {
+        Err(TerminalError::Unavailable)
+    }
+    /// Detach only the specified conversation's tmux client.
+    async fn detach_conversation(
+        &self,
+        _environment: &Environment,
+        _conversation_id: Uuid,
+        _handle: &str,
+    ) -> Result<(), TerminalError> {
+        Err(TerminalError::Unavailable)
+    }
     async fn resize(&self, handle: &str, size: TerminalSize) -> Result<(), TerminalError>;
     /// Caller serializes generations. Detach only this environment's fixed tmux
     /// session, and prove that the specified attachment process has exited.
