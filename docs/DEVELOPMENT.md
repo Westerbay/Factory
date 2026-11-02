@@ -182,9 +182,9 @@ documentation links, OpenAPI parity and builds, including Cargo formatting, Clip
 tests. It does not require provider credentials, Docker or a database. `web:check`
 targets frontend types/tests/build; `rust:build` produces a locked release build.
 Node and Cargo lockfiles remain versioned. `pnpm format` applies formatting.
-`pnpm test:dependency-security` checks the installed dependency backports and runs
-within `pnpm test`. Keep the [patches](../patches/README.md) with the lockfile when
-installing the workspace; scanners may still report their original versions.
+`pnpm test:dependency-security` checks the local `deepmerge` patch used by the web
+build and runs within `pnpm test`. Keep the [patch](../patches/README.md) with the
+lockfile when installing the workspace; scanners may still report its original version.
 Web tests live under `apps/web/test/`, grouped by feature. Vitest discovers both
 TypeScript and TSX tests there.
 

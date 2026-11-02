@@ -49,7 +49,7 @@
     "api:contract": "node scripts/api-contract.mjs --check",
     "api:generate": "node scripts/api-contract.mjs",
     "db:reset": "pnpm db:build && node scripts/database/local.mjs reset",
-    "test:dependency-security": "node --test scripts/security/dependencies.test.mjs"
+    "test:dependency-security": "node --test scripts/security/deepmerge.test.mjs"
   },
   "devDependencies": {
     "dependency-cruiser": "18.6.0",

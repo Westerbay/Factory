@@ -22,9 +22,16 @@ release over a local patch; keep the lockfile as the source of installed version
 ## Validation and removal
 
 Run the root `test:dependency-security` script after a full frozen installation.
-It exercises the installed modules with synthetic inputs, checking both the
-security boundary and normal behavior. Run the affected lint, typecheck and build
-commands as well: a passing security regression alone does not prove compatibility.
+Its three tests exercise the patched `deepmerge` resolved through the web build's
+dependency chain: `vite-plugin-pwa` → `workbox-build` → `@rollup/plugin-node-resolve`.
+They check both merge inputs and normal merging without scanning `node_modules` or
+pinning expected version numbers. Remove these tests and their command when the
+local patch is replaced by an upstream fix or the dependency is no longer used.
+
+One-off checks of upstream glob/minimatch fixes remain outside the repository.
+Vulnerability monitoring checks dependency versions; the existing application tests,
+lint, typecheck and builds check compatibility. A passing patch regression alone does
+not prove that the application was exposed to the vulnerability.
 
 Keep the remaining patch files in installation and Docker build contexts. Local
 patches retain the original package version, so version-based advisories remain
