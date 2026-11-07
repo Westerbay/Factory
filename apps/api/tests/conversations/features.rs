@@ -404,9 +404,16 @@ enum WorkerAction {
 
 #[derive(Default)]
 struct WorkflowObservations {
+    base: usize,
     launches: Vec<(Uuid, WorkerAction, String)>,
     integrated: Vec<Uuid>,
     checks: Vec<(String, i64)>,
+}
+
+impl WorkflowObservations {
+    fn head(&self) -> usize {
+        self.base + self.integrated.len()
+    }
 }
 
 #[derive(Default)]
@@ -470,12 +477,12 @@ impl FeatureWorkspaceRuntime for WorkflowWorkers {
         expected_head: &str,
     ) -> Result<String, WorkspaceError> {
         let mut observed = self.observed.lock().unwrap();
-        if expected_head != test_oid(observed.integrated.len()) {
+        if expected_head != test_oid(observed.head()) {
             return Err(WorkspaceError::Conflict);
         }
         assert!(!observed.integrated.contains(&attempt.id()));
         observed.integrated.push(attempt.id());
-        Ok(test_oid(observed.integrated.len()))
+        Ok(test_oid(observed.head()))
     }
 
     async fn snapshot(
@@ -485,10 +492,10 @@ impl FeatureWorkspaceRuntime for WorkflowWorkers {
         _: Uuid,
     ) -> Result<WorkspaceDiff, WorkspaceError> {
         let observed = self.observed.lock().unwrap();
-        let head = observed.integrated.len();
+        let head = observed.head();
         Ok(WorkspaceDiff {
             git: GitSnapshot {
-                base_oid: test_oid(0),
+                base_oid: test_oid(observed.base),
                 head_oid: test_oid(head),
                 patch_digest: test_digest(head),
             },
@@ -526,7 +533,7 @@ impl FeatureExecutionRuntime for WorkflowWorkers {
             observed
                 .launches
                 .push((run.workspace.attempt_id, action, run.model.clone()));
-            (first_beta, observed.integrated.len())
+            (first_beta, observed.head())
         };
         let mut events = vec![
             ExecutionEvent::ThreadReady {
@@ -812,8 +819,54 @@ async fn feature_resumes_only_the_failed_writer_and_reviews_the_corrected_snapsh
             {"label":"check-beta","passed":true},
         ])
     );
+    let reviewed_snapshot = &detail["review"]["snapshotId"];
+    let review_path = format!("{path}/review");
+    let review_request =
+        || json!({"operationId": Uuid::new_v4(), "snapshotId": reviewed_snapshot}).to_string();
+    let unchanged = f.call("POST", &review_path, 0, &review_request()).await;
+    assert_eq!(unchanged.status(), StatusCode::CONFLICT);
+    {
+        let state = store.inner.lock().unwrap();
+        assert_eq!(state.feature.stage, FeatureStage::Result);
+        assert_eq!(state.reviews.len(), 2);
+        assert_eq!(state.additional_review_rounds, 0);
+    }
+
+    // Observe a moved base through the workspace port. This does not run or
+    // integrate another writer, but the previously reviewed diff is stale.
+    workers.observed.lock().unwrap().base = 1;
+    let moved_diff = body_json(f.call("GET", &format!("{path}/diff"), 0, "").await).await;
+    assert_eq!(moved_diff["patchDigest"], test_digest(4));
+    assert_eq!(moved_diff["baseOid"], test_oid(1));
+    let changed_request = review_request();
+    let requested = f.call("POST", &review_path, 0, &changed_request).await;
+    assert_eq!(requested.status(), StatusCode::OK);
+    assert_eq!(body_json(requested).await["feature"]["stage"], "review");
+    until(|| {
+        let state = store.inner.lock().unwrap();
+        state.feature.stage == FeatureStage::Result && state.reviews.len() == 3
+    })
+    .await;
+
+    let reviewed = body_json(f.call("GET", &path, 0, "").await).await;
+    assert_eq!(reviewed["review"]["ready"], true);
+    assert_ne!(&reviewed["review"]["snapshotId"], reviewed_snapshot);
+    assert_eq!(reviewed["review"]["patchDigest"], moved_diff["patchDigest"]);
+    assert_eq!(reviewed["review"]["headOid"], moved_diff["headOid"]);
+    assert_eq!(reviewed["review"]["baseOid"], moved_diff["baseOid"]);
+    let replay = f.call("POST", &review_path, 0, &changed_request).await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(replay).await["review"]["snapshotId"],
+        reviewed["review"]["snapshotId"]
+    );
+    let stale = f.call("POST", &review_path, 0, &review_request()).await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(stale).await["code"], "feature-stale-snapshot");
+
     let state = store.inner.lock().unwrap();
-    assert_eq!(state.reviews.len(), 2);
+    assert_eq!(state.reviews.len(), 3);
+    assert_eq!(state.additional_review_rounds, 1);
     let first = state.reviews[0].verdict.as_ref().unwrap();
     assert!(
         first
@@ -832,7 +885,7 @@ async fn feature_resumes_only_the_failed_writer_and_reviews_the_corrected_snapsh
         (WorkerAction::Alpha, 1, "gpt-6.1-terra"),
         (WorkerAction::Beta, 2, "gpt-6.1-terra"),
         (WorkerAction::Correction, 1, "gpt-6.1-terra"),
-        (WorkerAction::Review, 2, "gpt-6.1-sol"),
+        (WorkerAction::Review, 3, "gpt-6.1-sol"),
     ] {
         let launches: Vec<_> = observed
             .launches

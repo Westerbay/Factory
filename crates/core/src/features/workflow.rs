@@ -117,9 +117,14 @@ impl FeatureState {
                 self.record_delivery(request_id, status)
             }
             FeatureCommand::InvalidateResult { snapshot_id } => {
-                self.active_review(snapshot_id)?;
+                let ready = self
+                    .active_review(snapshot_id)?
+                    .verdict
+                    .as_ref()
+                    .is_some_and(ReviewVerdict::ready);
                 require(
-                    self.feature.stage == FeatureStage::Result,
+                    self.feature.stage == FeatureStage::Result
+                        || self.feature.stage == FeatureStage::Review && ready,
                     FeatureError::Conflict,
                 )?;
                 self.ensure_idle()?;

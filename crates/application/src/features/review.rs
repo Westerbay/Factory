@@ -180,8 +180,51 @@ impl FeatureCoordinator {
         operation_id: Uuid,
         snapshot_id: Uuid,
     ) -> Result<FeatureState, FeatureError> {
-        let (env, _, _) = self.context(actor, feature_id).await?;
-        let receipt = self
+        let (env, project, feature) = self.context(actor, feature_id).await?;
+        if matches!(
+            feature.feature.stage,
+            FeatureStage::Result | FeatureStage::Review
+        ) && let Some(round) = feature.review().filter(|round| {
+            round.snapshot.id == snapshot_id
+                && round.verdict.as_ref().is_some_and(ReviewVerdict::ready)
+        }) {
+            let observed = self.feature_diff(&env, &project, feature_id).await?;
+            if observed.git != round.snapshot.git {
+                let state = self
+                    .store
+                    .apply(
+                        actor,
+                        &env,
+                        feature_id,
+                        operation_id,
+                        FeatureCommand::InvalidateResult { snapshot_id },
+                    )
+                    .await?
+                    .state;
+                let used = state
+                    .reviews
+                    .iter()
+                    .filter(|review| review.architecture == round.architecture)
+                    .count();
+                let state = if used >= 2 + state.additional_review_rounds as usize {
+                    self.store
+                        .apply(
+                            actor,
+                            &env,
+                            feature_id,
+                            self.codec.derived_id(operation_id, "extend-stale-review"),
+                            FeatureCommand::AuthorizeAdditionalReview { snapshot_id },
+                        )
+                        .await?
+                        .state
+                } else {
+                    state
+                };
+                self.schedule(actor, feature_id);
+                return Ok(state);
+            }
+        }
+        let result = self
             .store
             .apply(
                 actor,
@@ -190,7 +233,29 @@ impl FeatureCoordinator {
                 operation_id,
                 FeatureCommand::AuthorizeAdditionalReview { snapshot_id },
             )
-            .await?;
+            .await;
+        let receipt = match result {
+            // After a new snapshot becomes current, recover the original
+            // invalidate receipt by its exact operation and snapshot IDs.
+            Err(FeatureError::Conflict | FeatureError::StaleSnapshot)
+                if feature.current_review != Some(snapshot_id)
+                    && feature.reviews.iter().any(|round| {
+                        round.snapshot.id == snapshot_id
+                            && round.verdict.as_ref().is_some_and(ReviewVerdict::ready)
+                    }) =>
+            {
+                self.store
+                    .apply(
+                        actor,
+                        &env,
+                        feature_id,
+                        operation_id,
+                        FeatureCommand::InvalidateResult { snapshot_id },
+                    )
+                    .await?
+            }
+            result => result?,
+        };
         self.schedule(actor, feature_id);
         Ok(receipt.state)
     }
