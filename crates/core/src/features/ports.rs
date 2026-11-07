@@ -19,6 +19,7 @@ pub enum FeatureProposal {
 
 pub struct FeatureReviewReply {
     pub patch_digest: String,
+    pub complete: bool,
     pub findings: Vec<FeatureReplyFinding>,
 }
 
@@ -34,6 +35,17 @@ pub trait FeatureCodec: Send + Sync {
     fn render_revision(&self, content: &GateContent) -> Result<String, FeatureError>;
     fn parse_review(&self, raw: &str) -> Result<FeatureReviewReply, FeatureError>;
     fn derived_id(&self, namespace: Uuid, label: &str) -> Uuid;
+}
+
+/// Establish the stable repository identity before using clone-time names.
+#[async_trait]
+pub trait FeatureRepositoryVerifier: Send + Sync {
+    async fn verify(
+        &self,
+        actor: EnvironmentActor,
+        environment: &Environment,
+        project: &Project,
+    ) -> Result<(), FeatureError>;
 }
 
 /// Recheck ownership in every transaction. Mutation paths also check the current
@@ -91,11 +103,16 @@ pub struct FeatureExecution {
     pub process_receipt: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TaskObservation {
     Running,
     /// The launch settled and all processes associated with the attempt have ended.
     Stopped,
+    /// An owned immutable worker was directly observed exited. Retain it
+    /// until the application can persist proof of the stopped launch.
+    StoppedWithWorkerProof {
+        worker_id: String,
+    },
     Unknown,
 }
 
@@ -123,6 +140,16 @@ pub trait FeatureExecutionRuntime: Send + Sync {
         workspace: &TaskWorkspace,
         command: &str,
     ) -> Result<FeatureCheckOutput, ExecutionError>;
+
+    /// Release the stopped check worker after its outcome is recorded.
+    async fn acknowledge_check(
+        &self,
+        _environment: &Environment,
+        _project: &Project,
+        _workspace: &TaskWorkspace,
+    ) -> Result<(), ExecutionError> {
+        Ok(())
+    }
 
     /// The runtime must identify the workspace and attempt even when the launch
     /// response, including its private process receipt, was lost.

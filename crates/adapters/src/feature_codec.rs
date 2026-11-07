@@ -26,7 +26,15 @@ enum WireProposal {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WireReview {
     patch_digest: String,
+    coverage: WireCoverage,
     findings: Vec<WireFinding>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum WireCoverage {
+    Complete,
+    Partial,
 }
 
 #[derive(Deserialize)]
@@ -70,6 +78,7 @@ impl FeatureCodec for JsonFeatureCodec {
         let wire: WireReview = serde_json::from_str(raw).map_err(|_| FeatureError::Invalid)?;
         Ok(FeatureReviewReply {
             patch_digest: wire.patch_digest,
+            complete: matches!(wire.coverage, WireCoverage::Complete),
             findings: wire
                 .findings
                 .into_iter()
@@ -100,12 +109,12 @@ mod tests {
     fn structured_reply_cannot_claim_checks_or_approve_a_proposal() {
         assert!(
             JsonFeatureCodec
-                .parse_review(r#"{"patchDigest":"reviewed","findings":[]}"#)
+                .parse_review(r#"{"patchDigest":"reviewed","coverage":"complete","findings":[]}"#)
                 .is_ok()
         );
         assert!(
             JsonFeatureCodec
-                .parse_review(r#"{"patchDigest":"reviewed","findings":[],"checks":[true]}"#)
+                .parse_review(r#"{"patchDigest":"reviewed","coverage":"complete","findings":[],"checks":[true]}"#)
                 .is_err()
         );
         assert!(

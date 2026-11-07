@@ -522,3 +522,68 @@ fn retained_work_pins_retry_without_validating_or_erasing_the_failure() {
     apply(&mut state, FeatureCommand::ClaimAttempt(retry)).unwrap();
     assert_eq!(state.attempts[1].status, AttemptStatus::Starting);
 }
+
+#[test]
+fn observed_worker_proof_recovers_unknown_provider_and_check_launches() {
+    let mut state = feature();
+    let task = task(TaskRole::Implementation, Some("src/"));
+    let revision = approve_both(&mut state, vec![task.clone()]);
+    let original = claim(&state, task, Some(revision), None);
+    let attempt_id = original.workspace.attempt_id;
+    apply(&mut state, FeatureCommand::ClaimAttempt(original.clone())).unwrap();
+    let recover = |attempt_id| FeatureCommand::RecoverAttempt {
+        attempt_id,
+        launch_generation: GENERATION,
+    };
+    let observed = |attempt_id| FeatureCommand::RecoverObservedAttempt {
+        attempt_id,
+        launch_generation: GENERATION,
+        worker_id: "f".repeat(64),
+    };
+    assert_eq!(
+        apply(&mut state, recover(attempt_id)),
+        Err(FeatureError::ExecutionUncertain)
+    );
+    apply(&mut state, observed(attempt_id)).unwrap();
+    assert_eq!(state.attempts[0].status, AttemptStatus::Interrupted);
+    assert!(state.attempts[0].launch_settled);
+    assert_eq!(
+        state.attempts[0].process_receipt.as_ref(),
+        Some(&"f".repeat(64))
+    );
+
+    let mut retry = original;
+    retry.workspace.attempt_id = Uuid::new_v4();
+    retry.retry_of = Some(attempt_id);
+    let retry_id = launch(&mut state, retry);
+    update(
+        &mut state,
+        retry_id,
+        AttemptUpdate::VerificationStarted {
+            workspace_id: Uuid::new_v4(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        update(
+            &mut state,
+            retry_id,
+            AttemptUpdate::Validated {
+                checkpoint: Some("a".repeat(40))
+            },
+        ),
+        Err(FeatureError::Conflict)
+    );
+    update(&mut state, retry_id, AttemptUpdate::Uncertain).unwrap();
+    assert_eq!(
+        apply(&mut state, recover(retry_id)),
+        Err(FeatureError::ExecutionUncertain)
+    );
+    apply(&mut state, observed(retry_id)).unwrap();
+    assert_eq!(state.attempts[1].status, AttemptStatus::Interrupted);
+    assert_eq!(state.attempts[1].pending_verification, None);
+    assert_eq!(
+        state.attempts[1].process_receipt.as_deref(),
+        Some("provider-runtime")
+    );
+}

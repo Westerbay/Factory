@@ -1,7 +1,6 @@
 use super::{
     FeatureCoordinator, bundle, conversation_error,
-    coordinator::{ReservedTask, TaskRequest, TaskResult},
-    workspace_error,
+    coordinator::{ReservedTask, TaskRequest},
 };
 use factory_core::{
     conversations::{
@@ -76,11 +75,7 @@ impl FeatureCoordinator {
             .await
             .map_err(conversation_error)?;
         let prompt = discussion_prompt(self.codec.as_ref(), &state, role, &history, &input)?;
-        let branch = self
-            .workspaces
-            .initialize(&env, &project, id)
-            .await
-            .map_err(workspace_error)?;
+        let branch = self.initialize_verified(actor, &env, &project, id).await?;
         let task = internal_task(
             operation_id,
             role,
@@ -198,25 +193,19 @@ impl FeatureCoordinator {
         {
             return Ok(());
         }
-        let role = if state.current_architecture().is_some() {
-            TaskRole::ArchitectureReview
-        } else {
-            TaskRole::Architecture
-        };
-        let (task, revision, input) = architecture_request(self.codec.as_ref(), state, role)?;
-        if state.attempts.iter().any(|attempt| {
-            attempt.claim.task.id == task.id
-                && attempt.claim.task.role == role
-                && attempt.claim.revision.as_ref() == Some(&revision)
-                && attempt.claim.snapshot_id.is_none()
-        }) {
+        let (role, revision) = architecture_slot(state).ok_or(FeatureError::Conflict)?;
+        if let Some(attempt) = architecture_attempt(state, role, revision) {
+            if role == TaskRole::Architecture && attempt.status == AttemptStatus::Validated {
+                self.restore_architecture(actor, env, state, attempt)
+                    .await?;
+                self.schedule(actor, state.feature.id);
+            }
             return Ok(());
         }
+        let (task, revision, input) = architecture_request(self.codec.as_ref(), state, role)?;
         let branch = self
-            .workspaces
-            .initialize(env, project, state.feature.id)
-            .await
-            .map_err(workspace_error)?;
+            .initialize_verified(actor, env, project, state.feature.id)
+            .await?;
         let attempt_id = Uuid::new_v4();
         let reserved = self
             .reserve_task(
@@ -238,34 +227,27 @@ impl FeatureCoordinator {
         Ok(())
     }
 
-    pub(super) async fn accept_automatic_architecture(
+    async fn restore_architecture(
         &self,
         actor: EnvironmentActor,
-        feature_id: Uuid,
-        result: &TaskResult,
+        env: &Environment,
+        state: &FeatureState,
+        attempt: &TaskAttempt,
     ) -> Result<(), FeatureError> {
-        let (env, _, state) = self.context(actor, feature_id).await?;
-        let raw = result
-            .messages
-            .iter()
-            .rev()
-            .find_map(|message| proposal_part(message).1)
-            .ok_or(FeatureError::Invalid)?;
-        let proposal = self.codec.parse_proposal(raw)?;
-        let FeatureProposal::Architecture { .. } = proposal else {
-            return Err(FeatureError::Invalid);
-        };
-        if state.architecture.is_some() || result.attempt.claim.revision != state.scope {
-            return Err(FeatureError::Conflict);
-        }
-        self.persist_proposal(
-            actor,
-            &env,
-            feature_id,
-            result.attempt.claim.revision.clone(),
-            proposal,
-        )
-        .await
+        let result = attempt.result.as_deref().ok_or(FeatureError::Invalid)?;
+        // Early persisted outcomes included the surrounding message and fence.
+        let raw = proposal_part(result).1.unwrap_or(result);
+        let revision = automatic_architecture(self.codec.as_ref(), attempt, raw)?;
+        self.store
+            .apply(
+                actor,
+                env,
+                state.feature.id,
+                self.codec.derived_id(attempt.id(), "persist-architecture"),
+                FeatureCommand::ProposeRevision(revision),
+            )
+            .await?;
+        Ok(())
     }
 
     async fn persist_proposal(
@@ -558,13 +540,90 @@ fn architecture_protocol() -> &'static str {
 Use UUID strings and existing task UUID strings for prerequisites. Available task roles are Implementation, ComplexImplementation, Visual and Triage. Only implementation roles can own write paths. Assign explicit existing repository test commands and use a trailing slash for a directory scope. At least one task needs a check. If the member is changing an approved product decision, use {"kind":"scope","brief":"updated product brief"} instead and explain the decision. The user approves separately. Do not execute the task graph."#
 }
 
-pub(super) fn valid_architecture_reply(codec: &dyn FeatureCodec, messages: &[String]) -> bool {
-    messages
+fn architecture_slot(state: &FeatureState) -> Option<(TaskRole, &RevisionKey)> {
+    state
+        .current_architecture()
+        .map(|revision| (TaskRole::ArchitectureReview, &revision.key))
+        .or_else(|| {
+            state
+                .current_scope()
+                .map(|revision| (TaskRole::Architecture, &revision.key))
+        })
+}
+
+fn architecture_attempt<'a>(
+    state: &'a FeatureState,
+    role: TaskRole,
+    revision: &RevisionKey,
+) -> Option<&'a TaskAttempt> {
+    state.attempts.iter().rev().find(|attempt| {
+        attempt.claim.task.id == revision.id
+            && attempt.claim.task.role == role
+            && attempt.claim.revision.as_ref() == Some(revision)
+            && attempt.claim.snapshot_id.is_none()
+    })
+}
+
+pub(super) fn architecture_can_continue(state: &FeatureState) -> bool {
+    architecture_slot(state).is_some_and(|(role, revision)| {
+        architecture_attempt(state, role, revision).is_none_or(|attempt| {
+            role == TaskRole::Architecture && attempt.status == AttemptStatus::Validated
+        })
+    })
+}
+
+fn automatic_architecture(
+    codec: &dyn FeatureCodec,
+    attempt: &TaskAttempt,
+    raw: &str,
+) -> Result<GateRevision, FeatureError> {
+    if raw.is_empty() || raw.len() > 32_768 || raw.contains('\0') {
+        return Err(FeatureError::Invalid);
+    }
+    let scope = attempt
+        .claim
+        .revision
+        .clone()
+        .ok_or(FeatureError::Conflict)?;
+    let FeatureProposal::Architecture {
+        summary,
+        diagrams,
+        tasks,
+    } = codec.parse_proposal(raw)?
+    else {
+        return Err(FeatureError::Invalid);
+    };
+    let content = GateContent::Architecture {
+        scope,
+        summary,
+        diagrams,
+        tasks,
+    };
+    let digest = codec.revision_digest(&content)?;
+    Ok(GateRevision {
+        key: RevisionKey {
+            id: codec.derived_id(attempt.id(), "automatic-architecture"),
+            digest,
+        },
+        content,
+        approval: None,
+    })
+}
+
+pub(super) fn complete_architecture_output(
+    codec: &dyn FeatureCodec,
+    state: &FeatureState,
+    attempt: &TaskAttempt,
+    messages: &[String],
+) -> Result<String, FeatureError> {
+    let raw = messages
         .iter()
         .rev()
         .find_map(|message| proposal_part(message).1)
-        .and_then(|value| codec.parse_proposal(value).ok())
-        .is_some_and(|proposal| matches!(proposal, FeatureProposal::Architecture { .. }))
+        .ok_or(FeatureError::Invalid)?;
+    let proposal = automatic_architecture(codec, attempt, raw)?;
+    state.validate_proposal(&proposal)?;
+    Ok(raw.to_owned())
 }
 
 pub(super) fn proposal_part(text: &str) -> (&str, Option<&str>) {
@@ -609,6 +668,165 @@ impl StreamTail {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct FixtureCodec;
+
+    impl FeatureCodec for FixtureCodec {
+        fn parse_proposal(&self, raw: &str) -> Result<FeatureProposal, FeatureError> {
+            let mut task = internal_task(
+                Uuid::from_u128(13),
+                TaskRole::Implementation,
+                "Implement",
+                "Implement the brief.",
+            );
+            task.paths.push("src/".into());
+            task.checks.push("cargo test --locked".into());
+            if raw == "cyclic" {
+                task.depends_on.push(task.id);
+            } else if raw != "complete" {
+                return Err(FeatureError::Invalid);
+            }
+            Ok(FeatureProposal::Architecture {
+                summary: "A design".into(),
+                diagrams: vec![FeatureDiagram {
+                    title: "Boundary".into(),
+                    source: "flowchart TD; A --> B".into(),
+                }],
+                tasks: vec![task],
+            })
+        }
+
+        fn revision_digest(&self, _: &GateContent) -> Result<String, FeatureError> {
+            Ok("a".repeat(64))
+        }
+
+        fn render_revision(&self, _: &GateContent) -> Result<String, FeatureError> {
+            unreachable!()
+        }
+
+        fn parse_review(&self, _: &str) -> Result<FeatureReviewReply, FeatureError> {
+            unreachable!()
+        }
+
+        fn derived_id(&self, _: Uuid, _: &str) -> Uuid {
+            Uuid::from_u128(12)
+        }
+    }
+
+    #[test]
+    fn a_validated_architect_can_restore_the_complete_proposal_after_restart() {
+        let actor = Uuid::from_u128(1);
+        let mut state = FeatureState::new(Feature {
+            id: Uuid::from_u128(2),
+            user_id: actor,
+            project_id: Uuid::from_u128(3),
+            conversation_id: Uuid::from_u128(4),
+            environment_id: Uuid::from_u128(5),
+            provider: "codex".into(),
+            workflow_revision: bundle::WORKFLOW_REVISION.into(),
+            title: "Feature".into(),
+            stage: FeatureStage::Scope,
+            created_at: chrono::Utc::now(),
+        });
+        let apply = |state: &mut FeatureState, command| {
+            state
+                .apply(actor, 1, Uuid::new_v4(), command, chrono::Utc::now())
+                .unwrap();
+        };
+        let scope = RevisionKey {
+            id: Uuid::from_u128(6),
+            digest: "b".repeat(64),
+        };
+        apply(
+            &mut state,
+            FeatureCommand::ProposeRevision(GateRevision {
+                key: scope.clone(),
+                content: GateContent::Scope {
+                    brief: "Approved scope".into(),
+                },
+                approval: None,
+            }),
+        );
+        apply(&mut state, FeatureCommand::ApproveRevision(scope.clone()));
+        assert!(architecture_can_continue(&state));
+
+        let attempt_id = Uuid::from_u128(7);
+        let feature_id = state.feature.id;
+        apply(
+            &mut state,
+            FeatureCommand::ClaimAttempt(AttemptClaim {
+                task: internal_task(scope.id, TaskRole::Architecture, "Plan", "Plan the feature"),
+                revision: Some(scope),
+                workspace: TaskWorkspace {
+                    feature_id,
+                    attempt_id,
+                    base_oid: "b".repeat(40),
+                    access: WorkspaceAccess::ReadOnly,
+                },
+                snapshot_id: None,
+                model: "architect".into(),
+                effort: None,
+                skill_revision: bundle::WORKFLOW_REVISION.into(),
+                retry_of: None,
+            }),
+        );
+        apply(
+            &mut state,
+            FeatureCommand::RecordAttempt {
+                attempt_id,
+                update: AttemptUpdate::LaunchSettled {
+                    process_receipt: Some("worker".into()),
+                },
+            },
+        );
+        let message = |raw: &str| format!("{}\n{MARKER}\n{raw}\n```", "visible ".repeat(4500));
+        assert_eq!(
+            complete_architecture_output(
+                &FixtureCodec,
+                &state,
+                &state.attempts[0],
+                &[message("cyclic")]
+            ),
+            Err(FeatureError::Invalid)
+        );
+        let result = complete_architecture_output(
+            &FixtureCodec,
+            &state,
+            &state.attempts[0],
+            &[message("complete")],
+        )
+        .unwrap();
+        assert_eq!(result, "complete");
+        apply(
+            &mut state,
+            FeatureCommand::RecordAttempt {
+                attempt_id,
+                update: AttemptUpdate::Result { text: result },
+            },
+        );
+        apply(
+            &mut state,
+            FeatureCommand::RecordAttempt {
+                attempt_id,
+                update: AttemptUpdate::Validated { checkpoint: None },
+            },
+        );
+        assert!(architecture_can_continue(&state));
+        let stored_attempt = architecture_attempt(
+            &state,
+            TaskRole::Architecture,
+            state.scope.as_ref().unwrap(),
+        )
+        .unwrap();
+        let recovered = automatic_architecture(
+            &FixtureCodec,
+            stored_attempt,
+            stored_attempt.result.as_deref().unwrap(),
+        )
+        .unwrap();
+        apply(&mut state, FeatureCommand::ProposeRevision(recovered));
+        assert!(state.current_architecture().is_some());
+    }
 
     #[test]
     fn a_split_marker_does_not_leak_the_internal_task_graph() {

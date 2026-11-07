@@ -2,7 +2,7 @@ use super::*;
 use crate::environments::{POLICY_VERSION, PreparationMetadata, fixture, policy::labels};
 use bollard::exec::{CreateExecOptions, StartExecResults};
 use chrono::Utc;
-use factory_core::features::WorkspaceAccess;
+use factory_core::features::{AttemptClaim, AttemptStatus, FeatureTask, TaskRole, WorkspaceAccess};
 use factory_core::{conversations::execution::ExecutionEvent, environments::*};
 use futures_util::FutureExt;
 use serde_json::json;
@@ -211,25 +211,91 @@ except OSError as error:
                         break;
                     }
                 }
-                assert!(runtime.inspect_feature_worker(&process_receipt).await.unwrap().is_none());
+                // The application never acknowledged a saved launch. An exit
+                // must remain available for recovery, including repeated reads.
+                let feature_runtime = DockerFeatureExecutionRuntime::new(runtime.clone());
+                let mut prior = TaskAttempt {
+                    claim: AttemptClaim {
+                        task: FeatureTask {
+                            id: Uuid::new_v4(), title: "fixture".into(), instructions: "fixture".into(),
+                            role: TaskRole::GeneralReview, paths: vec![], depends_on: vec![], checks: vec![],
+                        },
+                        revision: None, workspace: workspace.clone(), snapshot_id: None,
+                        model: model.into(), effort: None, skill_revision: "fixture".into(), retry_of: None,
+                    },
+                    generation: env.generation, status: AttemptStatus::Uncertain, launch_settled: false,
+                    process_receipt: None, provider_thread: None, observed_model: None, activity: None,
+                    result: None, checkpoint: None, pending_verification: None,
+                };
+                let proof_observation = TaskObservation::StoppedWithWorkerProof { worker_id: process_receipt.clone() };
+                for _ in 0..2 {
+                    assert_eq!(feature_runtime.reconcile_task(&env, &project, &prior).await.unwrap(), proof_observation);
+                }
+
                 let check = WorkerIdentity::new(&env, &project, &workspace, env.generation, Role::Check).unwrap();
+                let body = check_body(&check, &env, "exit 0").unwrap();
+                let created = runtime.docker.create_container(
+                    Some(CreateContainerOptions { name: Some(check.name.clone()), ..Default::default() }), body
+                ).await.unwrap();
+                assert_eq!(feature_runtime.reconcile_task(&env, &project, &prior).await.unwrap(), TaskObservation::Unknown);
+                assert!(runtime.inspect_feature_worker(&created.id).await.unwrap().is_some());
+                runtime.stop_feature_workers(&env).await.unwrap();
+                assert!(runtime.inspect_feature_worker(&created.id).await.unwrap().is_none());
+                assert_eq!(feature_runtime.reconcile_task(&env, &project, &prior).await.unwrap(), proof_observation);
+                prior.pending_verification = Some(workspace.attempt_id);
+                prior.launch_settled = true;
+                assert_eq!(feature_runtime.reconcile_task(&env, &project, &prior).await.unwrap(), TaskObservation::Unknown);
+                prior.pending_verification = None;
+
+                prior.process_receipt = Some(process_receipt.clone());
+                assert_eq!(feature_runtime.reconcile_task(&env, &project, &prior).await.unwrap(), TaskObservation::Stopped);
+                assert!(runtime.inspect_feature_worker(&process_receipt).await.unwrap().is_none());
+                prior.launch_settled = false;
+                prior.process_receipt = None;
+                assert_eq!(feature_runtime.reconcile_task(&env, &project, &prior).await.unwrap(), TaskObservation::Unknown);
                 let body = check_body(&check, &env, "printf should-not-run; exit 7").unwrap();
                 let (process, exit) = runtime.create_feature_worker(&env, &check, body, None, "0:0").await.unwrap();
                 let rejected = collect_check(process, exit).await.unwrap();
                 assert_eq!(rejected.exit_code, 1);
                 assert!(rejected.output.is_empty());
+                feature_runtime.acknowledge_check(&env, &project, &workspace).await.unwrap();
                 let body = check_body(&check, &env, "printf observed; exit 7").unwrap();
                 let (process, exit) = runtime.create_feature_worker(&env, &check, body, None, proof).await.unwrap();
+                let check_id = process.id.clone();
                 let output = collect_check(process, exit).await.unwrap();
                 assert_eq!(output.exit_code, 7);
                 assert_eq!(output.output, "observed");
+                prior.pending_verification = Some(workspace.attempt_id);
+                assert_eq!(
+                    feature_runtime.reconcile_task(&env, &project, &prior).await.unwrap(),
+                    TaskObservation::StoppedWithWorkerProof { worker_id: check_id.clone() }
+                );
+                for _ in 0..2 {
+                    feature_runtime.acknowledge_check(&env, &project, &workspace).await.unwrap();
+                }
+                assert!(runtime.inspect_feature_worker(&check_id).await.unwrap().is_none());
             } else {
-                runtime.stop(&env).await.unwrap();
-                assert!(runtime.inspect_feature_worker(&process_receipt).await.unwrap().is_none());
+                runtime.docker.stop_container(main_id, Some(StopContainerOptions {
+                    t: Some(2), ..Default::default()
+                })).await.unwrap();
+                let mut stopping = env.clone();
+                stopping.desired_state = DesiredState::Stopped;
+                assert_eq!(runtime.inspect(&stopping).await.unwrap().state, ObservedState::Stopping);
+                runtime.stop(&stopping).await.unwrap();
+                let stopped = runtime.inspect_feature_worker(&process_receipt).await.unwrap().unwrap();
+                assert_eq!(stopped["State"]["Status"], "exited");
+                assert_eq!(stopped["State"]["Running"], false);
+                assert_eq!(runtime.inspect(&stopping).await.unwrap().state, ObservedState::Stopped);
             }
         }
     }).catch_unwind().await;
     runtime.stop_feature_workers(&env).await.unwrap();
+    for id in runtime.list_feature_worker_ids(&env).await.unwrap() {
+        if let Some(value) = runtime.inspect_feature_worker(&id).await.unwrap() {
+            verify_worker_owner(&env, &value, &id).unwrap();
+            runtime.remove_feature_worker(&id).await.unwrap();
+        }
+    }
     fixture::cleanup(&runtime, &[&env]).await;
     outcome.unwrap();
 }

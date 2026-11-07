@@ -66,7 +66,12 @@ impl FeatureState {
             FeatureCommand::RecoverAttempt {
                 attempt_id,
                 launch_generation,
-            } => self.recover_attempt(attempt_id, launch_generation, generation),
+            } => self.recover_attempt(attempt_id, launch_generation, generation, None),
+            FeatureCommand::RecoverObservedAttempt {
+                attempt_id,
+                launch_generation,
+                worker_id,
+            } => self.recover_attempt(attempt_id, launch_generation, generation, Some(worker_id)),
             FeatureCommand::SaveRetryBase {
                 attempt_id,
                 base_oid,
@@ -153,8 +158,9 @@ impl FeatureState {
         self.revisions.iter().find(|revision| revision.key == *key)
     }
 
-    fn propose(&mut self, revision: GateRevision) -> Result<(), FeatureError> {
-        self.ensure_idle()?;
+    /// Validate the member-facing proposal without requiring an idle run. The
+    /// eventual transition still checks live execution and delivery reservations.
+    pub fn validate_proposal(&self, revision: &GateRevision) -> Result<(), FeatureError> {
         require(
             self.feature.stage != FeatureStage::Draft,
             FeatureError::Conflict,
@@ -171,12 +177,7 @@ impl FeatureState {
             FeatureError::Conflict,
         )?;
         match &revision.content {
-            GateContent::Scope { brief } => {
-                require(text(brief, 65_536), FeatureError::Invalid)?;
-                self.scope = Some(revision.key.clone());
-                self.architecture = None;
-                self.feature.stage = FeatureStage::Scope;
-            }
+            GateContent::Scope { brief } => require(text(brief, 65_536), FeatureError::Invalid),
             GateContent::Architecture {
                 scope,
                 summary,
@@ -198,7 +199,21 @@ impl FeatureState {
                         }),
                     FeatureError::Invalid,
                 )?;
-                validate_task_graph(tasks)?;
+                validate_task_graph(tasks)
+            }
+        }
+    }
+
+    fn propose(&mut self, revision: GateRevision) -> Result<(), FeatureError> {
+        self.ensure_idle()?;
+        self.validate_proposal(&revision)?;
+        match revision.content {
+            GateContent::Scope { .. } => {
+                self.scope = Some(revision.key.clone());
+                self.architecture = None;
+                self.feature.stage = FeatureStage::Scope;
+            }
+            GateContent::Architecture { .. } => {
                 self.architecture = Some(revision.key.clone());
                 self.feature.stage = FeatureStage::Architecture;
             }
@@ -299,6 +314,7 @@ impl FeatureState {
             activity: None,
             result: None,
             checkpoint: None,
+            pending_verification: None,
         });
         Ok(())
     }
@@ -438,7 +454,11 @@ impl FeatureState {
         id: Uuid,
         launch_generation: i64,
         generation: i64,
+        worker_id: Option<String>,
     ) -> Result<(), FeatureError> {
+        if let Some(id) = &worker_id {
+            require(hex(id, 64), FeatureError::Invalid)?;
+        }
         let attempt = self
             .attempts
             .iter_mut()
@@ -448,9 +468,18 @@ impl FeatureState {
             generation >= launch_generation && attempt.status.holds_reservation(),
             FeatureError::Conflict,
         )?;
-        // The caller must have established the launch settled and the worker stopped
-        // using the runtime receipt. A stopped container alone is insufficient.
-        require(attempt.launch_settled, FeatureError::ExecutionUncertain)?;
+        if let Some(worker_id) = worker_id {
+            if !attempt.launch_settled {
+                attempt.launch_settled = true;
+                attempt.process_receipt = Some(worker_id);
+            }
+            attempt.pending_verification = None;
+        } else {
+            require(
+                attempt.launch_settled && attempt.pending_verification.is_none(),
+                FeatureError::ExecutionUncertain,
+            )?;
+        }
         attempt.status = AttemptStatus::Interrupted;
         Ok(())
     }
@@ -764,9 +793,28 @@ impl TaskAttempt {
                 require(text(&result, 32_768), FeatureError::Invalid)?;
                 self.result = Some(result);
             }
+            AttemptUpdate::VerificationStarted { workspace_id } => {
+                require(
+                    self.status == AttemptStatus::Running
+                        && self.launch_settled
+                        && self.pending_verification.is_none()
+                        && !workspace_id.is_nil()
+                        && !self.claim.task.checks.is_empty(),
+                    FeatureError::Conflict,
+                )?;
+                self.pending_verification = Some(workspace_id);
+            }
+            AttemptUpdate::VerificationSettled => {
+                require(
+                    self.status == AttemptStatus::Running && self.pending_verification.is_some(),
+                    FeatureError::Conflict,
+                )?;
+                self.pending_verification = None;
+            }
             AttemptUpdate::Validated { checkpoint } => {
                 require(
                     self.status == AttemptStatus::Running
+                        && self.pending_verification.is_none()
                         && (!self.claim.task.role.is_reviewer() || self.result.is_some()),
                     FeatureError::Conflict,
                 )?;
@@ -782,7 +830,9 @@ impl TaskAttempt {
             }
             AttemptUpdate::Failed { reason } => {
                 require(
-                    self.launch_settled && self.status != AttemptStatus::Uncertain,
+                    self.launch_settled
+                        && self.pending_verification.is_none()
+                        && self.status != AttemptStatus::Uncertain,
                     FeatureError::ExecutionUncertain,
                 )?;
                 require(text(&reason, 4096), FeatureError::Invalid)?;
@@ -793,6 +843,7 @@ impl TaskAttempt {
                 require(
                     self.status == AttemptStatus::Running
                         && self.launch_settled
+                        && self.pending_verification.is_none()
                         && self.claim.workspace.access == WorkspaceAccess::Write
                         && valid_oid(&retry_base)
                         && retry_base != self.claim.workspace.base_oid,
@@ -805,7 +856,9 @@ impl TaskAttempt {
             }
             AttemptUpdate::Interrupted => {
                 require(
-                    self.launch_settled && self.status != AttemptStatus::Uncertain,
+                    self.launch_settled
+                        && self.pending_verification.is_none()
+                        && self.status != AttemptStatus::Uncertain,
                     FeatureError::ExecutionUncertain,
                 )?;
                 self.status = AttemptStatus::Interrupted;

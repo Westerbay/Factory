@@ -13,9 +13,10 @@ use factory_core::{
     conversations::ConversationError,
     environments::{Environment, EnvironmentActor},
     features::{
-        AttemptStatus, FeatureCodec, FeatureCommand, FeatureError, FeatureExecutionRuntime,
-        FeaturePage, FeatureStage, FeatureState, FeatureStore, FeatureWorkspaceRuntime, NewFeature,
-        RevisionKey, TaskRole, WorkspaceError,
+        AttemptStatus, FeatureBranch, FeatureCodec, FeatureCommand, FeatureError,
+        FeatureExecutionRuntime, FeaturePage, FeatureRepositoryVerifier, FeatureStage,
+        FeatureState, FeatureStore, FeatureWorkspaceRuntime, NewFeature, RevisionKey, TaskRole,
+        WorkspaceError,
     },
     projects::Project,
 };
@@ -31,6 +32,7 @@ pub struct FeatureCoordinator {
     pub(super) workspaces: Arc<dyn FeatureWorkspaceRuntime>,
     pub(super) runtime: Arc<dyn FeatureExecutionRuntime>,
     pub(super) codec: Arc<dyn FeatureCodec>,
+    repository_verifier: Arc<dyn FeatureRepositoryVerifier>,
     drivers: Mutex<HashMap<Uuid, Weak<tokio::sync::Mutex<()>>>>,
     local_attempts: LocalAttempts,
 }
@@ -42,6 +44,7 @@ impl FeatureCoordinator {
         workspaces: Arc<dyn FeatureWorkspaceRuntime>,
         runtime: Arc<dyn FeatureExecutionRuntime>,
         codec: Arc<dyn FeatureCodec>,
+        repository_verifier: Arc<dyn FeatureRepositoryVerifier>,
     ) -> Arc<Self> {
         Arc::new(Self {
             store,
@@ -49,6 +52,7 @@ impl FeatureCoordinator {
             workspaces,
             runtime,
             codec,
+            repository_verifier,
             drivers: Mutex::new(HashMap::new()),
             local_attempts: LocalAttempts::default(),
         })
@@ -170,6 +174,23 @@ impl FeatureCoordinator {
         let driver = Arc::new(tokio::sync::Mutex::new(()));
         drivers.insert(feature, Arc::downgrade(&driver));
         Ok(driver)
+    }
+
+    pub(super) async fn initialize_verified(
+        &self,
+        actor: EnvironmentActor,
+        env: &Environment,
+        project: &Project,
+        feature_id: Uuid,
+    ) -> Result<FeatureBranch, FeatureError> {
+        self.repository_verifier.verify(actor, env, project).await?;
+        let branch = self
+            .workspaces
+            .initialize(env, project, feature_id)
+            .await
+            .map_err(workspace_error)?;
+        self.repository_verifier.verify(actor, env, project).await?;
+        Ok(branch)
     }
 
     pub(super) async fn context(

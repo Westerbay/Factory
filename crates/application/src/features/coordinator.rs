@@ -23,7 +23,6 @@ pub(super) struct TaskRequest {
 
 pub(super) struct TaskResult {
     pub attempt: TaskAttempt,
-    pub messages: Vec<String>,
 }
 
 pub(super) struct ReservedTask {
@@ -414,7 +413,7 @@ impl FeatureCoordinator {
             let _ = session.control.interrupt().await;
         }
         let attempt = self.record(&task, terminal).await?;
-        Ok(TaskResult { attempt, messages })
+        Ok(TaskResult { attempt })
     }
 
     async fn validate_completed(&self, task: &ReservedTask, messages: &[String]) -> AttemptUpdate {
@@ -455,14 +454,31 @@ impl FeatureCoordinator {
                 };
             };
             reply.trim().to_owned()
-        } else {
-            if role == TaskRole::Architecture
-                && !super::discussion::valid_architecture_reply(self.codec.as_ref(), messages)
+        } else if role == TaskRole::Architecture {
+            let state = match self
+                .store
+                .get(task.actor, task.attempt.claim.workspace.feature_id)
+                .await
             {
-                return AttemptUpdate::Failed {
-                    reason: "The architect did not return a structured proposal".into(),
-                };
+                Ok(state) => state,
+                Err(_) => return AttemptUpdate::Uncertain,
+            };
+            match super::discussion::complete_architecture_output(
+                self.codec.as_ref(),
+                &state,
+                &task.attempt,
+                messages,
+            ) {
+                Ok(result) => result,
+                Err(_) => {
+                    return AttemptUpdate::Failed {
+                        reason:
+                            "The architect did not return a complete, valid proposal and task graph"
+                                .into(),
+                    };
+                }
             }
+        } else {
             bounded(&messages.join("\n\n"), 32_768)
         };
         if result.trim().is_empty() {
@@ -479,7 +495,13 @@ impl FeatureCoordinator {
             return AttemptUpdate::Uncertain;
         }
         if task.attempt.claim.workspace.access == WorkspaceAccess::ReadOnly {
-            return AttemptUpdate::Validated { checkpoint: None };
+            return match self
+                .verify_task(task, &task.attempt.claim.workspace.base_oid)
+                .await
+            {
+                Ok(()) => AttemptUpdate::Validated { checkpoint: None },
+                Err(outcome) => outcome,
+            };
         }
         match self.validate_writer(task).await {
             Ok(checkpoint) => AttemptUpdate::Validated {
@@ -489,14 +511,51 @@ impl FeatureCoordinator {
         }
     }
 
-    async fn validate_writer(&self, task: &ReservedTask) -> Result<String, AttemptUpdate> {
+    async fn verify_task(&self, task: &ReservedTask, base_oid: &str) -> Result<(), AttemptUpdate> {
         let scope = &task.attempt.claim.workspace;
-        for command in &task.attempt.claim.task.checks {
-            match self
-                .runtime
-                .run_check(&task.env, &task.project, scope, command)
+        for (index, command) in task.attempt.claim.task.checks.iter().enumerate() {
+            let workspace = TaskWorkspace {
+                feature_id: scope.feature_id,
+                attempt_id: self
+                    .codec
+                    .derived_id(scope.attempt_id, &format!("task-verification-{index}")),
+                base_oid: base_oid.to_owned(),
+                access: WorkspaceAccess::Write,
+            };
+            self.workspaces
+                .prepare_task(&task.env, &task.project, &workspace)
                 .await
-            {
+                .map_err(workspace_failure)?;
+            self.record(
+                task,
+                AttemptUpdate::VerificationStarted {
+                    workspace_id: workspace.attempt_id,
+                },
+            )
+            .await
+            .map_err(|_| AttemptUpdate::Uncertain)?;
+            let result = self
+                .runtime
+                .run_check(&task.env, &task.project, &workspace, command)
+                .await;
+            if matches!(
+                result,
+                Err(ExecutionError::LaunchUncertain | ExecutionError::CleanupUncertain)
+            ) {
+                return Err(AttemptUpdate::Uncertain);
+            }
+            self.record(task, AttemptUpdate::VerificationSettled)
+                .await
+                .map_err(|_| AttemptUpdate::Uncertain)?;
+            if result.is_ok() {
+                self.runtime
+                    .acknowledge_check(&task.env, &task.project, &workspace)
+                    .await
+                    .map_err(|error| AttemptUpdate::Failed {
+                        reason: error.to_string(),
+                    })?;
+            }
+            match result {
                 Ok(result) if result.exit_code == 0 => {}
                 Ok(result) => {
                     return Err(AttemptUpdate::Failed {
@@ -509,9 +568,6 @@ impl FeatureCoordinator {
                         ),
                     });
                 }
-                Err(ExecutionError::LaunchUncertain | ExecutionError::CleanupUncertain) => {
-                    return Err(AttemptUpdate::Uncertain);
-                }
                 Err(error) => {
                     return Err(AttemptUpdate::Failed {
                         reason: error.to_string(),
@@ -519,20 +575,17 @@ impl FeatureCoordinator {
                 }
             }
         }
-        let failure = |error: WorkspaceError| {
-            if error == WorkspaceError::Uncertain {
-                AttemptUpdate::Uncertain
-            } else {
-                AttemptUpdate::Failed {
-                    reason: error.to_string(),
-                }
-            }
-        };
+        Ok(())
+    }
+
+    async fn validate_writer(&self, task: &ReservedTask) -> Result<String, AttemptUpdate> {
+        let scope = &task.attempt.claim.workspace;
         let checkpoint = self
             .workspaces
             .checkpoint(&task.env, &task.project, &task.attempt)
             .await
-            .map_err(failure)?;
+            .map_err(workspace_failure)?;
+        self.verify_task(task, &checkpoint).await?;
         // The controller compares the expected head. A moved head is a normal
         // race between independent writers, so inspect it again before retrying.
         for _ in 0..64 {
@@ -540,7 +593,7 @@ impl FeatureCoordinator {
                 .workspaces
                 .snapshot(&task.env, &task.project, scope.feature_id)
                 .await
-                .map_err(failure)?;
+                .map_err(workspace_failure)?;
             match self
                 .workspaces
                 .integrate(
@@ -557,10 +610,10 @@ impl FeatureCoordinator {
                         .workspaces
                         .snapshot(&task.env, &task.project, scope.feature_id)
                         .await
-                        .map_err(failure)?;
+                        .map_err(workspace_failure)?;
                     if latest.git.head_oid == current.git.head_oid {
                         return if latest.git.head_oid == scope.base_oid {
-                            Err(failure(WorkspaceError::Conflict))
+                            Err(workspace_failure(WorkspaceError::Conflict))
                         } else {
                             Err(AttemptUpdate::IntegrationConflict {
                                 retry_base: latest.git.head_oid,
@@ -568,10 +621,44 @@ impl FeatureCoordinator {
                         };
                     }
                 }
-                Err(error) => return Err(failure(error)),
+                Err(error) => return Err(workspace_failure(error)),
             }
         }
-        Err(failure(WorkspaceError::Conflict))
+        Err(workspace_failure(WorkspaceError::Conflict))
+    }
+
+    pub async fn continue_feature(
+        self: &Arc<Self>,
+        actor: EnvironmentActor,
+        feature: Uuid,
+        operation_id: Uuid,
+    ) -> Result<FeatureState, FeatureError> {
+        if operation_id.is_nil() {
+            return Err(FeatureError::Invalid);
+        }
+        let (_, _, state) = self.context(actor, feature).await?;
+        if !can_drive(&state) {
+            return Ok(state);
+        }
+        let Ok(guard) = self.driver(feature)?.try_lock_owned() else {
+            return Ok(state);
+        };
+        let owner = self.clone();
+        self.conversations.spawn(Box::pin(async move {
+            let _drive = guard;
+            let _ = owner.drive(actor, feature).await;
+        }));
+        Ok(state)
+    }
+
+    pub fn can_continue(&self, state: &FeatureState) -> bool {
+        can_drive(state)
+            && self.drivers.lock().is_ok_and(|drivers| {
+                drivers
+                    .get(&state.feature.id)
+                    .and_then(std::sync::Weak::upgrade)
+                    .is_none_or(|driver| driver.try_lock().is_ok())
+            })
     }
 
     pub(super) fn schedule(self: &Arc<Self>, actor: EnvironmentActor, feature: Uuid) {
@@ -591,6 +678,9 @@ impl FeatureCoordinator {
         feature: Uuid,
     ) -> Result<(), FeatureError> {
         let (env, project, state) = self.context(actor, feature).await?;
+        if has_stale_draft(&state) {
+            return Ok(());
+        }
         match state.feature.stage {
             FeatureStage::Architecture => {
                 return self
@@ -659,27 +749,97 @@ impl FeatureCoordinator {
         }
         let actor = reserved.actor;
         let feature = reserved.attempt.claim.workspace.feature_id;
-        let role = reserved.attempt.claim.task.role;
         let owner = self.clone();
         self.conversations.spawn(Box::pin(async move {
-            if let Ok(result) = owner.run_reserved(reserved).await {
-                if result.attempt.status == AttemptStatus::Validated
-                    && role == TaskRole::Architecture
-                {
-                    let _ = owner
-                        .accept_automatic_architecture(actor, feature, &result)
-                        .await;
-                }
+            if owner.run_reserved(reserved).await.is_ok() {
                 owner.schedule(actor, feature);
             }
         }));
     }
 }
 
-pub(super) fn task_prompt(
-    state: &FeatureState,
-    task: &FeatureTask,
-) -> Result<String, FeatureError> {
+fn has_stale_draft(state: &FeatureState) -> bool {
+    state
+        .deliveries
+        .iter()
+        .any(|receipt| matches!(receipt.status, DeliveryStatus::PublishedStale { .. }))
+}
+
+fn can_drive(state: &FeatureState) -> bool {
+    if has_stale_draft(state)
+        || state
+            .attempts
+            .iter()
+            .any(|attempt| attempt.status.holds_reservation())
+    {
+        return false;
+    }
+    match state.feature.stage {
+        FeatureStage::Architecture => super::discussion::architecture_can_continue(state),
+        FeatureStage::Execution => execution_can_continue(state),
+        FeatureStage::Review => review_can_continue(state),
+        _ => false,
+    }
+}
+
+fn execution_can_continue(state: &FeatureState) -> bool {
+    let Some(architecture) = state.current_architecture() else {
+        return false;
+    };
+    let GateContent::Architecture { tasks, .. } = &architecture.content else {
+        return false;
+    };
+    let completed = |id| {
+        latest_code_attempt(state, &architecture.key, id)
+            .is_some_and(|attempt| attempt.status == AttemptStatus::Validated)
+    };
+    if tasks.iter().any(|task| {
+        latest_code_attempt(state, &architecture.key, task.id).is_none()
+            && task.depends_on.iter().all(|id| completed(*id))
+    }) {
+        return true;
+    }
+    tasks.iter().all(|task| completed(task.id))
+        && state.review().is_none_or(|round| {
+            state
+                .attempts
+                .iter()
+                .rev()
+                .find(|attempt| {
+                    attempt.claim.snapshot_id == Some(round.snapshot.id)
+                        && attempt.claim.task.role == TaskRole::Correction
+                })
+                .is_none_or(|attempt| attempt.status == AttemptStatus::Validated)
+        })
+}
+
+fn review_can_continue(state: &FeatureState) -> bool {
+    let Some(round) = state.review() else {
+        return true;
+    };
+    if let Some(verdict) = &round.verdict {
+        return verdict.ready()
+            || state
+                .reviews
+                .iter()
+                .filter(|review| review.architecture == round.architecture)
+                .count()
+                < 2 + state.additional_review_rounds as usize;
+    }
+    round.required_roles.iter().all(|role| {
+        state
+            .attempts
+            .iter()
+            .rev()
+            .find(|attempt| {
+                attempt.claim.snapshot_id == Some(round.snapshot.id)
+                    && attempt.claim.task.role == *role
+            })
+            .is_none_or(|attempt| attempt.status == AttemptStatus::Validated)
+    })
+}
+
+pub(super) fn approved_context(state: &FeatureState) -> Result<String, FeatureError> {
     let scope = state.current_scope().ok_or(FeatureError::Conflict)?;
     let architecture = state.current_architecture().ok_or(FeatureError::Conflict)?;
     let GateContent::Scope { brief } = &scope.content else {
@@ -696,13 +856,33 @@ pub(super) fn task_prompt(
         use std::fmt::Write;
         let _ = writeln!(diagram_text, "\n{}:\n{}", diagram.title, diagram.source);
     }
+    Ok(format!(
+        "Approved product brief:\n{brief}\n\nApproved design:\n{summary}\n{diagram_text}"
+    ))
+}
+
+pub(super) fn task_prompt(
+    state: &FeatureState,
+    task: &FeatureTask,
+) -> Result<String, FeatureError> {
+    let context = approved_context(state)?;
     let paths = task.paths.join(", ");
     let checks = task.checks.join("\n");
     let role = bundle::role_instructions(task.role);
     Ok(format!(
-        "{role}\n\nApproved product brief:\n{brief}\n\nApproved design:\n{summary}\n{diagram_text}\n\nTask: {}\n{}\nOwned paths: {paths}\nApproved checks:\n{checks}",
+        "{role}\n\n{context}\n\nTask: {}\n{}\nOwned paths: {paths}\nApproved checks:\n{checks}",
         task.title, task.instructions
     ))
+}
+
+fn workspace_failure(error: WorkspaceError) -> AttemptUpdate {
+    if error == WorkspaceError::Uncertain {
+        AttemptUpdate::Uncertain
+    } else {
+        AttemptUpdate::Failed {
+            reason: error.to_string(),
+        }
+    }
 }
 
 fn latest_code_attempt<'a>(
@@ -726,8 +906,7 @@ fn find_attempt(state: FeatureState, id: Uuid) -> Result<TaskAttempt, FeatureErr
 }
 
 fn saved_result(attempt: TaskAttempt) -> TaskResult {
-    let messages = attempt.result.iter().cloned().collect();
-    TaskResult { attempt, messages }
+    TaskResult { attempt }
 }
 
 pub(super) fn bounded(text: &str, limit: usize) -> String {

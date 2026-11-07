@@ -47,12 +47,36 @@ impl FeatureCoordinator {
             .clone();
         let reconciled = prior.status.holds_reservation();
         if reconciled {
-            if self.is_attempt_locally_active(id, attempt_id)
-                || self.runtime.reconcile_task(&env, &project, &prior).await
-                    != Ok(TaskObservation::Stopped)
-            {
+            if self.is_attempt_locally_active(id, attempt_id) {
                 return Err(FeatureError::ExecutionUncertain);
             }
+            // A pending check has its own launch. The provider's settlement
+            // does not prove that an unseen check launch failed to reach Docker.
+            let mut worker = prior.clone();
+            if let Some(check_id) = prior.pending_verification {
+                worker.claim.workspace.attempt_id = check_id;
+                worker.claim.workspace.access = WorkspaceAccess::Write;
+                worker.launch_settled = false;
+                worker.process_receipt = None;
+            }
+            let observation = self.runtime.reconcile_task(&env, &project, &worker).await;
+            let command = match observation {
+                Ok(TaskObservation::StoppedWithWorkerProof { worker_id }) => {
+                    FeatureCommand::RecoverObservedAttempt {
+                        attempt_id,
+                        launch_generation: prior.generation,
+                        worker_id,
+                    }
+                }
+                Ok(TaskObservation::Stopped) if prior.pending_verification.is_none() => {
+                    FeatureCommand::RecoverAttempt {
+                        attempt_id,
+                        launch_generation: prior.generation,
+                    }
+                }
+                _ => return Err(FeatureError::ExecutionUncertain),
+            };
+            let observed_worker = matches!(&command, FeatureCommand::RecoverObservedAttempt { .. });
             // Close the visible conversation only when it was bound to this
             // attempt in the current environment. The existing Stop recovery
             // handles older conversation generations.
@@ -67,6 +91,13 @@ impl FeatureCoordinator {
                     && run.environment_generation == env.generation
                     && matches!(run.status, RunStatus::Active | RunStatus::Uncertain)
             }) {
+                if observed_worker {
+                    self.conversations
+                        .service
+                        .settle_run_launch(run.id, &env)
+                        .await
+                        .map_err(conversation_error)?;
+                }
                 self.conversations
                     .service
                     .finish_turn(actor, &env, run.id, RunStatus::Interrupted)
@@ -79,14 +110,17 @@ impl FeatureCoordinator {
                     actor,
                     &env,
                     id,
-                    Uuid::new_v4(),
-                    FeatureCommand::RecoverAttempt {
-                        attempt_id,
-                        launch_generation: prior.generation,
-                    },
+                    self.codec.derived_id(attempt_id, "recover-stopped"),
+                    command,
                 )
                 .await?
                 .state;
+            if observed_worker {
+                // Retain the proof until the durable recovery above succeeds.
+                worker.launch_settled = true;
+                worker.pending_verification = None;
+                let _ = self.runtime.reconcile_task(&env, &project, &worker).await;
+            }
             prior = state
                 .attempts
                 .iter()
@@ -105,8 +139,11 @@ impl FeatureCoordinator {
         if prior.claim.workspace.access == WorkspaceAccess::Write && prior.checkpoint.is_none() {
             if !reconciled
                 && (self.is_attempt_locally_active(id, attempt_id)
-                    || self.runtime.reconcile_task(&env, &project, &prior).await
-                        != Ok(TaskObservation::Stopped))
+                    || !matches!(
+                        self.runtime.reconcile_task(&env, &project, &prior).await,
+                        Ok(TaskObservation::Stopped
+                            | TaskObservation::StoppedWithWorkerProof { .. })
+                    ))
             {
                 return Err(FeatureError::ExecutionUncertain);
             }
@@ -163,7 +200,7 @@ impl FeatureCoordinator {
                 if diff.git != round.snapshot.git {
                     return Err(FeatureError::StaleSnapshot);
                 }
-                review_input(&diff)
+                review_input(&state, &diff)?
             }
         } else if matches!(
             claim.task.role,

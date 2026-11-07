@@ -1,4 +1,7 @@
-use super::{FeatureCoordinator, coordinator::TaskRequest};
+use super::{
+    FeatureCoordinator,
+    coordinator::{TaskRequest, approved_context},
+};
 use factory_core::{
     environments::{Environment, EnvironmentActor},
     features::{
@@ -30,6 +33,9 @@ pub(super) fn parse_reply(
     let reply = codec.parse_review(source)?;
     if reply.patch_digest != expected_digest {
         return Err(FeatureError::StaleSnapshot);
+    }
+    if !reply.complete {
+        return Err(FeatureError::ReviewBlocked);
     }
     if reply.findings.len() > 32
         || reply.findings.iter().any(|finding| {
@@ -330,6 +336,7 @@ impl FeatureCoordinator {
         });
         let (sender, mut finished) = mpsc::channel(4);
         let shared = Arc::new(feature.clone());
+        let input = review_input(feature, diff)?;
         for role in roles {
             let task_id = self
                 .codec
@@ -351,7 +358,7 @@ impl FeatureCoordinator {
                 snapshot_id: Some(round.snapshot.id),
                 base_oid: round.snapshot.git.head_oid.clone(),
                 retry_of: None,
-                input: review_input(diff),
+                input: input.clone(),
             };
             let owner = self.clone();
             let feature = shared.clone();
@@ -387,11 +394,20 @@ impl FeatureCoordinator {
                 access: WorkspaceAccess::Write,
             };
             let passed = match self.workspaces.prepare_task(env, project, &workspace).await {
-                Ok(()) => self
+                Ok(()) => match self
                     .runtime
                     .run_check(env, project, &workspace, command)
                     .await
-                    .is_ok_and(|result| result.exit_code == 0),
+                {
+                    Ok(result) => {
+                        let acknowledged = self
+                            .runtime
+                            .acknowledge_check(env, project, &workspace)
+                            .await;
+                        result.exit_code == 0 && acknowledged.is_ok()
+                    }
+                    Err(_) => false,
+                },
                 Err(_) => false,
             };
             checks.push(ReviewCheck {
@@ -527,11 +543,16 @@ fn review_roles(diff: &WorkspaceDiff) -> Vec<TaskRole> {
     roles
 }
 
-pub(super) fn review_input(diff: &WorkspaceDiff) -> String {
-    format!(
-        "Review the immutable integrated change in /workspace/checkout. Inspect it with git -C /workspace/checkout diff --no-ext-diff --no-textconv {} {}. Consider useful simplifications while preserving the approved design. Include file and line evidence in the summary. Return exactly one JSON object: {{\"patchDigest\":\"{}\",\"findings\":[{{\"summary\":\"path:line and concrete finding\",\"blocking\":true}}]}}. Use an empty array if you have no verified findings. Do not rely on other agents' verdicts.",
+pub(super) fn review_input(
+    feature: &FeatureState,
+    diff: &WorkspaceDiff,
+) -> Result<String, FeatureError> {
+    let approved = approved_context(feature)?;
+    let input = format!(
+        "Review the immutable integrated change in /workspace/checkout. Inspect it with git -C /workspace/checkout diff --no-ext-diff --no-textconv {} {}. Check behavior against the approved brief and design below. Consider useful simplifications and include file and line evidence. Return exactly one JSON object: {{\"patchDigest\":\"{}\",\"coverage\":\"complete\",\"findings\":[{{\"summary\":\"path:line and concrete finding\",\"blocking\":true}}]}}. Use coverage partial if you could not inspect the relevant changes or lack decisive evidence. Use an empty findings array if the review found no verified issues. Do not rely on other agents' verdicts.\n\n{approved}",
         diff.git.base_oid, diff.git.head_oid, diff.git.patch_digest,
-    )
+    );
+    bounded_review_input(input)
 }
 
 pub(super) fn correction_request(
@@ -571,12 +592,10 @@ pub(super) fn correction_request(
         .map(|check| check.label.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    let input = format!(
-        "Independently reproduce each reported blocker and failed check before editing. Fix confirmed problems inside the approved paths. Preserve approved behavior. If a change needs a product or architecture decision, report it without implementing it.\n\nReported blockers:\n{findings}\n\nChecks to investigate:\n{failures}"
-    );
-    if input.len() > 48_000 {
-        return Err(FeatureError::ReviewBlocked);
-    }
+    let approved = approved_context(feature)?;
+    let input = bounded_review_input(format!(
+        "Independently reproduce each reported blocker and failed check before editing. Fix confirmed problems inside the approved paths. Preserve approved behavior. If a change needs a product or architecture decision, report it without implementing it.\n\nReported blockers:\n{findings}\n\nChecks to investigate:\n{failures}\n\n{approved}"
+    ))?;
     Ok(TaskRequest {
         operation_id: codec.derived_id(task_id, "initial-launch"),
         attempt_id: task_id,
@@ -596,6 +615,14 @@ pub(super) fn correction_request(
         retry_of: None,
         input,
     })
+}
+
+fn bounded_review_input(input: String) -> Result<String, FeatureError> {
+    if input.len() > 240_000 {
+        Err(FeatureError::ReviewBlocked)
+    } else {
+        Ok(input)
+    }
 }
 
 fn plan_tasks(feature: &FeatureState) -> Result<&[FeatureTask], FeatureError> {
@@ -646,7 +673,8 @@ mod tests {
         }
         fn parse_review(&self, raw: &str) -> Result<FeatureReviewReply, FeatureError> {
             Ok(FeatureReviewReply {
-                patch_digest: raw.into(),
+                patch_digest: raw.trim_end_matches(":partial").into(),
+                complete: !raw.ends_with(":partial"),
                 findings: Vec::new(),
             })
         }
@@ -665,6 +693,10 @@ mod tests {
         assert!(matches!(
             parse_reply(&DigestReply, "exact", "stale"),
             Err(FeatureError::StaleSnapshot)
+        ));
+        assert!(matches!(
+            parse_reply(&DigestReply, "exact:partial", "exact"),
+            Err(FeatureError::ReviewBlocked)
         ));
     }
 }

@@ -185,7 +185,7 @@ impl DockerEnvironmentRuntime {
             return Err(EnvironmentError::VolumeMissing);
         }
         let container = self.container(env).await?;
-        let state = match container {
+        let mut state = match container {
             None => ObservedState::NotCreated,
             Some(value) => {
                 if env.desired_state == DesiredState::Running {
@@ -210,6 +210,15 @@ impl DockerEnvironmentRuntime {
                 }
             }
         };
+        if env.desired_state == DesiredState::Stopped
+            && matches!(state, ObservedState::NotCreated | ObservedState::Stopped)
+        {
+            let _feature_guard = super::feature_execution::launch_lock(env).await?;
+            // A stopped member container does not imply its disposable workers stopped.
+            if self.feature_workers_need_stop(env).await? {
+                state = ObservedState::Stopping;
+            }
+        }
         Ok(RuntimeInspection { state, volume })
     }
 

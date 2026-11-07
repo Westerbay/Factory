@@ -20,7 +20,7 @@ use bollard::{
     },
 };
 use factory_core::{
-    conversations::execution::ExecutionError,
+    conversations::execution::{ExecutionControl, ExecutionError, QuestionAnswer},
     environments::{DesiredState, Environment, EnvironmentError, VolumePresence},
     features::{
         FeatureCheckOutput, FeatureExecution, FeatureExecutionRuntime, FeatureRun, TaskAttempt,
@@ -37,7 +37,10 @@ pub(crate) use provider::{ScopedProvider, proof_command, relay_command};
 use serde_json::Value;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, OnceLock, Weak},
+    sync::{
+        Arc, Mutex, OnceLock, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
@@ -139,12 +142,17 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
             )
             .await?;
         let process_receipt = process.id.clone();
-        let session = match provider {
+        let launch_ack = Arc::clone(&exit.launch_ack);
+        let mut session = match provider {
             ScopedProvider::Codex => crate::codex_execution::scoped_session(process, exit, request),
             ScopedProvider::Claude => {
                 crate::claude_execution::scoped_session(process, exit, request)
             }
         };
+        session.control = Box::new(ScopedControl {
+            delegate: session.control,
+            launch_ack,
+        });
         Ok(FeatureExecution {
             session,
             process_receipt,
@@ -171,6 +179,41 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
         collect_check(process, exit).await
     }
 
+    async fn acknowledge_check(
+        &self,
+        env: &Environment,
+        project: &Project,
+        workspace: &TaskWorkspace,
+    ) -> Result<(), ExecutionError> {
+        tokio::time::timeout(self.runtime.timeout, async {
+            validate_record(env, self.runtime.metadata.installation_id()).map_err(preflight)?;
+            let _gate = launch_lock(env).await.map_err(preflight)?;
+            let identity =
+                WorkerIdentity::new(env, project, workspace, env.generation, Role::Check)?;
+            let Some(value) = self
+                .runtime
+                .inspect_feature_worker(&identity.name)
+                .await
+                .map_err(|_| ExecutionError::CleanupUncertain)?
+            else {
+                // Only the caller's already durable acknowledgement makes
+                // cleanup idempotent. Recovery never treats this as proof.
+                return Ok(());
+            };
+            verify_identity(env, &identity, &value)?;
+            if value["State"]["Status"] != "exited" || value["State"]["Running"] != false {
+                return Err(ExecutionError::CleanupUncertain);
+            }
+            let id = inspect_id(&value).map_err(|_| ExecutionError::CleanupUncertain)?;
+            self.runtime
+                .remove_feature_worker(id)
+                .await
+                .map_err(|_| ExecutionError::CleanupUncertain)
+        })
+        .await
+        .map_err(|_| ExecutionError::CleanupUncertain)?
+    }
+
     async fn reconcile_task(
         &self,
         env: &Environment,
@@ -180,7 +223,11 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
         tokio::time::timeout(self.runtime.timeout, async {
             validate_record(env, self.runtime.metadata.installation_id()).map_err(preflight)?;
             let _gate = launch_lock(env).await.map_err(preflight)?;
-            let mut worker_was_observed = false;
+            let checking = attempt.pending_verification == Some(attempt.id());
+            let launch_settled = attempt.launch_settled && !checking;
+            let mut running = false;
+            let mut unknown = false;
+            let mut stopped = Vec::new();
             for role in [Role::Agent, Role::Check] {
                 let identity = WorkerIdentity::new(
                     env,
@@ -189,33 +236,52 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
                     attempt.generation,
                     role,
                 )?;
-                if let Some(value) = self
+                let Some(value) = self
                     .runtime
                     .inspect_feature_worker(&identity.name)
                     .await
                     .map_err(preflight)?
-                {
-                    verify_identity(env, &identity, &value)?;
-                    let id = inspect_id(&value).map_err(preflight)?;
-                    match value["State"]["Status"].as_str() {
-                        Some("running") => return Ok(TaskObservation::Running),
-                        Some("created" | "exited") => {
-                            // Remove even an unstarted worker to fence an uncertain Start request.
-                            self.runtime
-                                .remove_feature_worker(id)
-                                .await
-                                .map_err(|_| ExecutionError::CleanupUncertain)?;
-                            worker_was_observed = true;
-                        }
-                        _ => return Ok(TaskObservation::Unknown),
+                else {
+                    continue;
+                };
+                verify_identity(env, &identity, &value)?;
+                let id = inspect_id(&value).map_err(preflight)?;
+                match (
+                    value["State"]["Status"].as_str(),
+                    value["State"]["Running"].as_bool(),
+                ) {
+                    (Some("running"), Some(true)) => running = true,
+                    (Some("exited"), Some(false)) => stopped.push((role, id.to_owned())),
+                    (Some("created"), Some(false)) if launch_settled => {
+                        stopped.push((role, id.to_owned()));
                     }
+                    _ => unknown = true,
                 }
             }
-            Ok(if worker_was_observed || attempt.launch_settled {
-                TaskObservation::Stopped
-            } else {
-                TaskObservation::Unknown
-            })
+            if running {
+                return Ok(TaskObservation::Running);
+            }
+            if unknown {
+                return Ok(TaskObservation::Unknown);
+            }
+            if launch_settled {
+                for (_, id) in stopped {
+                    // Removing a verified created container fences any pending Start.
+                    self.runtime
+                        .remove_feature_worker(&id)
+                        .await
+                        .map_err(|_| ExecutionError::CleanupUncertain)?;
+                }
+                return Ok(TaskObservation::Stopped);
+            }
+            // An old agent cannot prove a subsequently uncertain check stopped.
+            let proof = stopped
+                .into_iter()
+                .find(|(role, _)| matches!(role, Role::Check) == checking);
+            // Keep the exited object until its exact identity is durably recorded.
+            Ok(proof.map_or(TaskObservation::Unknown, |(_, worker_id)| {
+                TaskObservation::StoppedWithWorkerProof { worker_id }
+            }))
         })
         .await
         .map_err(|_| ExecutionError::CleanupUncertain)?
@@ -302,16 +368,50 @@ fn preflight(_: EnvironmentError) -> ExecutionError {
     ExecutionError::PreflightUnavailable
 }
 
+struct ScopedControl {
+    delegate: Box<dyn ExecutionControl>,
+    launch_ack: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl ExecutionControl for ScopedControl {
+    async fn begin_turn(&mut self) -> Result<(), ExecutionError> {
+        // The coordinator persists the process receipt before calling begin_turn.
+        self.launch_ack.store(true, Ordering::Release);
+        self.delegate.begin_turn().await
+    }
+
+    async fn answer(
+        &mut self,
+        request_id: Uuid,
+        answers: Vec<QuestionAnswer>,
+    ) -> Result<(), ExecutionError> {
+        self.delegate.answer(request_id, answers).await
+    }
+
+    async fn interrupt(&mut self) -> Result<(), ExecutionError> {
+        self.delegate.interrupt().await
+    }
+}
+
 pub(crate) struct WorkerExit {
     runtime: Arc<DockerEnvironmentRuntime>,
     id: String,
     relay: Option<DockerProcess>,
+    launch_ack: Arc<AtomicBool>,
 }
 
 impl WorkerExit {
     /// Before reporting a terminal provider event, prove the whole container exited.
     pub(crate) async fn finish(self) -> Result<i64, ExecutionError> {
-        let Self { runtime, id, relay } = self;
+        let Self {
+            runtime,
+            id,
+            relay,
+            launch_ack,
+        } = self;
+        // Closing both relay stream halves tears down the Unix listener and tunnels.
+        drop(relay);
         let observed = tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 let value = runtime
@@ -331,11 +431,20 @@ impl WorkerExit {
             }
         })
         .await;
-        let removed =
-            tokio::time::timeout(runtime.timeout, runtime.remove_feature_worker(&id)).await;
-        // Closing both relay stream halves tears down the Unix listener and tunnels.
-        drop(relay);
-        if !matches!(removed, Ok(Ok(()))) {
+        let launch_recorded = launch_ack.load(Ordering::Acquire);
+        let cleanup = tokio::time::timeout(runtime.timeout, async {
+            if launch_recorded {
+                runtime.remove_feature_worker(&id).await
+            } else if matches!(observed, Ok(Ok(_))) {
+                // No durable acknowledgement arrived. Keep the exited worker
+                // as evidence for both provider launches and checks.
+                Ok(())
+            } else {
+                runtime.stop_feature_worker(&id).await
+            }
+        })
+        .await;
+        if !matches!(cleanup, Ok(Ok(()))) {
             return Err(ExecutionError::CleanupUncertain);
         }
         // If the watchdog or shutdown was required, we proved cleanup but have no
@@ -379,6 +488,10 @@ impl DockerEnvironmentRuntime {
             .await;
         let process = match attached {
             Ok(process) => process,
+            Err(ExecutionError::LaunchUncertain) => {
+                // A possibly accepted start may leave the only durable proof.
+                return Err(ExecutionError::LaunchUncertain);
+            }
             Err(error) => {
                 // A successful removal by proved immutable ID also fences any
                 // Docker start request whose reply did not reach the caller.
@@ -404,6 +517,7 @@ impl DockerEnvironmentRuntime {
             WorkerExit {
                 runtime: Arc::clone(self),
                 id,
+                launch_ack: Arc::new(AtomicBool::new(false)),
                 relay: relay.map(|(process, _)| process),
             },
         ))
@@ -574,12 +688,32 @@ impl DockerEnvironmentRuntime {
         }
     }
 
-    /// Stop is serialized against create/attach/start. The daemon is selected by
-    /// the trusted installation. Inspect every match and mutate only immutable IDs.
-    pub(super) async fn stop_feature_workers(
+    async fn stop_feature_worker(&self, id: &str) -> Result<(), EnvironmentError> {
+        self.require_mutation_permission()?;
+        match self
+            .docker
+            .stop_container(
+                id,
+                Some(StopContainerOptions {
+                    t: Some(2),
+                    ..Default::default()
+                }),
+            )
+            .await
+        {
+            Ok(())
+            | Err(DockerError::DockerResponseServerError {
+                status_code: 304 | 404,
+                ..
+            }) => Ok(()),
+            Err(_) => Err(EnvironmentError::Unavailable),
+        }
+    }
+
+    async fn list_feature_worker_ids(
         &self,
         env: &Environment,
-    ) -> Result<(), EnvironmentError> {
+    ) -> Result<Vec<String>, EnvironmentError> {
         let matching = self
             .docker
             .list_containers(Some(ListContainersOptions {
@@ -597,32 +731,56 @@ impl DockerEnvironmentRuntime {
             }))
             .await
             .map_err(|_| EnvironmentError::Unavailable)?;
-        for entry in matching {
-            let id = entry.id.ok_or(EnvironmentError::OwnershipConflict)?;
+        matching
+            .into_iter()
+            .map(|entry| entry.id.ok_or(EnvironmentError::OwnershipConflict))
+            .collect()
+    }
+
+    pub(super) async fn feature_workers_need_stop(
+        &self,
+        env: &Environment,
+    ) -> Result<bool, EnvironmentError> {
+        let mut needs_stop = false;
+        for id in self.list_feature_worker_ids(env).await? {
             let Some(value) = self.inspect_feature_worker(&id).await? else {
                 continue;
             };
             verify_worker_owner(env, &value, &id)?;
-            self.require_mutation_permission()?;
-            match self
-                .docker
-                .stop_container(
-                    &id,
-                    Some(StopContainerOptions {
-                        t: Some(2),
-                        ..Default::default()
-                    }),
-                )
-                .await
-            {
-                Ok(())
-                | Err(DockerError::DockerResponseServerError {
-                    status_code: 304 | 404,
-                    ..
-                }) => (),
-                Err(_) => return Err(EnvironmentError::Unavailable),
+            needs_stop |=
+                value["State"]["Status"] != "exited" || value["State"]["Running"] != false;
+        }
+        Ok(needs_stop)
+    }
+
+    /// Stop is serialized against create/attach/start. Inspect every match and
+    /// mutate only immutable IDs. Exited workers may be pending launch proof.
+    pub(super) async fn stop_feature_workers(
+        &self,
+        env: &Environment,
+    ) -> Result<(), EnvironmentError> {
+        for id in self.list_feature_worker_ids(env).await? {
+            let Some(value) = self.inspect_feature_worker(&id).await? else {
+                continue;
+            };
+            verify_worker_owner(env, &value, &id)?;
+            self.stop_feature_worker(&id).await?;
+            let Some(stopped) = self.inspect_feature_worker(&id).await? else {
+                continue;
+            };
+            verify_worker_owner(env, &stopped, &id)?;
+            match (
+                stopped["State"]["Status"].as_str(),
+                stopped["State"]["Running"].as_bool(),
+            ) {
+                (Some("exited"), Some(false)) => (),
+                (Some("created"), Some(false)) => {
+                    // A created worker provides no proof that Start settled. Fence
+                    // a late daemon request by removing the exact unstarted object.
+                    self.remove_feature_worker(&id).await?;
+                }
+                _ => return Err(EnvironmentError::Unavailable),
             }
-            self.remove_feature_worker(&id).await?;
         }
         Ok(())
     }

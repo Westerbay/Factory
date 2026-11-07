@@ -224,6 +224,9 @@ pub struct TaskAttempt {
     pub activity: Option<String>,
     pub result: Option<String>,
     pub checkpoint: Option<String>,
+    /// Private check workspace with an issued or potentially issued launch.
+    #[serde(default)]
+    pub pending_verification: Option<Uuid>,
 }
 
 impl TaskAttempt {
@@ -249,6 +252,10 @@ pub enum AttemptUpdate {
     Result {
         text: String,
     },
+    VerificationStarted {
+        workspace_id: Uuid,
+    },
+    VerificationSettled,
     Validated {
         checkpoint: Option<String>,
     },
@@ -340,6 +347,12 @@ pub enum FeatureCommand {
     RecoverAttempt {
         attempt_id: Uuid,
         launch_generation: i64,
+    },
+    /// The isolated runtime removed the exact observed worker by immutable ID.
+    RecoverObservedAttempt {
+        attempt_id: Uuid,
+        launch_generation: i64,
+        worker_id: String,
     },
     /// The workspace controller verified this retained writer checkout's scope.
     SaveRetryBase {
