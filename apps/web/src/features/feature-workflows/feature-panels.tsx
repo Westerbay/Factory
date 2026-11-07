@@ -175,8 +175,21 @@ export function FeaturePanels({
   const staleDiff = Boolean(
     review && diff && !matchesReviewedDiff(feature, diff)
   )
+  const refreshComparison =
+    stage === "review" &&
+    review?.ready &&
+    delivery?.status === "failed" &&
+    delivery.snapshotId === review.snapshotId &&
+    matchesReviewedDiff(feature, diff)
   const showReviewEvidence =
-    !publishedStale && !diffError && matchesReviewedDiff(feature, diff)
+    !publishedStale &&
+    !diffError &&
+    !refreshComparison &&
+    matchesReviewedDiff(feature, diff)
+  const readyForDelivery =
+    review?.ready &&
+    showReviewEvidence &&
+    (feature.feature.stage === "result" || feature.feature.stage === "draft")
   const diffLabel = publishedStale
     ? m.feature_published_diff()
     : staleDiff
@@ -403,7 +416,7 @@ export function FeaturePanels({
             ) : (
               <>
                 <div className="feature-result-verdict">
-                  {review.ready && showReviewEvidence ? (
+                  {readyForDelivery ? (
                     <Check size={18} aria-hidden="true" />
                   ) : (
                     <Circle size={14} aria-hidden="true" />
@@ -411,7 +424,7 @@ export function FeaturePanels({
                   <h3>
                     {publishedStale
                       ? m.feature_delivery_stale()
-                      : review.ready && showReviewEvidence
+                      : readyForDelivery
                         ? m.feature_review_ready()
                         : m.feature_review_pending()}
                   </h3>
@@ -578,6 +591,15 @@ export function FeaturePanels({
                       </details>
                     </>
                   )}
+                  {refreshComparison && (
+                    <Button
+                      disabled={busy || unsettled || diffLoading}
+                      onClick={() => onReview(review.snapshotId)}
+                    >
+                      <RotateCcw size={14} aria-hidden="true" />
+                      {m.feature_review_refresh_comparison()}
+                    </Button>
+                  )}
                 </section>
               </>
             )}
@@ -636,7 +658,7 @@ export function FeaturePanels({
           </footer>
         )}
       {isResultStage(viewStage) &&
-        (review || reconcile) &&
+        (reconcile || (review && stage === "result")) &&
         current &&
         !published && (
           <footer className="feature-panel-footer">

@@ -182,6 +182,24 @@ describe("feature result actions", () => {
     expect(html).not.toContain('title="remote-head"')
   })
 
+  it("does not show Ready for a review invalidated while its old comparison is still available", () => {
+    const invalidated = {
+      ...reviewedFeature,
+      feature: { ...reviewedFeature.feature, stage: "review" as const },
+      delivery: {
+        ...receipt,
+        status: "failed" as const,
+        reason: "Factory could not prepare the current comparison.",
+      },
+    }
+    const html = render(invalidated, { diff: reviewedDiff })
+    expect(html).not.toContain("Ready for your review")
+    expect(html).not.toContain("Publish the reviewed draft")
+    expect(html).toContain("Factory could not prepare the current comparison.")
+    expect(html).toContain("Refresh and review the diff")
+    expect(html).not.toContain("Prior snapshot typecheck")
+  })
+
   it("offers reopening a settled result and only exposes step continuation projected by the server", () => {
     expect(render(feature)).toContain("Revisit product decisions")
     expect(render(feature)).not.toContain("Resume this step")

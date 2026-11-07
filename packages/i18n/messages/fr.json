@@ -504,6 +504,7 @@
   "feature_provider_claude": "Claude Code",
   "feature_current_diff": "Diff actuel",
   "feature_review_current_diff": "Relire ce diff",
+  "feature_review_refresh_comparison": "Actualiser et relire le diff",
   "feature_discussion_read_only": "La discussion est en lecture seule pendant cette étape.",
   "feature_published_diff": "Diff de la PR publiée",
   "feature_published_diff_unavailable": "Le diff de la PR publiée est indisponible. Ouvrez la PR sur GitHub pour la consulter.",
