@@ -4,9 +4,12 @@ use factory_core::{
     environments::{Environment, EnvironmentActor},
     features::{
         DeliveryStatus, FeatureCommand, FeatureDeliveryRuntime, FeatureError, FeatureRemoteRefs,
-        FeatureStage, FeatureState, GitSnapshot, WorkspaceError,
+        FeatureStage, FeatureState, GitSnapshot, WorkspaceDiff, WorkspaceError,
     },
-    identity::{RepositoryAccessError, RepositoryActor, RepositoryDraft, RepositoryDraftTarget},
+    identity::{
+        RepositoryAccessError, RepositoryActor, RepositoryDraft, RepositoryDraftDiffTarget,
+        RepositoryDraftTarget,
+    },
     projects::Project,
 };
 use std::{
@@ -78,6 +81,62 @@ impl FeatureDeliveryService {
             repository,
             locks: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// A stale draft has its own remote diff. Never substitute a local review patch
+    /// when the provider cannot confirm the current PR.
+    pub async fn published_stale_diff(
+        &self,
+        actor: EnvironmentActor,
+        feature_id: Uuid,
+    ) -> Result<Option<WorkspaceDiff>, FeatureError> {
+        let state = self.features.get(actor, feature_id).await?;
+        let Some((receipt, draft_url)) =
+            state
+                .deliveries
+                .iter()
+                .rev()
+                .find_map(|receipt| match &receipt.status {
+                    DeliveryStatus::PublishedStale { draft_url } => {
+                        Some((receipt, draft_url.as_str()))
+                    }
+                    _ => None,
+                })
+        else {
+            return Ok(None);
+        };
+        let (env, project, _) = self.features.context(actor, feature_id).await?;
+        let access = self
+            .repository
+            .draft_access(
+                RepositoryActor {
+                    actor,
+                    environment_id: env.id,
+                    generation: env.generation,
+                },
+                &project,
+            )
+            .await
+            .map_err(draft_read_error)?;
+        let diff = access
+            .draft_diff(&RepositoryDraftDiffTarget {
+                repository_id: project.repository_id,
+                full_name: &project.cloned_full_name,
+                feature_id,
+                operation_id: receipt.request_id,
+                draft_url,
+            })
+            .await
+            .map_err(draft_read_error)?;
+        Ok(Some(WorkspaceDiff {
+            git: GitSnapshot {
+                base_oid: diff.base_oid,
+                head_oid: diff.head_oid,
+                patch_digest: diff.patch_digest,
+            },
+            patch: diff.patch,
+            changed_paths: diff.changed_paths,
+        }))
     }
 
     /// Publish only after a separate authenticated request names the reviewed snapshot.
@@ -207,7 +266,20 @@ impl FeatureDeliveryService {
         if let Some(refresh_base) = stale {
             self.invalidate(actor, &env, feature_id, snapshot_id)
                 .await?;
-            let refreshed = if refresh_base {
+            let refresh_allowed = refresh_base
+                && self
+                    .repository
+                    .draft_access(
+                        RepositoryActor {
+                            actor,
+                            environment_id: env.id,
+                            generation: env.generation,
+                        },
+                        &project,
+                    )
+                    .await
+                    .is_ok();
+            let refreshed = if refresh_allowed {
                 match self
                     .git
                     .refresh_base(&env, &project, feature_id, approved)
@@ -268,12 +340,21 @@ impl FeatureDeliveryService {
         };
         let branch = match self
             .features
-            .workspaces
-            .initialize(request.env, request.project, request.feature_id)
+            .initialize_verified(
+                request.actor,
+                request.env,
+                request.project,
+                request.feature_id,
+            )
             .await
         {
             Ok(branch) => branch,
-            Err(error) => return git_failure(error, request.recovering),
+            Err(FeatureError::Unauthorized) => {
+                return access_failure(RepositoryAccessError::Unauthorized, request.recovering);
+            }
+            Err(FeatureError::ExecutionUncertain) => return Publication::Uncertain,
+            Err(_) if request.recovering => return Publication::Uncertain,
+            Err(_) => return Publication::Failed("The feature branch could not be verified."),
         };
         let (Some(base), Some(head)) = (
             branch.base_ref.strip_prefix("refs/heads/"),
@@ -418,6 +499,7 @@ impl FeatureDeliveryService {
             .remote(request.env, request.project, request.feature_id)
             .await;
         if draft.base_oid != request.approved.base_oid
+            || draft.head_oid != request.approved.head_oid
             || current
                 .as_ref()
                 .is_ok_and(|diff| diff.git != *request.approved)
@@ -445,6 +527,14 @@ impl FeatureDeliveryService {
         let lock = Arc::new(AsyncMutex::new(()));
         locks.insert(feature_id, Arc::downgrade(&lock));
         Ok(lock)
+    }
+}
+
+fn draft_read_error(error: RepositoryAccessError) -> FeatureError {
+    match error {
+        RepositoryAccessError::Unauthorized => FeatureError::Unauthorized,
+        RepositoryAccessError::Conflict => FeatureError::StaleSnapshot,
+        _ => FeatureError::Unavailable,
     }
 }
 

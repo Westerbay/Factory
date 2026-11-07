@@ -1,7 +1,8 @@
 use super::*;
 use axum::{
     Router,
-    extract::{Query, State},
+    extract::{Path, Query, State},
+    http::HeaderMap,
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
@@ -41,6 +42,8 @@ struct Fixture {
     draft_posts: AtomicUsize,
     draft_forbidden: bool,
     hold_draft_response: bool,
+    draft_head_after_post: Option<String>,
+    move_base_on_diff: bool,
 }
 
 async fn token(State(state): State<Arc<Fixture>>) -> impl IntoResponse {
@@ -158,9 +161,11 @@ async fn add_draft(
         "state": "open",
         "draft": true,
         "body": body["body"],
+        "changed_files": 1,
+        "updated_at": "2026-01-01T00:00:00Z",
         "head": {
             "ref": body["head"],
-            "sha": "b".repeat(40),
+            "sha": state.draft_head_after_post.clone().unwrap_or_else(|| "b".repeat(40)),
             "repo": {"id":3,"full_name":"user/example"}
         },
         "base": {
@@ -174,6 +179,32 @@ async fn add_draft(
         std::future::pending::<()>().await;
     }
     (StatusCode::CREATED, axum::Json(draft)).into_response()
+}
+
+const REMOTE_PATCH: &str = "diff --git a/remote.txt b/remote.txt\n--- a/remote.txt\n+++ b/remote.txt\n@@ -1 +1 @@\n-before\n+after\n";
+
+async fn draft_by_number(
+    State(state): State<Arc<Fixture>>,
+    Path(number): Path<u64>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let mut draft = state.draft.lock().unwrap();
+    let Some(draft) = draft.as_mut().filter(|draft| draft["number"] == number) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if headers[header::ACCEPT] == "application/vnd.github.diff" {
+        if state.move_base_on_diff {
+            draft["base"]["sha"] = "e".repeat(40).into();
+        }
+        return REMOTE_PATCH.into_response();
+    }
+    assert_eq!(headers[header::ACCEPT], "application/vnd.github+json");
+    axum::Json(draft.clone()).into_response()
+}
+
+async fn draft_files(Path(number): Path<u64>) -> impl IntoResponse {
+    assert_eq!(number, 17);
+    axum::Json(serde_json::json!([{"filename": "remote.txt"}]))
 }
 struct Server(tokio::task::JoinHandle<()>);
 impl Drop for Server {
@@ -192,6 +223,8 @@ async fn fixture(state: Fixture) -> (GitHubRepositoryProvider, Arc<Fixture>, Ser
         .route("/user/repos", get(repos))
         .route("/repos/{owner}/{repo}", get(repo_at_origin))
         .route("/repos/user/example/pulls", get(drafts).post(add_draft))
+        .route("/repos/user/example/pulls/{number}", get(draft_by_number))
+        .route("/repos/user/example/pulls/{number}/files", get(draft_files))
         .route("/user/keys", get(keys).post(add_key))
         .with_state(state.clone());
     let server = Server(tokio::spawn(async move {
@@ -262,10 +295,98 @@ async fn lost_draft_response_is_reconciled_only_for_the_reviewed_identity() {
     assert_eq!(moved.base_oid, "d".repeat(40));
 
     state.draft.lock().unwrap().as_mut().unwrap()["head"]["sha"] = "c".repeat(40).into();
-    assert_eq!(
-        provider.find_draft(&token, &target, &Guard).await,
+    let moved_head = provider
+        .find_draft(&token, &target, &Guard)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(moved_head.head_oid, "c".repeat(40));
+    assert_eq!(moved_head.url, draft.url);
+    assert_eq!(state.draft_posts.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn draft_receipt_and_current_diff_survive_a_moved_head_at_creation() {
+    let (provider, state, _server) = fixture(Fixture {
+        draft_head_after_post: Some("c".repeat(40)),
+        ..Default::default()
+    })
+    .await;
+    let token = RepositoryAccessToken::new("fixture-token".into()).unwrap();
+    let feature_id = Uuid::new_v4();
+    let target = RepositoryDraftTarget {
+        repository_id: 3,
+        full_name: "user/example",
+        base: "main",
+        head: &format!("factory/features/{feature_id}"),
+        head_oid: &"b".repeat(40),
+        operation_id: Uuid::new_v4(),
+    };
+    let receipt = provider
+        .create_draft(&token, &target, "Reviewed", &Guard)
+        .await
+        .unwrap();
+    assert_eq!(receipt.head_oid, "c".repeat(40));
+    assert_ne!(receipt.head_oid, target.head_oid);
+    state.draft.lock().unwrap().as_mut().unwrap()["base"]["sha"] = "d".repeat(40).into();
+    let read_target = RepositoryDraftDiffTarget {
+        repository_id: target.repository_id,
+        full_name: target.full_name,
+        feature_id,
+        operation_id: target.operation_id,
+        draft_url: &receipt.url,
+    };
+    let diff = provider
+        .draft_diff(&token, &read_target, &Guard)
+        .await
+        .unwrap();
+    assert_eq!(diff.base_oid, "d".repeat(40));
+    assert_eq!(diff.head_oid, "c".repeat(40));
+    assert_eq!(diff.patch, REMOTE_PATCH);
+    assert_eq!(diff.changed_paths, ["remote.txt"]);
+    assert_eq!(state.draft_posts.load(Ordering::SeqCst), 1);
+    let wrong_repo = RepositoryDraftDiffTarget {
+        repository_id: 4,
+        ..read_target
+    };
+    assert!(matches!(
+        provider.draft_diff(&token, &wrong_repo, &Guard).await,
         Err(Error::Conflict)
-    );
+    ));
+}
+
+#[tokio::test]
+async fn rejects_a_remote_diff_if_the_base_moves_while_it_is_read() {
+    let (provider, state, _server) = fixture(Fixture {
+        move_base_on_diff: true,
+        ..Default::default()
+    })
+    .await;
+    let token = RepositoryAccessToken::new("fixture-token".into()).unwrap();
+    let feature_id = Uuid::new_v4();
+    let target = RepositoryDraftTarget {
+        repository_id: 3,
+        full_name: "user/example",
+        base: "main",
+        head: &format!("factory/features/{feature_id}"),
+        head_oid: &"b".repeat(40),
+        operation_id: Uuid::new_v4(),
+    };
+    let receipt = provider
+        .create_draft(&token, &target, "Reviewed", &Guard)
+        .await
+        .unwrap();
+    let read_target = RepositoryDraftDiffTarget {
+        repository_id: target.repository_id,
+        full_name: target.full_name,
+        feature_id,
+        operation_id: target.operation_id,
+        draft_url: &receipt.url,
+    };
+    assert!(matches!(
+        provider.draft_diff(&token, &read_target, &Guard).await,
+        Err(Error::Conflict)
+    ));
     assert_eq!(state.draft_posts.load(Ordering::SeqCst), 1);
 }
 

@@ -48,7 +48,7 @@ impl RepositoryDraftAccess<'_> {
         &self,
         target: &RepositoryDraftTarget<'_>,
     ) -> Result<Option<RepositoryDraft>, RepositoryAccessError> {
-        self.check_target(target)?;
+        self.check_target(target.repository_id, target.full_name)?;
         self.recheck().await?;
         let result = self
             .provider
@@ -63,7 +63,7 @@ impl RepositoryDraftAccess<'_> {
         target: &RepositoryDraftTarget<'_>,
         title: &str,
     ) -> Result<RepositoryDraft, RepositoryAccessError> {
-        self.check_target(target)?;
+        self.check_target(target.repository_id, target.full_name)?;
         let result = self
             .provider
             .create_draft(&self.token, target, title, &self.guard)
@@ -77,12 +77,25 @@ impl RepositoryDraftAccess<'_> {
         Ok(result)
     }
 
+    pub(crate) async fn draft_diff(
+        &self,
+        target: &RepositoryDraftDiffTarget<'_>,
+    ) -> Result<RepositoryDraftDiff, RepositoryAccessError> {
+        self.check_target(target.repository_id, target.full_name)?;
+        let result = self
+            .provider
+            .draft_diff(&self.token, target, &self.guard)
+            .await?;
+        self.guard.check().await?;
+        Ok(result)
+    }
+
     fn check_target(
         &self,
-        target: &RepositoryDraftTarget<'_>,
+        repository_id: i64,
+        full_name: &str,
     ) -> Result<(), RepositoryAccessError> {
-        if target.repository_id != self.project.repository_id
-            || target.full_name != self.project.cloned_full_name
+        if repository_id != self.project.repository_id || full_name != self.project.cloned_full_name
         {
             return Err(RepositoryAccessError::Conflict);
         }

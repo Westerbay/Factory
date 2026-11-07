@@ -119,6 +119,23 @@ pub struct RepositoryDraftTarget<'a> {
 pub struct RepositoryDraft {
     pub url: String,
     pub base_oid: String,
+    pub head_oid: String,
+}
+
+pub struct RepositoryDraftDiffTarget<'a> {
+    pub repository_id: i64,
+    pub full_name: &'a str,
+    pub feature_id: Uuid,
+    pub operation_id: Uuid,
+    pub draft_url: &'a str,
+}
+
+pub struct RepositoryDraftDiff {
+    pub base_oid: String,
+    pub head_oid: String,
+    pub patch_digest: String,
+    pub patch: String,
+    pub changed_paths: Vec<String>,
 }
 
 #[async_trait]
@@ -238,6 +255,15 @@ pub trait RepositoryAccessProvider: Send + Sync {
         _title: &str,
         _guard: &dyn RepositoryOperationGuard,
     ) -> Result<RepositoryDraft, RepositoryAccessError> {
+        Err(RepositoryAccessError::Unavailable)
+    }
+    /// Read the current diff for a PR identified by a durable Factory receipt.
+    async fn draft_diff(
+        &self,
+        _token: &RepositoryAccessToken,
+        _target: &RepositoryDraftDiffTarget<'_>,
+        _guard: &dyn RepositoryOperationGuard,
+    ) -> Result<RepositoryDraftDiff, RepositoryAccessError> {
         Err(RepositoryAccessError::Unavailable)
     }
 }
