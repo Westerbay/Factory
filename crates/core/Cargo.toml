@@ -8,8 +8,9 @@ publish.workspace = true
 
 [dependencies]
 async-trait.workspace = true
-chrono.workspace = true
-uuid.workspace = true
+chrono = { workspace = true, features = ["serde"] }
+serde.workspace = true
+uuid = { workspace = true, features = ["serde"] }
 thiserror.workspace = true
 
 [lints]

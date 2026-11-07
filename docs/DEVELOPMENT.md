@@ -237,8 +237,8 @@ These regressions do not replace human acceptance or prove live OAuth behavior.
 For the PostgreSQL subset, run `pnpm db:build` followed by
 `node scripts/database/identity-integration.mjs`. Its disposable database covers
 supervisor connection loss and competing ownership, including recovery through the
-same HTTP router without restarting the API. It also exercises project imports, deletion
-and associated conversations against PostgreSQL.
+same HTTP router without restarting the API. It also exercises project imports, deletion,
+conversation ownership and feature receipts against PostgreSQL.
 
 ## Local PostgreSQL
 
@@ -248,6 +248,7 @@ change `.env` files.
 ```bash
 pnpm db:setup   # start the local PostgreSQL service and initialize an empty schema
 pnpm db:status  # inspect database readiness
+pnpm db:upgrade # upgrade an owned, running v4 database to v5
 pnpm db:reset   # delete local database contents and recreate the initial schema
 pnpm db:stop    # stop PostgreSQL and retain its data
 ```
@@ -255,14 +256,23 @@ pnpm db:stop    # stop PostgreSQL and retain its data
 Stop the API before `db:reset`. Reset permanently removes local users, sessions,
 conversations and other database records. Existing Docker containers and home volumes are
 not removed; they become unassociated with the new database. Configure the administrator
-again after reset. No old-database upgrade or data migration is provided.
+again after reset. For an existing v4 installation, stop the API and keep the owned
+PostgreSQL container running before executing `pnpm db:upgrade`. The upgrade preserves
+existing records and rejects other schema versions. Start the API again once it passes.
 
 Development uses project `factory-local`, database `factory_local`, user `factory`,
 port `127.0.0.1:55432` and volume `factory-local_postgres_data`. The password
 `local-fixture-only` is public synthetic local configuration. The ignored
 `.factory/database-owner` holds the ownership marker. Unknown resources are never adopted.
-Repeated setup preserves an initialized database; an incompatible database requires an
-explicit reset.
+Repeated setup preserves an initialized database. The explicit v4 upgrade is the
+supported migration to the current schema.
+
+Feature verification commands run in disposable copies of the reviewed checkout.
+They can use the prepared workspace image's tools and project files. The standard
+image includes Git and Python, and does not include Node, pnpm or Cargo. Operators
+who need additional tooling must include it in their prepared image. Verification
+has no package download access. A missing tool or offline dependency is reported as
+a failed or unavailable verification.
 
 Every target is checked against Docker project, owner and checkout labels, container,
 database identity, credentials, volume and exact loopback port before SQL. Docker is

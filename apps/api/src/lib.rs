@@ -9,6 +9,7 @@ pub mod config;
 pub mod contracts;
 pub mod conversations;
 pub mod environments;
+pub mod features;
 mod health;
 mod http;
 pub mod openapi;

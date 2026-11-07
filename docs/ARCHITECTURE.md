@@ -390,6 +390,47 @@ also releases a settled uncertain model-probe lease in the supervisor transactio
 a suspended member; it does not change the environment intent or session. A separate
 guarded route can check the same recovery. Recovery does not undo external effects.
 
+## Feature workflows
+
+[Core feature state](../crates/core/src/features/mod.rs) owns revisions, attempt claims,
+review identity and delivery receipts. The [application coordinator](../crates/application/src/features/mod.rs)
+reuses project and conversation ownership and provider discovery. The [feature store](../crates/database/src/features/mod.rs)
+applies transitions transactionally with operation replay and environment generation
+fences. The [feature API](../apps/api/src/features/mod.rs) projects only member-facing
+state. The provider [codec](../crates/adapters/src/feature_codec.rs) translates structured
+agent replies and computes revision fingerprints outside application policy.
+
+The [project controller](../infra/environments/project-controller.py) uses owned Git
+checkouts and validates a writer's paths and the cumulative diff before moving the
+integration branch. The [feature execution adapter](../crates/adapters/src/environments/feature_execution/mod.rs)
+mounts only the verified attempt checkout, read-only for reviewers. Disposable workers
+have no direct network, GitHub SSH key or member home mount. Provider work uses a fixed
+relay to the selected provider and an access-only credential seed. The selected worker
+can access this seed. It does not receive refresh credentials, so an expired connection
+must be renewed before retrying. Verification commands have neither provider credentials
+nor network. The main environment owns the trusted Git push; the GitHub token stays on
+the server.
+
+Factory verifies the stable GitHub repository identity before fetching and again
+before promoting a provisional repository into the owned feature checkout. Initial
+workspace creation and project deletion share a project lock. Deletion quarantines
+and removes owned feature workspaces. Worker checkouts share the member's Docker
+volume, whose capacity depends on the host storage configuration.
+
+Reviewers and trusted checks use the same committed snapshot. Integrated checks record
+their launch and outcome on that snapshot. A resumed review reconciles an outstanding
+launch with its exact worker before proceeding, and reconstructs a required correction
+that was not yet claimed. The [delivery service](../crates/application/src/features/delivery.rs)
+compares the approved review with current local and remote refs, verifies the stable
+repository identity and reconciles the draft receipt before retrying. If the remote
+base moves after a push, Factory stages the comparison in a private repository,
+rechecks the stable repository identity, and confirms the exact local and remote
+refs before promoting it for review. Only a prior confirmed Factory push permits
+a later fast-forward of that remote feature ref, and the trusted push checks the
+exact old ref. Explicit reconciliation can settle an unproved exact push when
+guarded reads confirm the same remote refs and no matching draft. Ordinary Chat
+retains its own provider execution policy.
+
 ## PWA and static hosting
 
 [The service worker](../apps/web/src/pwa/sw.ts) precaches only public JavaScript, CSS,

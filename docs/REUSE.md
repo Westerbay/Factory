@@ -211,6 +211,15 @@ Connection patterns were checked against the official
   supervisor can release the lease for suspended users without changing environment
   intent or session state; the explicit stopped-state recovery route remains available.
 
+## Feature workflow capabilities
+
+- [Feature contracts](../crates/core/src/features/ports.rs) define the application-owned
+  execution, Git, storage, and codec capabilities. Keep provider messages and concrete
+  persistence out of workflow transitions.
+- [ArtifactPreview](../apps/web/src/features/artifacts/artifact-preview.tsx) owns the
+  shared isolated Mermaid and HTML presentation used by feature architecture and
+  explicit conversation previews. Its labels come from the consuming interface.
+
 ## Execution porting reference
 
 The temporary `packages/execution-reference` package preserves the former host and

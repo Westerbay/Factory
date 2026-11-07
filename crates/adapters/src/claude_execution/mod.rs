@@ -2,6 +2,7 @@
 use crate::{
     environments::{
         DockerEnvironmentRuntime,
+        feature_execution::WorkerExit,
         process::{ClaudeLaunch, DockerProcess, FixedProcess, ProcessStartError},
     },
     json_stream::JsonStream,
@@ -11,6 +12,7 @@ use async_trait::async_trait;
 use factory_core::{
     conversations::execution::*,
     environments::Environment,
+    features::FeatureRun,
     projects::{Project, ProjectState},
 };
 use serde_json::{Value, json};
@@ -125,45 +127,85 @@ impl ExecutionRuntime for ClaudeExecutionAdapter {
         let (id, stream) = self
             .process(env, FixedProcess::ClaudeExecution(launch))
             .await?;
-        let (commands, receiver) = mpsc::channel(LIMIT);
-        let (sender, events) = mpsc::channel(LIMIT);
         let runtime = self.runtime.clone();
-        let input = input.to_owned();
-        tokio::spawn(async move {
-            let (result, stream) = Worker::new(stream, receiver, sender.clone(), session, input)
-                .run()
-                .await;
-            let closed = stream.close().await;
-            let exited = runtime
-                .wait_process_exit(&id, Duration::from_secs(15))
-                .await;
-            let terminal = match (result, closed, exited) {
-                (Ok(event), Ok(()), Ok(0)) => event,
-                _ => ExecutionEvent::Uncertain,
-            };
-            let _ = emit(&sender, terminal).await;
-        });
-        Ok(ExecutionSession {
-            control: Box::new(Control { commands }),
-            output: Box::new(Output { events }),
-        })
+        Ok(spawn_session(
+            stream,
+            session,
+            input.to_owned(),
+            false,
+            async move {
+                runtime
+                    .wait_process_exit(&id, Duration::from_secs(15))
+                    .await
+                    .map_err(|_| ExecutionError::CleanupUncertain)
+            },
+        ))
+    }
+}
+
+pub(crate) fn scoped_session(
+    process: DockerProcess,
+    exit: WorkerExit,
+    request: &FeatureRun,
+) -> ExecutionSession {
+    spawn_session(
+        JsonStream::new(process.input, process.output),
+        request.workspace.attempt_id,
+        request.input.clone(),
+        true,
+        exit.finish(),
+    )
+}
+
+fn spawn_session(
+    stream: JsonStream,
+    session: Uuid,
+    input: String,
+    scoped: bool,
+    exit: impl Future<Output = Result<i64, ExecutionError>> + Send + 'static,
+) -> ExecutionSession {
+    let (commands, receiver) = mpsc::channel(LIMIT);
+    let (sender, events) = mpsc::channel(LIMIT);
+    tokio::spawn(async move {
+        let mut worker = Worker::new(stream, receiver, sender.clone(), session, input);
+        worker.scoped = scoped;
+        let (result, stream) = worker.run().await;
+        let closed = stream.close().await;
+        let terminal = match (result, closed, exit.await) {
+            (Ok(event), Ok(()), Ok(0)) => event,
+            (_, _, Ok(_) | Err(ExecutionError::Unavailable)) if scoped => ExecutionEvent::Failed,
+            _ => ExecutionEvent::Uncertain,
+        };
+        let _ = emit(&sender, terminal).await;
+    });
+    ExecutionSession {
+        control: Box::new(Control { commands }),
+        output: Box::new(Output { events }),
     }
 }
 
 async fn initialize(stream: &mut JsonStream) -> Result<Value, ExecutionError> {
     stream.send(json!({"type":"control_request","request_id":"factory-init","request":{"subtype":"initialize","hooks":{},"mcpServers":{}}})).await?;
     tokio::time::timeout(IO_TIMEOUT, async {
-        let frame = stream.read().await?;
-        if frame["type"] != "control_response"
-            || frame["response"]["request_id"] != "factory-init"
-            || frame["response"]["subtype"] != "success"
-        {
-            return Err(ExecutionError::Protocol);
+        for _ in 0..16 {
+            let frame = stream.read().await?;
+            // The pinned CLI can announce available commands before acknowledging
+            // initialization when the connected credential has profile scope.
+            if frame["type"] == "system" && frame["subtype"] == "commands_changed" {
+                continue;
+            }
+            if frame["type"] != "control_response"
+                || frame["response"]["request_id"] != "factory-init"
+                || frame["response"]["subtype"] != "success"
+            {
+                return Err(ExecutionError::Protocol);
+            }
+            return frame["response"]["response"]
+                .as_object()
+                .map(|_| frame["response"]["response"].clone())
+                .ok_or(ExecutionError::Protocol);
         }
-        frame["response"]["response"]
-            .as_object()
-            .map(|_| frame["response"]["response"].clone())
-            .ok_or(ExecutionError::Protocol)
+        Err(ExecutionError::Protocol)
     })
     .await
     .map_err(|_| ExecutionError::Unavailable)?
@@ -300,6 +342,8 @@ struct Worker {
     stopping: bool,
     stop_deadline: Option<tokio::time::Instant>,
     requests: HashMap<Uuid, PendingQuestion>,
+    scoped: bool,
+    observed_model: Option<String>,
 }
 struct PendingQuestion {
     native_id: String,
@@ -328,6 +372,8 @@ impl Worker {
             stopping: false,
             stop_deadline: None,
             requests: HashMap::new(),
+            scoped: false,
+            observed_model: None,
         }
     }
     async fn run(mut self) -> (Result<ExecutionEvent, ExecutionError>, JsonStream) {
@@ -391,6 +437,25 @@ impl Worker {
             }
         }
     }
+    async fn observe_model(&mut self, value: Option<&Value>) -> Result<(), ExecutionError> {
+        if self.scoped
+            && let Some(value) = value.filter(|value| !value.is_null())
+        {
+            let model = text(value, 512)?;
+            if self.observed_model.as_deref() != Some(model) {
+                self.observed_model = Some(model.to_owned());
+                emit(
+                    &self.events,
+                    ExecutionEvent::ModelObserved {
+                        model: model.to_owned(),
+                    },
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn frame(&mut self, frame: Value) -> Result<(), ExecutionError> {
         let kind = text(&frame["type"], 80)?;
         if let Some(session) = frame.get("session_id").and_then(Value::as_str)
@@ -430,6 +495,7 @@ impl Worker {
                 match event["type"].as_str() {
                     Some("message_start") => {
                         self.current_item = Some(text(&event["message"]["id"], 512)?.to_owned());
+                        self.observe_model(event["message"].get("model")).await?;
                     }
                     Some("content_block_delta") if event["delta"]["type"] == "text_delta" => {
                         let delta = event["delta"]["text"]
@@ -453,6 +519,7 @@ impl Worker {
                 }
             }
             "assistant" if frame["parent_tool_use_id"].is_null() => {
+                self.observe_model(frame["message"].get("model")).await?;
                 // Claude can emit several assistant frames with the same message ID.
                 let item = text(&frame["uuid"], 512)?.to_owned();
                 let content = frame["message"]["content"]
@@ -711,6 +778,7 @@ mod tests {
             let mut input = BufReader::new(server);
             let init = read_request(&mut input).await;
             assert_eq!(init["request"]["subtype"], "initialize");
+            frame(&output_tx, json!({"type":"system","subtype":"commands_changed","session_id":session.to_string()})).await;
             frame(&output_tx, json!({"type":"control_response","response":{"request_id":"factory-init","subtype":"success","response":{}}})).await;
             let prompt = read_request(&mut input).await;
             assert_eq!(prompt["message"]["content"], "hello");

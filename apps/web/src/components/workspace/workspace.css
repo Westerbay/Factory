@@ -1,10 +1,14 @@
 .workspace {
+  --mode-feature: #b9a3f2;
   --resize-dur: var(--motion-normal);
   --resize-ease: var(--ease-out);
   display: flex;
   height: 100dvh;
   min-height: 0;
   overflow: hidden;
+}
+:root[data-theme="light"] .workspace {
+  --mode-feature: #7351b8;
 }
 .t-resize {
   transition:

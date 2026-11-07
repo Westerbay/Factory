@@ -42,12 +42,14 @@ and a bottom-left GitHub profile menu. The chats sidebar can collapse. A termina
 toggles the panel; its separator resizes it by pointer or keyboard and its header can
 maximize it across the app without reattaching. Setup and account details appear only when needed,
 with provider settings available from the profile. Conversations and completed messages
-are private to their owner. Both providers run
+are private to their owner. In free chat, both providers run
 in full-access mode inside the user's container; commands can access that user's home
 and credentials without per-action approval. GitHub sign-in also authorizes repository access,
 allowing members to import accessible repositories once and start project-bound chats.
-A dedicated SSH key permits Git operations with the member’s own permissions. Global
-skills and multiple accounts per provider remain future work.
+A dedicated SSH key permits Git operations with the member’s own permissions. The workspace
+also offers a Features journey from product discussion and UML approval to implementation,
+review and an explicitly requested draft PR. Features use a versioned workflow with task
+profiles for either connected provider. Multiple accounts per provider remain future work.
 
 Environments use an isolated internal network per user and an installation-owned HTTPS
 CONNECT proxy. Approved OpenAI and Anthropic destinations and GitHub SSH on port 443 are
@@ -55,7 +57,8 @@ allowed. Existing containers are not silently replaced when the image changes. A
 database reset removes database records but leaves Docker homes untouched and unassociated.
 
 The TypeScript execution packages remain tested porting references. Fresh installations
-use one initial database schema; no previous database upgrade is supported.
+use the current database schema. An explicit local upgrade from schema version 4 to
+version 5 preserves existing records and adds feature state.
 
 Local PostgreSQL ownership checks support Linux Docker Engine and Windows Docker Desktop
 using exact checkout paths and the local socket or named pipe. Windows database support

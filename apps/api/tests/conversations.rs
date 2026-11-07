@@ -37,6 +37,10 @@ use std::{
 use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc};
 use tower::ServiceExt;
 use uuid::Uuid;
+
+#[path = "conversations/features.rs"]
+mod features;
+
 const ORIGIN: &str = "http://localhost:3000";
 const CSRF: &str = "fixture-account-csrf";
 struct Store {

@@ -1,6 +1,7 @@
 use super::recovery::RecoveryHost;
 use crate::config::RuntimeConfig;
 use crate::conversations::runtime::ConversationRuntime;
+use crate::features::FeatureRuntime;
 use crate::projects::runtime::{KeySource, ProjectsRuntime};
 use factory_adapters::claude_account::ClaudeAccountAdapter;
 use factory_adapters::claude_execution::ClaudeExecutionAdapter;
@@ -8,8 +9,9 @@ use factory_adapters::codex_account::CodexAccountAdapter;
 use factory_adapters::codex_execution::CodexExecutionAdapter;
 use factory_adapters::egress::EgressMetadata;
 use factory_adapters::environments::{
-    DockerEnvironmentRuntime, InstallationGuard, PreparationMetadata,
+    DockerEnvironmentRuntime, DockerFeatureExecutionRuntime, InstallationGuard, PreparationMetadata,
 };
+use factory_adapters::feature_codec::JsonFeatureCodec;
 use factory_adapters::identity::{GitHubRepositoryProvider, RepositoryAeadCipher};
 use factory_adapters::projects::DockerProjectRuntime;
 use factory_adapters::terminals::DockerTerminalRuntime;
@@ -19,10 +21,18 @@ use factory_application::conversations::coordinator::ExecutionProvider;
 use factory_application::environments::{
     EnvironmentAvailability, EnvironmentReconciler, EnvironmentService,
 };
+use factory_application::features::{FeatureCoordinator, FeatureDeliveryService};
 use factory_application::terminals::TerminalService;
 use factory_application::{identity::RepositoryAccessService, projects::ProjectService};
-use factory_core::environments::{EnvironmentError, EnvironmentStart, EnvironmentSupervisor};
-use factory_core::identity::{RepositoryAccessProvider, RepositoryTokenCipher};
+use factory_core::environments::{
+    Environment, EnvironmentActor, EnvironmentError, EnvironmentStart, EnvironmentSupervisor,
+};
+use factory_core::features::{FeatureError, FeatureRepositoryVerifier, FeatureStore};
+use factory_core::identity::{
+    RepositoryAccessError, RepositoryAccessProvider, RepositoryActor, RepositoryOriginVerification,
+    RepositoryTokenCipher,
+};
+use factory_core::projects::Project;
 use factory_database::environments::PgEnvironmentSupervisor;
 use factory_database::identity::IdentityDatabase;
 use std::{
@@ -50,6 +60,7 @@ pub struct EnvironmentHost {
     claude_accounts: Arc<AgentConnectionService>,
     conversations: Arc<ConversationRuntime>,
     projects: Arc<ProjectsRuntime>,
+    features: FeatureRuntime,
     availability: EnvironmentAvailability,
     stop: watch::Sender<bool>,
     workers: Vec<JoinHandle<()>>,
@@ -58,6 +69,37 @@ pub struct EnvironmentHost {
 }
 
 struct SharedSupervisor(Arc<Mutex<PgEnvironmentSupervisor>>);
+
+struct FeatureOrigin(Option<Arc<RepositoryAccessService>>);
+
+#[async_trait::async_trait]
+impl FeatureRepositoryVerifier for FeatureOrigin {
+    async fn verify(
+        &self,
+        actor: EnvironmentActor,
+        environment: &Environment,
+        project: &Project,
+    ) -> Result<(), FeatureError> {
+        let repository = self.0.as_ref().ok_or(FeatureError::Unavailable)?;
+        let actor = RepositoryActor {
+            actor,
+            environment_id: environment.id,
+            generation: environment.generation,
+        };
+        match repository.verify_clone_origin(actor, project).await {
+            Ok(RepositoryOriginVerification::Matched) => Ok(()),
+            Ok(RepositoryOriginVerification::Changed)
+            | Err(
+                RepositoryAccessError::Conflict
+                | RepositoryAccessError::Forbidden
+                | RepositoryAccessError::ProviderUnauthorized
+                | RepositoryAccessError::ProviderForbidden,
+            ) => Err(FeatureError::Conflict),
+            Err(RepositoryAccessError::Unauthorized) => Err(FeatureError::Unauthorized),
+            Err(_) => Err(FeatureError::Unavailable),
+        }
+    }
+}
 
 struct UnavailableOnExit(EnvironmentAvailability);
 
@@ -223,8 +265,8 @@ impl EnvironmentHostFactory {
             environments: service.clone(),
             projects: projects.clone(),
             store: project_store,
-            docker: project_docker,
-            access: repository_access,
+            docker: project_docker.clone(),
+            access: repository_access.clone(),
             availability: availability.clone(),
             installation: self.installation.clone(),
             jobs: Arc::new(tokio::sync::Semaphore::new(4)),
@@ -249,7 +291,8 @@ impl EnvironmentHostFactory {
             service.clone(),
             Arc::new(ClaudeAccountAdapter::new(runtime.clone())),
         ));
-        let conversations = crate::conversations::runtime::with_providers(
+        let feature_store: Arc<dyn FeatureStore> = Arc::new(self.database.feature_store());
+        let conversations = crate::conversations::runtime::with_providers_and_features(
             conversation_service,
             vec![
                 ExecutionProvider {
@@ -265,8 +308,24 @@ impl EnvironmentHostFactory {
                     runtime: Arc::new(ClaudeExecutionAdapter::new(runtime.clone())),
                 },
             ],
+            feature_store.clone(),
         )
         .map_err(|_| EnvironmentError::InvalidConfiguration)?;
+        let coordinator = FeatureCoordinator::new(
+            feature_store,
+            conversations.clone(),
+            project_docker.clone(),
+            Arc::new(DockerFeatureExecutionRuntime::new(runtime.clone())),
+            Arc::new(JsonFeatureCodec),
+            Arc::new(FeatureOrigin(repository_access.clone())),
+        );
+        let delivery = repository_access.map(|repository| {
+            FeatureDeliveryService::new(coordinator.clone(), project_docker, repository)
+        });
+        let features = FeatureRuntime {
+            coordinator,
+            delivery,
+        };
         let job_availability = availability.clone();
         let create_reconciler = move || {
             EnvironmentReconciler::new(
@@ -303,6 +362,7 @@ impl EnvironmentHostFactory {
             claude_accounts,
             conversations,
             projects: project_runtime,
+            features,
             availability,
             stop,
             workers,
@@ -334,6 +394,10 @@ impl EnvironmentHost {
     }
     pub(crate) fn projects(&self) -> Arc<ProjectsRuntime> {
         self.projects.clone()
+    }
+
+    pub(crate) fn features(&self) -> FeatureRuntime {
+        self.features.clone()
     }
 
     /// Drain bounded in-flight operations. Stopping the API never deletes user data.

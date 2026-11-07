@@ -48,13 +48,29 @@ type PendingSend = {
   conversation: string
 }
 
-type ChatLayout = {
+export type ChatLayout = {
   navigation: ReactNode
   conversation: ReactNode
   title: string
   conversationId?: string
   projectName?: string
   projectWarnings?: string[]
+}
+
+export type WorkflowConversation = {
+  conversation: api.Conversation
+  modelLabel: string
+  canSend: boolean
+  start: (
+    operationId: string,
+    input: string,
+    csrf: string,
+    signal: AbortSignal
+  ) => Promise<unknown>
+  onRefresh: () => void
+  version: string
+  focusOnReady?: boolean
+  onFocused?: () => void
 }
 
 export function Chat({
@@ -64,6 +80,9 @@ export function Chat({
   resuming = false,
   navigationVisible = true,
   renderLayout,
+  workflow,
+  onOpenChat,
+  navigationActive = true,
 }: {
   available: boolean
   projectWorkspace: ProjectWorkspace
@@ -71,6 +90,9 @@ export function Chat({
   resuming?: boolean
   navigationVisible?: boolean
   renderLayout: (parts: ChatLayout) => ReactNode
+  workflow?: WorkflowConversation
+  onOpenChat?: () => void
+  navigationActive?: boolean
 }) {
   const locale = useLocale()
   const { state: session, controller: sessionController } = useSession()
@@ -83,7 +105,9 @@ export function Chat({
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
   const listGeneration = useRef(0)
-  const [selected, setSelected] = useState<string>()
+  const [selectedChat, setSelected] = useState<string>()
+  const selected = workflow?.conversation.id ?? selectedChat
+  const workflowVersion = workflow?.version
   const [referencedProject, setReferencedProject] = useState<{
     project: projectApi.Project
     version: number
@@ -94,7 +118,10 @@ export function Chat({
   const [verifiedHistory, setVerifiedHistory] = useState<string>()
   const [model, setModel] = useState("")
   const [efforts, setEfforts] = useState<Record<string, string>>({})
-  const [input, setInput] = useState("")
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const input = drafts[selected ?? ""] ?? ""
+  const setInput = (value: string) =>
+    setDrafts((current) => ({ ...current, [selected ?? ""]: value }))
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState("")
   const [listError, setListError] = useState(false)
@@ -113,7 +140,7 @@ export function Chat({
   )
   const restoreScroll = useRef(true)
   const [newMessages, setNewMessages] = useState(false)
-  const pendingSend = useRef<PendingSend | null>(null)
+  const pendingSends = useRef(new Map<string, PendingSend>())
   const pendingAnswers = useRef(
     new Map<string, { operationId: string; answer: string; sent: boolean }>()
   )
@@ -123,7 +150,7 @@ export function Chat({
   const userId = session.status === "active" ? session.session.user.id : ""
   const modelQuery = useQuery({
     ...modelQueryOptions(userId),
-    enabled: available && Boolean(userId),
+    enabled: available && Boolean(userId) && !workflow,
   })
   const models = modelQuery.data ?? []
   const selectedModel = models.find((item) => item.id === model)
@@ -148,6 +175,11 @@ export function Chat({
     }
     setHistory(value)
   }, [])
+  const workflowRefresh = useRef(workflow?.onRefresh)
+  workflowRefresh.current = workflow?.onRefresh
+  useEffect(() => {
+    if (history?.conversation.id === selected) workflowRefresh.current?.()
+  }, [history, selected])
 
   const report = useCallback(
     (error: unknown, showMessage = true) => {
@@ -242,7 +274,14 @@ export function Chat({
       historyReader.invalidate()
       setVerifiedHistory(undefined)
     }
-  }, [selected, available, report, historyReader, acceptHistory])
+  }, [
+    selected,
+    available,
+    report,
+    historyReader,
+    acceptHistory,
+    workflowVersion,
+  ])
   const currentHistory =
     history?.conversation.id === selected ? history : undefined
   const activeRun = currentHistory?.runs
@@ -307,6 +346,7 @@ export function Chat({
     const signal = lifetime.current?.signal
     if (
       !id ||
+      id !== selectedRef.current ||
       !signal ||
       signal.aborted ||
       !available ||
@@ -314,7 +354,7 @@ export function Chat({
     )
       return
     const value = await historyReader.read(id, signal)
-    if (value) {
+    if (value && selectedRef.current === id) {
       if (verifiedHistory !== id) setDelta("")
       acceptHistory(value)
       setVerifiedHistory(id)
@@ -329,12 +369,13 @@ export function Chat({
     )
       return
     const signal = lifetime.current.signal
+    const origin = selectedRef.current
     setBusy(true)
     setMessage("")
     try {
       await action()
     } catch (error) {
-      if (!signal.aborted) report(error)
+      if (!signal.aborted) report(error, selectedRef.current === origin)
     } finally {
       if (!signal.aborted) setBusy(false)
     }
@@ -378,10 +419,9 @@ export function Chat({
       if (!lifetime.current || lifetime.current.signal.aborted) return
       setConversations((items) => [created, ...items])
       setSelected(created.id)
-      setInput("")
+      onOpenChat?.()
       setDelta("")
       setAnswers({})
-      pendingSend.current = null
     })
   }
   function send() {
@@ -390,42 +430,53 @@ export function Chat({
       !currentHistory ||
       verifiedHistory !== selected ||
       !input.trim() ||
-      !selectedModel ||
+      (!workflow && !selectedModel) ||
+      (workflow && !workflow.canSend) ||
       activeRun ||
       uncertain ||
       !available
     )
       return
-    const previous = pendingSend.current
+    const previous = pendingSends.current.get(selected)
+    const sendModel = workflow ? "" : model
+    const sendEffort = workflow ? "" : effort
     const operation =
       previous &&
       previous.conversation === selected &&
       previous.input === input &&
-      previous.model === model &&
-      previous.effort === effort
+      previous.model === sendModel &&
+      previous.effort === sendEffort
         ? previous
         : {
             operationId: crypto.randomUUID(),
             input,
-            model,
-            effort,
+            model: sendModel,
+            effort: sendEffort,
             conversation: selected,
           }
-    pendingSend.current = operation
+    pendingSends.current.set(selected, operation)
     void perform(async () => {
-      await api.start(
-        selected,
-        {
-          operationId: operation.operationId,
-          input: operation.input,
-          model: operation.model,
-          effort: operation.effort || null,
-        },
-        csrf,
-        lifetime.current!.signal
-      )
+      if (workflow)
+        await workflow.start(
+          operation.operationId,
+          operation.input,
+          csrf,
+          lifetime.current!.signal
+        )
+      else
+        await api.start(
+          selected,
+          {
+            operationId: operation.operationId,
+            input: operation.input,
+            model: operation.model,
+            effort: operation.effort || null,
+          },
+          csrf,
+          lifetime.current!.signal
+        )
       if (!lifetime.current || lifetime.current.signal.aborted) return
-      pendingSend.current = null
+      pendingSends.current.delete(selected)
       setInput("")
       await reload(selected)
     })
@@ -566,9 +617,8 @@ export function Chat({
         run.status === "uncertain" ||
         (!available && !resuming && run.status === "active")
     )
-  const selectedConversation = conversations.find(
-    (item) => item.id === selected
-  )
+  const selectedConversation =
+    workflow?.conversation ?? conversations.find((item) => item.id === selected)
   const projectId = selectedConversation?.projectId ?? undefined
   const listedProject = projectWorkspace.projects.find(
     (item) => item.id === projectId
@@ -624,15 +674,30 @@ export function Chat({
   const submitDisabled =
     !selected ||
     !historyReady ||
-    !selectedModel ||
+    (!workflow && !selectedModel) ||
+    Boolean(workflow && !workflow.canSend) ||
     !input.trim() ||
     busy ||
     !available ||
     Boolean(uncertain)
+  useEffect(() => {
+    if (!workflow?.focusOnReady || !historyReady || !available) return
+    const textarea = messagesView.current
+      ?.closest(".chat")
+      ?.querySelector("textarea")
+    if (!textarea) return
+    textarea.focus()
+    workflow.onFocused?.()
+  }, [workflow?.focusOnReady, workflow?.onFocused, historyReady, available])
+  useEffect(() => {
+    setMessage("")
+    setDelta("")
+    setAnswers({})
+  }, [selected])
 
   function selectConversation(id: string) {
-    if (id === selected) return
-    pendingSend.current = null
+    onOpenChat?.()
+    if (id === selected && !workflow) return
     setMessage("")
     setDelta("")
     setAnswers({})
@@ -668,7 +733,9 @@ export function Chat({
           busy={busy}
           onNewChat={newConversation}
           conversations={conversations}
-          selectedConversation={selected}
+          selectedConversation={
+            workflow || !navigationActive ? undefined : selected
+          }
           onSelectConversation={selectConversation}
           onProjectRemoved={(id) => {
             const removed = conversations.filter(
@@ -693,7 +760,7 @@ export function Chat({
                 (project) => project.id === conversation.projectId
               )
           )}
-          selected={selected}
+          selected={workflow || !navigationActive ? undefined : selected}
           available={available}
           busy={busy}
           hasOlder={Boolean(nextCursor)}
@@ -791,7 +858,7 @@ export function Chat({
                 aria-label={m.assistant_response_in_progress()}
               >
                 <strong>Assistant</strong>
-                <MessageMarkdown>{delta}</MessageMarkdown>
+                <MessageMarkdown previews={false}>{delta}</MessageMarkdown>
               </article>
             )}
             {currentHistory?.requests.map((request) => {
@@ -888,12 +955,15 @@ export function Chat({
           </Button>
         )}
         <div className="chat-bottom">
-          {modelQuery.failureCount > 5 && !modelError && !models.length && (
-            <p className="chat-status" role="status">
-              {m.model_discovery_is_still_busy_retrying_automatically()}{" "}
-            </p>
-          )}
-          {modelError && (
+          {!workflow &&
+            modelQuery.failureCount > 5 &&
+            !modelError &&
+            !models.length && (
+              <p className="chat-status" role="status">
+                {m.model_discovery_is_still_busy_retrying_automatically()}{" "}
+              </p>
+            )}
+          {!workflow && modelError && (
             <div className="chat-notice" role="status">
               <p>
                 {models.length
@@ -911,7 +981,7 @@ export function Chat({
               </Button>
             </div>
           )}
-          {!modelError && missingProviders.length > 0 && (
+          {!workflow && !modelError && missingProviders.length > 0 && (
             <div className="chat-notice" role="status">
               <p>
                 {m.models_from_providers_could_not_be_loaded({
@@ -963,23 +1033,35 @@ export function Chat({
               {outcome}
             </p>
           )}
-          <ChatComposer
-            input={input}
-            model={model}
-            models={models}
-            effort={effort}
-            disabled={!selected || !historyReady || !available || busy}
-            sendDisabled={submitDisabled}
-            running={Boolean(activeRun)}
-            stopDisabled={busy || !available}
-            onInput={setInput}
-            onModel={setModel}
-            onEffort={(value) =>
-              setEfforts((current) => ({ ...current, [model]: value }))
-            }
-            onSend={send}
-            onStop={stop}
-          />
+          {workflow && !workflow.canSend ? (
+            <p className="chat-notice">{m.feature_discussion_read_only()}</p>
+          ) : (
+            <ChatComposer
+              input={input}
+              model={model}
+              models={models}
+              effort={effort}
+              disabled={!selected || !historyReady || !available || busy}
+              sendDisabled={submitDisabled}
+              running={Boolean(activeRun)}
+              stopDisabled={busy || !available}
+              onInput={setInput}
+              onModel={setModel}
+              onEffort={(value) =>
+                setEfforts((current) => ({ ...current, [model]: value }))
+              }
+              onSend={send}
+              onStop={stop}
+              workflow={
+                workflow
+                  ? {
+                      modelLabel: workflow.modelLabel,
+                      access: m.feature_access(),
+                    }
+                  : undefined
+              }
+            />
+          )}
         </div>
       </section>
     ),

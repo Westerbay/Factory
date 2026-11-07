@@ -19,6 +19,7 @@ export default defineConfig({
       registerType: "prompt",
       includeManifestIcons: false,
       injectManifest: {
+        globIgnores: ["**/mermaid.tiny-*.js"],
         globPatterns: [
           "assets/**/*.{js,css}",
           "icons/*.png",

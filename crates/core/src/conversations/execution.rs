@@ -118,6 +118,10 @@ pub enum ExecutionEvent {
     ThreadReady {
         provider_thread: String,
     },
+    /// The actual model reported by a provider for the active execution.
+    ModelObserved {
+        model: String,
+    },
     Delta {
         provider_item: String,
         text: String,

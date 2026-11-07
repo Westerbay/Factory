@@ -185,7 +185,7 @@ impl DockerEnvironmentRuntime {
             return Err(EnvironmentError::VolumeMissing);
         }
         let container = self.container(env).await?;
-        let state = match container {
+        let mut state = match container {
             None => ObservedState::NotCreated,
             Some(value) => {
                 if env.desired_state == DesiredState::Running {
@@ -210,6 +210,15 @@ impl DockerEnvironmentRuntime {
                 }
             }
         };
+        if env.desired_state == DesiredState::Stopped
+            && matches!(state, ObservedState::NotCreated | ObservedState::Stopped)
+        {
+            let _feature_guard = super::feature_execution::launch_lock(env).await?;
+            // A stopped member container does not imply its disposable workers stopped.
+            if self.feature_workers_need_stop(env).await? {
+                state = ObservedState::Stopping;
+            }
+        }
         Ok(RuntimeInspection { state, volume })
     }
 
@@ -303,9 +312,13 @@ impl EnvironmentRuntime for DockerEnvironmentRuntime {
     async fn stop(&self, env: &Environment) -> Result<(), EnvironmentError> {
         self.bounded(async {
             self.prepare(env).await?;
+            let _feature_guard = super::feature_execution::launch_lock(env).await?;
             // Stop remains possible for a proved owned container even if image/policy changed
             // or its data volume vanished. Never mutate a resource selected only by name.
-            let Some(container) = self.container(env).await? else {
+            let container = self.container(env).await?;
+            self.require_mutation_permission()?;
+            self.stop_feature_workers(env).await?;
+            let Some(container) = container else {
                 return Ok(());
             };
             if container["State"]["Running"] == false

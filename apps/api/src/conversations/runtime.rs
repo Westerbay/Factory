@@ -81,6 +81,20 @@ pub fn with_providers(
     ConversationRuntime::with_providers(service, providers, Arc::new(ApiHost), Arc::new(ApiCodec))
 }
 
+pub fn with_providers_and_features(
+    service: Arc<factory_application::conversations::ConversationService>,
+    providers: Vec<factory_application::conversations::coordinator::ExecutionProvider>,
+    features: Arc<dyn factory_core::features::FeatureStore>,
+) -> Result<Arc<ConversationRuntime>, ConversationError> {
+    ConversationRuntime::with_providers_and_features(
+        service,
+        providers,
+        Arc::new(ApiHost),
+        Arc::new(ApiCodec),
+        Some(features),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

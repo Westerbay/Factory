@@ -1,6 +1,7 @@
 //! Internal, fixed-command Docker streams shared by terminal and account adapters.
 use super::{
     DockerEnvironmentRuntime,
+    feature_execution::{ScopedProvider, proof_command, relay_command},
     policy::{require_current_policy, validate_record},
 };
 use bollard::{
@@ -62,6 +63,13 @@ pub(crate) enum FixedProcess {
     ClaudeExecution(ClaudeLaunch),
     /// Fixed, immutable controller; its bounded JSON input never selects an executable.
     ProjectController,
+    FeatureProof {
+        checkout: String,
+    },
+    FeatureRelay {
+        provider: ScopedProvider,
+        attempt: Uuid,
+    },
     #[cfg(test)]
     CodexSchema,
 }
@@ -185,6 +193,8 @@ impl FixedProcess {
                 &session,
             ],
             Self::CodexAccount => vec!["/usr/local/bin/factory-auth-controller"],
+            Self::FeatureProof { checkout } => return feature_helper(proof_command(checkout)),
+            Self::FeatureRelay { provider, attempt } => return feature_helper(relay_command(*provider, *attempt)),
             Self::ProjectController => vec!["/usr/local/bin/factory-project-controller"],
             // The fixed executable and fixed arguments are never selected by the browser.
             // A watchdog bounds orphan lifetime; it does not prove descendant cleanup.
@@ -267,6 +277,20 @@ impl FixedProcess {
             cmd: Some(cmd),
             ..Default::default()
         }
+    }
+}
+
+fn feature_helper(cmd: Vec<String>) -> CreateExecOptions<String> {
+    CreateExecOptions {
+        cmd: Some(cmd),
+        attach_stdin: Some(true),
+        attach_stdout: Some(true),
+        attach_stderr: Some(true),
+        tty: Some(false),
+        privileged: Some(false),
+        user: Some("10000:10000".into()),
+        working_dir: Some("/home/factory".into()),
+        ..Default::default()
     }
 }
 

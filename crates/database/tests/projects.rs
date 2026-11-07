@@ -296,11 +296,11 @@ async fn readiness_rejects_old_schema_version() {
         .await
         .unwrap();
     assert_eq!(db.ready().await.unwrap(), Readiness::Invalid);
-    sqlx::query("UPDATE factory_identity.schema_info SET version=4")
+    sqlx::query("UPDATE factory_identity.schema_info SET version=5")
         .execute(&sql)
         .await
         .unwrap();
-    sqlx::query("ALTER TABLE factory_identity.schema_info ADD CONSTRAINT schema_info_version_check CHECK (version=4)").execute(&sql).await.unwrap();
+    sqlx::query("ALTER TABLE factory_identity.schema_info ADD CONSTRAINT schema_info_version_check CHECK (version=5)").execute(&sql).await.unwrap();
     assert_eq!(db.ready().await.unwrap(), Readiness::Ready);
 }
 

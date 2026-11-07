@@ -19,6 +19,7 @@ export function SplitPane({
   onSecondaryVisibleChange,
   compact,
   secondaryId,
+  defaultSecondaryPercent = 40,
 }: {
   primary: ReactNode
   secondary: ReactNode
@@ -27,6 +28,7 @@ export function SplitPane({
   onSecondaryVisibleChange: (visible: boolean) => void
   compact: boolean
   secondaryId: string
+  defaultSecondaryPercent?: number
 }) {
   useLocale()
   const host = useRef<HTMLDivElement>(null)
@@ -39,7 +41,7 @@ export function SplitPane({
     width: number
   } | null>(null)
   const [width, setWidth] = useState(0)
-  const [requestedPercent, setRequestedPercent] = useState(40)
+  const [requestedPercent, setRequestedPercent] = useState<number>()
   const [resizing, setResizing] = useState(false)
   const primaryHidden = secondaryExpanded || (compact && secondaryVisible)
   const split = !compact && secondaryVisible && !secondaryExpanded
@@ -51,7 +53,10 @@ export function SplitPane({
   const maximum = canFitMinimums
     ? Math.min(MAX_PERCENT, 100 - (PRIMARY_MIN_WIDTH / availableWidth) * 100)
     : MAX_PERCENT
-  const percent = Math.min(maximum, Math.max(minimum, requestedPercent))
+  const percent = Math.min(
+    maximum,
+    Math.max(minimum, requestedPercent ?? defaultSecondaryPercent)
+  )
 
   useEffect(() => {
     const element = host.current

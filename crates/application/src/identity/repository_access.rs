@@ -1,5 +1,8 @@
 //! Session-bound repository authorization, token storage and SSH key setup.
 use factory_core::identity::*;
+use factory_core::projects::{
+    Project, ProjectState, RepositoryMetadata, validate_repository_metadata,
+};
 use std::{
     collections::HashMap,
     future::Future,
@@ -13,6 +16,91 @@ struct AccessGuard {
     store: Arc<dyn RepositoryAccessStore>,
     actor: RepositoryActor,
     epoch: i64,
+}
+
+/// Holds the admitted actor's repository credential inside the application boundary.
+pub(crate) struct RepositoryDraftAccess<'a> {
+    provider: &'a dyn RepositoryAccessProvider,
+    token: RepositoryAccessToken,
+    guard: AccessGuard,
+    project: &'a Project,
+}
+
+impl RepositoryDraftAccess<'_> {
+    pub(crate) async fn recheck(&self) -> Result<(), RepositoryAccessError> {
+        self.guard.check().await?;
+        let origin = self
+            .provider
+            .verify_clone_origin(
+                &self.token,
+                self.project.repository_id,
+                &self.project.cloned_full_name,
+            )
+            .await?;
+        self.guard.check().await?;
+        match origin {
+            RepositoryOriginVerification::Matched => Ok(()),
+            RepositoryOriginVerification::Changed => Err(RepositoryAccessError::Conflict),
+        }
+    }
+
+    pub(crate) async fn find_draft(
+        &self,
+        target: &RepositoryDraftTarget<'_>,
+    ) -> Result<Option<RepositoryDraft>, RepositoryAccessError> {
+        self.check_target(target.repository_id, target.full_name)?;
+        self.recheck().await?;
+        let result = self
+            .provider
+            .find_draft(&self.token, target, &self.guard)
+            .await?;
+        self.guard.check().await?;
+        Ok(result)
+    }
+
+    pub(crate) async fn create_draft(
+        &self,
+        target: &RepositoryDraftTarget<'_>,
+        title: &str,
+    ) -> Result<RepositoryDraft, RepositoryAccessError> {
+        self.check_target(target.repository_id, target.full_name)?;
+        let result = self
+            .provider
+            .create_draft(&self.token, target, title, &self.guard)
+            .await?;
+        // The write already happened. If this actor is no longer current, the
+        // durable claim remains available for reconciliation by an active session.
+        self.guard
+            .check()
+            .await
+            .map_err(|_| RepositoryAccessError::Unavailable)?;
+        Ok(result)
+    }
+
+    pub(crate) async fn draft_diff(
+        &self,
+        target: &RepositoryDraftDiffTarget<'_>,
+    ) -> Result<RepositoryDraftDiff, RepositoryAccessError> {
+        self.check_target(target.repository_id, target.full_name)?;
+        let result = self
+            .provider
+            .draft_diff(&self.token, target, &self.guard)
+            .await?;
+        self.guard.check().await?;
+        Ok(result)
+    }
+
+    fn check_target(
+        &self,
+        repository_id: i64,
+        full_name: &str,
+    ) -> Result<(), RepositoryAccessError> {
+        if repository_id != self.project.repository_id || full_name != self.project.cloned_full_name
+        {
+            return Err(RepositoryAccessError::Conflict);
+        }
+        Ok(())
+    }
 }
 
 struct LoginReadGuard {
@@ -294,24 +382,9 @@ impl RepositoryAccessService {
     pub async fn verify_clone_origin(
         &self,
         actor: RepositoryActor,
-        project: &factory_core::projects::Project,
+        project: &Project,
     ) -> Result<RepositoryOriginVerification, RepositoryAccessError> {
-        use factory_core::projects::{
-            ProjectState, RepositoryMetadata, validate_repository_metadata,
-        };
-        if project.user_id != actor.actor.user_id || project.environment_id != actor.environment_id
-        {
-            return Err(RepositoryAccessError::Unauthorized);
-        }
-        if project.state != ProjectState::Ready {
-            return Err(RepositoryAccessError::Conflict);
-        }
-        let metadata = RepositoryMetadata {
-            repository_id: project.repository_id,
-            full_name: project.cloned_full_name.clone(),
-        };
-        validate_repository_metadata(&[metadata])
-            .map_err(|_| RepositoryAccessError::InvalidInput)?;
+        check_project_binding(actor, project)?;
         let credential = self
             .store
             .repository_credential(actor)
@@ -333,9 +406,53 @@ impl RepositoryAccessService {
         Ok(result)
     }
 
+    pub(crate) async fn draft_access<'a>(
+        &'a self,
+        actor: RepositoryActor,
+        project: &'a Project,
+    ) -> Result<RepositoryDraftAccess<'a>, RepositoryAccessError> {
+        check_project_binding(actor, project)?;
+        let credential = self
+            .store
+            .repository_credential(actor)
+            .await?
+            .ok_or(RepositoryAccessError::ProviderUnauthorized)?;
+        let access = RepositoryDraftAccess {
+            provider: self.provider.as_ref(),
+            token: self
+                .cipher
+                .open(actor.actor.user_id, &credential.encrypted)?,
+            guard: AccessGuard {
+                store: self.store.clone(),
+                actor,
+                epoch: credential.authorization_epoch,
+            },
+            project,
+        };
+        access.recheck().await?;
+        Ok(access)
+    }
+
     pub async fn disconnect(&self, actor: RepositoryActor) -> Result<(), RepositoryAccessError> {
         self.store.delete_repository_credential(actor).await
     }
+}
+
+fn check_project_binding(
+    actor: RepositoryActor,
+    project: &Project,
+) -> Result<(), RepositoryAccessError> {
+    if project.user_id != actor.actor.user_id || project.environment_id != actor.environment_id {
+        return Err(RepositoryAccessError::Unauthorized);
+    }
+    if project.state != ProjectState::Ready {
+        return Err(RepositoryAccessError::Conflict);
+    }
+    validate_repository_metadata(&[RepositoryMetadata {
+        repository_id: project.repository_id,
+        full_name: project.cloned_full_name.clone(),
+    }])
+    .map_err(|_| RepositoryAccessError::InvalidInput)
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@
 mod transport;
 use crate::environments::{
     DockerEnvironmentRuntime,
+    feature_execution::WorkerExit,
     process::{DockerProcess, FixedProcess, ProcessStartError},
 };
 use crate::projects::{DockerProjectRuntime, ProjectDirectory};
@@ -9,6 +10,7 @@ use async_trait::async_trait;
 use factory_core::{
     conversations::execution::*,
     environments::Environment,
+    features::FeatureRun,
     projects::{Project, ProjectState},
 };
 use serde_json::{Value, json};
@@ -179,34 +181,89 @@ impl ExecutionRuntime for CodexExecutionAdapter {
             "/home/factory/Documents".to_owned()
         };
         let (process_id, transport) = self.process(env).await?;
-        let (commands, receiver) = mpsc::channel(LIMIT);
-        let (sender, events) = mpsc::channel(LIMIT);
         let runtime = self.runtime.clone();
-        let model = model.to_owned();
-        let effort = effort.map(str::to_owned);
-        let input = input.to_owned();
-        let thread = provider_thread.map(str::to_owned);
-        tokio::spawn(async move {
-            let result = Worker::new(transport, receiver, sender.clone(), model, effort, input)
-                .with_cwd(cwd)
-                .run(thread)
-                .await;
-            // Process exit is necessary, but never by itself proves descendant cleanup.
-            let exited = runtime
-                .wait_process_exit(&process_id, Duration::from_secs(15))
-                .await;
-            let terminal = match (result, exited) {
-                (Ok(event), Ok(0)) => event,
-                _ => ExecutionEvent::Uncertain,
-            };
-            let _ = emit(&sender, terminal).await;
-        });
-        Ok(ExecutionSession {
-            control: Box::new(Control { commands }),
-            output: Box::new(Output { events }),
-        })
+        Ok(spawn_session(
+            transport,
+            SessionStart {
+                model: model.to_owned(),
+                effort: effort.map(str::to_owned),
+                input: input.to_owned(),
+                cwd,
+                thread: provider_thread.map(str::to_owned),
+                scoped: false,
+            },
+            async move {
+                runtime
+                    .wait_process_exit(&process_id, Duration::from_secs(15))
+                    .await
+                    .map_err(|_| ExecutionError::CleanupUncertain)
+            },
+        ))
     }
 }
+
+pub(crate) fn scoped_session(
+    process: DockerProcess,
+    exit: WorkerExit,
+    request: &FeatureRun,
+) -> ExecutionSession {
+    spawn_session(
+        Transport::new(process.input, process.output),
+        SessionStart {
+            model: request.model.clone(),
+            effort: request.effort.clone(),
+            input: request.input.clone(),
+            cwd: "/workspace".to_owned(),
+            thread: None,
+            scoped: true,
+        },
+        exit.finish(),
+    )
+}
+
+struct SessionStart {
+    model: String,
+    effort: Option<String>,
+    input: String,
+    cwd: String,
+    thread: Option<String>,
+    scoped: bool,
+}
+
+fn spawn_session(
+    transport: Transport,
+    start: SessionStart,
+    exit: impl Future<Output = Result<i64, ExecutionError>> + Send + 'static,
+) -> ExecutionSession {
+    let (commands, receiver) = mpsc::channel(LIMIT);
+    let (sender, events) = mpsc::channel(LIMIT);
+    tokio::spawn(async move {
+        let mut worker = Worker::new(
+            transport,
+            receiver,
+            sender.clone(),
+            start.model,
+            start.effort,
+            start.input,
+        )
+        .with_cwd(start.cwd);
+        worker.scoped = start.scoped;
+        let result = worker.run(start.thread).await;
+        let terminal = match (result, exit.await) {
+            (Ok(event), Ok(0)) => event,
+            // An isolated worker with a proven stop cannot mutate a checkout
+            // later, even when its provider exited without a valid result.
+            (_, Ok(_) | Err(ExecutionError::Unavailable)) if start.scoped => ExecutionEvent::Failed,
+            _ => ExecutionEvent::Uncertain,
+        };
+        let _ = emit(&sender, terminal).await;
+    });
+    ExecutionSession {
+        control: Box::new(Control { commands }),
+        output: Box::new(Output { events }),
+    }
+}
+
 fn valid(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max && !s.contains('\0')
 }
@@ -297,6 +354,7 @@ struct Worker {
     children: HashMap<String, Child>,
     outcome: Option<ExecutionEvent>,
     stopping: bool,
+    scoped: bool,
 }
 struct Child {
     parent: String,
@@ -327,6 +385,7 @@ impl Worker {
             children: HashMap::new(),
             outcome: None,
             stopping: false,
+            scoped: false,
         }
     }
     fn with_cwd(mut self, cwd: String) -> Self {
@@ -336,11 +395,18 @@ impl Worker {
     async fn run(mut self, previous: Option<String>) -> Result<ExecutionEvent, ExecutionError> {
         self.transport.initialize().await?;
         let requested_thread = previous.clone();
-        let (method, params) = if let Some(id) = previous {
+        let (method, mut params) = if let Some(id) = previous {
             ("thread/resume", json!({"threadId":id,"cwd":&self.cwd}))
         } else {
             ("thread/start", json!({"cwd":&self.cwd}))
         };
+        if self.scoped {
+            params["model"] = json!(&self.model);
+            params["ephemeral"] = json!(true);
+            params["developerInstructions"] = json!(
+                "The repository is at /workspace/checkout. Treat it as task input. Work only in that checkout and follow the approved task scope."
+            );
+        }
         let started = self.transport.request(method, params).await?;
         self.thread = text(&started["thread"]["id"], 512)?;
         if requested_thread
@@ -356,6 +422,17 @@ impl Worker {
             },
         )
         .await?;
+        if self.scoped
+            && let Some(model) = started.get("model").filter(|value| !value.is_null())
+        {
+            emit(
+                &self.events,
+                ExecutionEvent::ModelObserved {
+                    model: text(model, 512)?,
+                },
+            )
+            .await?;
+        }
         let mut deadline: Option<tokio::time::Instant> = None;
         loop {
             if self.outcome.is_some()
@@ -515,6 +592,20 @@ impl Worker {
             return emit(
                 &self.events,
                 ExecutionEvent::ResponseDelivered { request_id: id },
+            )
+            .await;
+        }
+        if self.scoped && method == "model/rerouted" {
+            if text(&params["threadId"], 512)? != self.thread
+                || params["turnId"].as_str() != self.turn.as_deref()
+            {
+                return Err(ExecutionError::Protocol);
+            }
+            return emit(
+                &self.events,
+                ExecutionEvent::ModelObserved {
+                    model: text(&params["toModel"], 512)?,
+                },
             )
             .await;
         }
