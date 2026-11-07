@@ -303,9 +303,13 @@ impl EnvironmentRuntime for DockerEnvironmentRuntime {
     async fn stop(&self, env: &Environment) -> Result<(), EnvironmentError> {
         self.bounded(async {
             self.prepare(env).await?;
+            let _feature_guard = super::feature_execution::launch_lock(env).await?;
             // Stop remains possible for a proved owned container even if image/policy changed
             // or its data volume vanished. Never mutate a resource selected only by name.
-            let Some(container) = self.container(env).await? else {
+            let container = self.container(env).await?;
+            self.require_mutation_permission()?;
+            self.stop_feature_workers(env).await?;
+            let Some(container) = container else {
                 return Ok(());
             };
             if container["State"]["Running"] == false

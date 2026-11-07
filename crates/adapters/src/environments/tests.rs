@@ -386,6 +386,7 @@ async fn old_policy_owned_container_can_still_be_stopped_by_immutable_id() {
                 200,
                 container(&env),
             ),
+            reply("GET", "/containers/json".into(), 200, json!([])),
             reply(
                 "POST",
                 format!("/containers/{}/stop", "b".repeat(64)),
