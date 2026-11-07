@@ -51,7 +51,7 @@ export function FeatureHome({
             <p>{m.feature_chat_hint()}</p>
             <ArrowRight size={17} aria-hidden="true" />
           </button>
-        <button type="button" data-mode="feature" onClick={onFeatures}>
+          <button type="button" data-mode="feature" onClick={onFeatures}>
             <GitBranch size={21} aria-hidden="true" />
             <h2>{m.features()}</h2>
             <p>{m.feature_start_hint()}</p>

@@ -38,7 +38,9 @@
   min-height: 5.5rem;
   height: auto;
 }
-.workspace-header-track:has(.workspace-feature-header-host) { height: auto; }
+.workspace-header-track:has(.workspace-feature-header-host) {
+  height: auto;
+}
 .feature-heading {
   display: flex;
   align-items: center;

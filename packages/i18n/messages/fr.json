@@ -270,13 +270,8 @@
   "no_status_users_on_this_page": "Aucun utilisateur avec le statut « {status} » sur cette page.",
   "count_shown_up_to_20_per_page": [
     {
-      "declarations": [
-        "input count",
-        "local n = count: plural"
-      ],
-      "selectors": [
-        "n"
-      ],
+      "declarations": ["input count", "local n = count: plural"],
+      "selectors": ["n"],
       "match": {
         "n=one": "{count} affiché · 20 maximum par page",
         "n=other": "{count} affichés · 20 maximum par page"

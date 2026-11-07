@@ -270,13 +270,8 @@
   "no_status_users_on_this_page": "No {status} users on this page.",
   "count_shown_up_to_20_per_page": [
     {
-      "declarations": [
-        "input count",
-        "local n = count: plural"
-      ],
-      "selectors": [
-        "n"
-      ],
+      "declarations": ["input count", "local n = count: plural"],
+      "selectors": ["n"],
       "match": {
         "n=one": "{count} shown · Up to 20 per page",
         "n=other": "{count} shown · Up to 20 per page"

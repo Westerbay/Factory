@@ -7,7 +7,9 @@
   min-height: 0;
   overflow: hidden;
 }
-:root[data-theme="light"] .workspace { --mode-feature: #7351b8; }
+:root[data-theme="light"] .workspace {
+  --mode-feature: #7351b8;
+}
 .t-resize {
   transition:
     width var(--resize-dur) var(--resize-ease),

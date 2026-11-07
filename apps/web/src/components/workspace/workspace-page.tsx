@@ -692,7 +692,9 @@ export function WorkspacePage() {
                   signal
                 ),
               onRefresh: featureState.refresh,
-              version: selectedFeature.attempts.map((attempt) => `${attempt.id}:${attempt.status}`).join(","),
+              version: selectedFeature.attempts
+                .map((attempt) => `${attempt.id}:${attempt.status}`)
+                .join(","),
               focusOnReady: focusFeature === selectedFeature.feature.id,
               onFocused: () => setFocusFeature(undefined),
             }

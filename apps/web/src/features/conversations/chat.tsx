@@ -273,7 +273,14 @@ export function Chat({
       historyReader.invalidate()
       setVerifiedHistory(undefined)
     }
-  }, [selected, available, report, historyReader, acceptHistory, workflowVersion])
+  }, [
+    selected,
+    available,
+    report,
+    historyReader,
+    acceptHistory,
+    workflowVersion,
+  ])
   const currentHistory =
     history?.conversation.id === selected ? history : undefined
   const activeRun = currentHistory?.runs
@@ -672,7 +679,9 @@ export function Chat({
     Boolean(uncertain)
   useEffect(() => {
     if (!workflow?.focusOnReady || !historyReady || !available) return
-    const textarea = messagesView.current?.closest(".chat")?.querySelector("textarea")
+    const textarea = messagesView.current
+      ?.closest(".chat")
+      ?.querySelector("textarea")
     if (!textarea) return
     textarea.focus()
     workflow.onFocused?.()
@@ -721,7 +730,9 @@ export function Chat({
           busy={busy}
           onNewChat={newConversation}
           conversations={conversations}
-          selectedConversation={workflow || !navigationActive ? undefined : selected}
+          selectedConversation={
+            workflow || !navigationActive ? undefined : selected
+          }
           onSelectConversation={selectConversation}
           onProjectRemoved={(id) => {
             const removed = conversations.filter(
