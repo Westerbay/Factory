@@ -820,7 +820,8 @@ FEATURE_FIELDS = {
     'feature_integrate': {'attempt', 'base_oid', 'writable', 'scope', 'expected_head'},
     'feature_snapshot': set(),
     'feature_remote': set(),
-    'feature_refresh': {'base_oid', 'head_oid', 'patch_digest'},
+    'feature_stage_refresh': {'candidate', 'base_oid', 'head_oid', 'patch_digest'},
+    'feature_confirm_refresh': {'candidate', 'base_oid', 'head_oid', 'patch_digest', 'proposed_snapshot'},
     'feature_push': {'base_oid', 'head_oid', 'patch_digest'},
 }
 FEATURE_ID_FIELDS = {'op', 'project', 'operation', 'directory', 'repository', 'repository_id', 'feature'}
@@ -1062,9 +1063,9 @@ def verified_branch(repo, feature, repository_id):
     return branch
 
 
-def stage_initialization(record, feature, remote, repository_id, candidate_id):
+def fresh_candidate(record, slot, repository_id, candidate_id):
     try:
-        old = directory(record, 'candidate', private=True)
+        old = directory(record, slot, private=True)
     except FileNotFoundError:
         pass
     else:
@@ -1079,12 +1080,16 @@ def stage_initialization(record, feature, remote, repository_id, candidate_id):
             os.close(old)
         # A crash during removal must not leave a partially erased candidate
         # in the path needed for a later, independently verified fetch.
-        discarded = '.discarded-' + previous['candidate']
-        rename_atomic(record, 'candidate', record, discarded)
+        discarded = '.discarded-' + slot + '-' + previous['candidate']
+        rename_atomic(record, slot, record, discarded)
         os.fsync(record)
         shutil.rmtree(discarded, dir_fd=record)
     receipt = {'candidate': candidate_id, 'repository_id': repository_id}
-    candidate = feature_record(record, 'candidate', 'factory-candidate', receipt, True)
+    return feature_record(record, slot, 'factory-candidate', receipt, True)
+
+
+def stage_initialization(record, feature, remote, repository_id, candidate_id):
+    candidate = fresh_candidate(record, 'candidate', repository_id, candidate_id)
     try:
         return initialized_branch(candidate, remote, feature, initialize=True)
     finally:
@@ -1164,7 +1169,10 @@ def prepare_feature_task(repo, slot, base):
     try:
         ready = read_json_file(slot, 'ready', private=True)
     except FileNotFoundError:
-        if get_ref(repo, base) != base:
+        if (get_ref(repo, base) != base
+                or not git_text(['for-each-ref', '--count=1', '--contains=' + base,
+                                 '--format=%(refname)', 'refs/heads/', 'refs/factory/attempts/'],
+                                repository_fd=repo)):
             raise Problem('conflict')
         if not shutil.rmtree.avoids_symlink_attacks:
             raise Problem('unavailable')
@@ -1329,23 +1337,46 @@ def is_ancestor(repo, earlier, later):
     return status == 0
 
 
-def refresh_feature_base(record, repo, remote, branch, expected):
+def checked_refresh_snapshot(repo, branch, expected):
     current = feature_snapshot(repo, branch)
     if current['git'] != expected:
         raise Problem('conflict')
-    before = current_remote(remote, branch)
+    return current
+
+
+def stage_feature_refresh(record, repo, remote, branch, repository_id, candidate_id, expected):
+    current = checked_refresh_snapshot(repo, branch, expected)
+    before = observed_feature_remote(record, remote, branch)
     old_base, old_head = expected['base_oid'], expected['head_oid']
     if before['base_oid'] == old_base:
-        return current
+        return current['git']
     if before['base_oid'] is None:
         raise Problem('conflict')
-    if before['head_oid'] is not None and (before['head_oid'] != managed_feature_head(record)
+    if before['head_oid'] is not None and (before['head_oid'] != before['managed_head_oid']
                                           or not is_ancestor(repo, before['head_oid'], old_head)):
         raise Problem('conflict')
-    git_command(['fetch', '--no-tags', '--no-recurse-submodules', '--', remote, branch['base_ref']],
+    candidate = fresh_candidate(record, 'refresh-candidate', repository_id, candidate_id)
+    try:
+        git_command(['init', '--bare', fd_path(candidate)], descriptors=(candidate,))
+        git_command(['fetch', '--no-tags', '--no-recurse-submodules', '--', fd_path(repo), old_head],
+                    repository_fd=candidate, descriptors=(repo,), timeout=240)
+        updated = compute_refresh(candidate, remote, branch['base_ref'], before['base_oid'], old_base, old_head)
+        if observed_feature_remote(record, remote, branch) != before:
+            raise Problem('conflict')
+        git_command(['update-ref', 'refs/factory/refresh', updated['head_oid']], repository_fd=candidate)
+        receipt = {'expected': expected, 'proposed': updated, 'remote': before}
+        create_file(candidate, 'factory-refresh', json.dumps(receipt).encode())
+        os.fsync(candidate)
+        return updated
+    finally:
+        os.close(candidate)
+
+
+def compute_refresh(repo, remote, base_ref, expected_base, old_base, old_head):
+    git_command(['fetch', '--no-tags', '--no-recurse-submodules', '--', remote, base_ref],
                 repository_fd=repo, timeout=240)
     new_base = get_ref(repo, 'FETCH_HEAD')
-    if new_base != before['base_oid'] or not is_ancestor(repo, old_base, new_base):
+    if new_base != expected_base or not is_ancestor(repo, old_base, new_base):
         raise Problem('conflict')
     if old_head == old_base:
         new_head = new_base
@@ -1356,15 +1387,41 @@ def refresh_feature_base(record, repo, remote, branch, expected):
             raise Problem('conflict' if status == 1 else 'unavailable')
         tree = oid(output.decode('ascii').strip())
         new_head = feature_commit(repo, tree, (old_head, new_base), 'Refresh Factory feature base')
-    updated = snapshot_between(repo, new_base, new_head)
-    if current_remote(remote, branch) != before:
-        raise Problem('conflict')
-    # Controller readers share the feature lock. Git also compares both old
-    # refs under its transaction before changing either.
-    updates = (f"start\nupdate {branch['head_ref']} {new_head} {old_head}\n"
-               f"update refs/factory/base {new_base} {old_base}\nprepare\ncommit\n").encode()
-    git_command(['update-ref', '--stdin'], repository_fd=repo, input_data=updates)
-    return updated
+    return snapshot_between(repo, new_base, new_head)['git']
+
+
+def confirm_feature_refresh(record, repo, remote, branch, repository_id, candidate_id, expected, proposed):
+    checked_refresh_snapshot(repo, branch, expected)
+    identity = {'candidate': candidate_id, 'repository_id': repository_id}
+    candidate = feature_record(record, 'refresh-candidate', 'factory-candidate', identity, False)
+    try:
+        before = observed_feature_remote(record, remote, branch)
+        receipt = {'expected': expected, 'proposed': proposed, 'remote': before}
+        try:
+            staged = read_json_file(candidate, 'factory-refresh', private=True)
+        except FileNotFoundError as error:
+            raise Problem('conflict') from error
+        if staged != receipt:
+            raise Problem('conflict')
+        new_base, new_head = proposed['base_oid'], proposed['head_oid']
+        if (new_base != before['base_oid'] or get_ref(candidate, 'refs/factory/refresh') != new_head
+                or not is_ancestor(candidate, new_base, new_head)):
+            raise Problem('conflict')
+        updated = snapshot_between(candidate, new_base, new_head)
+        if updated['git'] != proposed:
+            raise Problem('conflict')
+        # Only a confirmed origin can transfer candidate objects into the live repository.
+        git_command(['fetch', '--no-write-fetch-head', '--no-tags', '--no-recurse-submodules', '--',
+                     fd_path(candidate), 'refs/factory/refresh'],
+                    repository_fd=repo, descriptors=(candidate,), timeout=240)
+        if get_ref(repo, new_head) != new_head or observed_feature_remote(record, remote, branch) != before:
+            raise Problem('conflict')
+        updates = (f"start\nupdate {branch['head_ref']} {new_head} {expected['head_oid']}\n"
+                   f"update refs/factory/base {new_base} {expected['base_oid']}\nprepare\ncommit\n").encode()
+        git_command(['update-ref', '--stdin'], repository_fd=repo, input_data=updates)
+        return updated
+    finally:
+        os.close(candidate)
 
 
 def publish_feature(record, repo, remote, branch, expected):
@@ -1472,9 +1529,13 @@ def execute_feature(request, root):
             return feature_snapshot(repo, branch)
         if op == 'feature_remote':
             return observed_feature_remote(record, remote, branch)
-        if op == 'feature_refresh':
-            return refresh_feature_base(record, repo, remote, branch,
-                                        {key: request[key] for key in ('base_oid', 'head_oid', 'patch_digest')})
+        if op in ('feature_stage_refresh', 'feature_confirm_refresh'):
+            snapshot = {key: request[key] for key in ('base_oid', 'head_oid', 'patch_digest')}
+            candidate_id = parse_uuid(request['candidate'])
+            if op == 'feature_stage_refresh':
+                return stage_feature_refresh(record, repo, remote, branch, repository_id, candidate_id, snapshot)
+            return confirm_feature_refresh(record, repo, remote, branch, repository_id, candidate_id, snapshot,
+                                           request['proposed_snapshot'])
         if op == 'feature_push':
             return publish_feature(record, repo, remote, branch,
                                    {key: request[key] for key in ('base_oid', 'head_oid', 'patch_digest')})

@@ -291,12 +291,24 @@ pub trait FeatureDeliveryRuntime: Send + Sync {
         snapshot: &GitSnapshot,
     ) -> Result<(), WorkspaceError>;
 
-    /// Integrate a verified base advance locally and produce a new review diff.
-    async fn refresh_base(
+    /// Compute a candidate in isolation. It is not usable by reviewers.
+    async fn stage_refresh(
         &self,
         environment: &Environment,
         project: &Project,
         feature_id: Uuid,
+        candidate_id: Uuid,
         expected: &GitSnapshot,
+    ) -> Result<GitSnapshot, WorkspaceError>;
+
+    /// Promote the exact candidate after the application rechecks the origin.
+    async fn confirm_refresh(
+        &self,
+        environment: &Environment,
+        project: &Project,
+        feature_id: Uuid,
+        candidate_id: Uuid,
+        expected: &GitSnapshot,
+        proposed: &GitSnapshot,
     ) -> Result<WorkspaceDiff, WorkspaceError>;
 }

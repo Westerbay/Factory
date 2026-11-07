@@ -64,6 +64,13 @@ class ProjectControllerTests(unittest.TestCase):
                 branch = self.execute('feature_stage_initialization', **common, candidate=candidate)
                 return self.execute('feature_confirm_initialization', **common, candidate=candidate,
                                     expected_branch=branch)
+            if op == 'refresh':
+                candidate = str(uuid.uuid4())
+                proposed = self.execute('feature_stage_refresh', **common, **fields, candidate=candidate)
+                if proposed == fields:
+                    return self.execute('feature_snapshot', **common)
+                return self.execute('feature_confirm_refresh', **common, **fields, candidate=candidate,
+                                    proposed_snapshot=proposed)
             return self.execute('feature_' + op, **common, **fields)
 
     def feature_checkout(self, feature, attempt):
@@ -925,6 +932,66 @@ class ProjectControllerTests(unittest.TestCase):
         subprocess.run(['git', '-C', str(origin), 'commit', '-qam', 'conflicting advance'], check=True)
         with self.assertRaises(controller.Problem) as caught:
             self.feature(origin, feature, 'refresh', **result['git'])
+        self.assertEqual(caught.exception.code, 'conflict')
+        self.assertEqual(self.feature(origin, feature, 'snapshot'), result)
+
+    def test_refresh_rejects_a_replacement_repository_with_shared_ancestry(self):
+        origin = self.origin()
+        self.clone(origin)
+        feature = str(uuid.uuid4())
+        _, result = self.ready_feature_snapshot(origin, feature)
+        replacement = origin.with_name('replacement')
+        subprocess.run(['git', 'clone', '-q', str(origin), str(replacement)], check=True)
+        replacement_git = ['git', '-C', str(replacement)]
+        (replacement / 'private.txt').write_text('replacement repository\n')
+        subprocess.run([*replacement_git, 'add', 'private.txt'], check=True)
+        subprocess.run([*replacement_git, '-c', 'user.name=Fixture', '-c',
+                        'user.email=fixture@example.invalid', 'commit', '-qm', 'fork change'], check=True)
+
+        saved = origin.with_name('canonical')
+        origin.rename(saved)
+        replacement.rename(origin)
+        candidate = str(uuid.uuid4())
+        proposed = self.feature(origin, feature, 'stage_refresh', **result['git'], candidate=candidate)
+        self.assertNotEqual(proposed['base_oid'], result['git']['base_oid'])
+        self.assertEqual(self.feature(origin, feature, 'snapshot'), result)
+        rejected_checkout = str(uuid.uuid4())
+        with self.assertRaises(controller.Problem):
+            self.feature(origin, feature, 'prepare', attempt=rejected_checkout, writable=False,
+                         base_oid=proposed['head_oid'])
+        self.assertFalse(self.feature_checkout(feature, rejected_checkout).exists())
+
+        origin.rename(replacement)
+        saved.rename(origin)
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'confirm_refresh', **result['git'], candidate=candidate,
+                         proposed_snapshot=proposed)
+        self.assertEqual(caught.exception.code, 'conflict')
+        self.assertEqual(self.feature(origin, feature, 'snapshot'), result)
+
+    def test_refresh_confirmation_rejects_changed_managed_head_and_stale_proof(self):
+        origin = self.origin()
+        self.clone(origin)
+        feature = str(uuid.uuid4())
+        branch, result = self.ready_feature_snapshot(origin, feature)
+        snapshot = result['git']
+        self.feature(origin, feature, 'push', **snapshot)
+        remote_git = ['git', '-C', str(origin)]
+        (origin / 'upstream.txt').write_text('new base\n')
+        subprocess.run([*remote_git, 'add', 'upstream.txt'], check=True)
+        subprocess.run([*remote_git, 'commit', '-qm', 'advance'], check=True)
+        candidate = str(uuid.uuid4())
+        proposed = self.feature(origin, feature, 'stage_refresh', **snapshot, candidate=candidate)
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'confirm_refresh', **snapshot, candidate=candidate,
+                         proposed_snapshot={**proposed, 'patch_digest': '0' * 64})
+        self.assertEqual(caught.exception.code, 'conflict')
+        self.assertEqual(self.feature(origin, feature, 'snapshot'), result)
+
+        subprocess.run([*remote_git, 'update-ref', branch['head_ref'], snapshot['base_oid']], check=True)
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'confirm_refresh', **snapshot, candidate=candidate,
+                         proposed_snapshot=proposed)
         self.assertEqual(caught.exception.code, 'conflict')
         self.assertEqual(self.feature(origin, feature, 'snapshot'), result)
 

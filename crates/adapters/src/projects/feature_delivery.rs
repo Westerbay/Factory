@@ -35,13 +35,28 @@ impl FeatureDeliveryRuntime for DockerProjectRuntime {
         self.push_feature(env, project, id, snapshot).await
     }
 
-    async fn refresh_base(
+    async fn stage_refresh(
         &self,
         env: &Environment,
         project: &Project,
         id: Uuid,
+        candidate: Uuid,
         expected: &GitSnapshot,
+    ) -> Result<GitSnapshot, WorkspaceError> {
+        self.stage_feature_refresh(env, project, id, candidate, expected)
+            .await
+    }
+
+    async fn confirm_refresh(
+        &self,
+        env: &Environment,
+        project: &Project,
+        id: Uuid,
+        candidate: Uuid,
+        expected: &GitSnapshot,
+        proposed: &GitSnapshot,
     ) -> Result<WorkspaceDiff, WorkspaceError> {
-        self.refresh_feature_base(env, project, id, expected).await
+        self.confirm_feature_refresh(env, project, id, candidate, expected, proposed)
+            .await
     }
 }
