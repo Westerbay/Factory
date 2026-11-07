@@ -54,19 +54,23 @@ enum RemoteBranch {
 fn verified_remote(
     remote: &FeatureRemoteRefs,
     approved: &GitSnapshot,
+    unproven_push: bool,
 ) -> Result<RemoteBranch, Publication> {
-    if remote.base_oid.as_deref() != Some(&approved.base_oid) {
-        return Err(Publication::Stale {
-            refresh_base: remote.head_oid.is_none(),
+    if remote.head_oid.is_some() && remote.head_oid != remote.managed_head_oid {
+        return Err(if unproven_push {
+            Publication::Uncertain
+        } else {
+            Publication::Failed("The existing remote feature branch is not owned by Factory.")
         });
     }
-    match remote.head_oid.as_deref() {
-        None => Ok(RemoteBranch::NeedsPush),
-        Some(oid) if oid == approved.head_oid => Ok(RemoteBranch::Ready),
-        Some(_) => Err(Publication::Failed(
-            "The remote feature branch points to a different commit.",
-        )),
+    if remote.base_oid.as_deref() != Some(&approved.base_oid) {
+        return Err(Publication::Stale { refresh_base: true });
     }
+    Ok(if remote.head_oid.as_deref() == Some(&approved.head_oid) {
+        RemoteBranch::Ready
+    } else {
+        RemoteBranch::NeedsPush
+    })
 }
 
 impl FeatureDeliveryService {
@@ -137,6 +141,49 @@ impl FeatureDeliveryService {
             patch: diff.patch,
             changed_paths: diff.changed_paths,
         }))
+    }
+
+    /// Retry a local comparison refresh before the normal review command. This
+    /// applies only to the unchanged ready snapshot left by a failed publication.
+    pub async fn refresh_stale_comparison(
+        &self,
+        actor: EnvironmentActor,
+        feature_id: Uuid,
+        snapshot_id: Uuid,
+    ) -> Result<(), FeatureError> {
+        let lock = self.lock_for(feature_id)?;
+        let _serial = lock.lock().await;
+        let (env, project, state) = self.features.context(actor, feature_id).await?;
+        let Some(review) = state.review().filter(|review| {
+            state.feature.stage == FeatureStage::Review
+                && review.snapshot.id == snapshot_id
+                && review
+                    .verdict
+                    .as_ref()
+                    .is_some_and(|verdict| verdict.ready())
+                && state.deliveries.last().is_some_and(|receipt| {
+                    receipt.snapshot_id == snapshot_id
+                        && matches!(receipt.status, DeliveryStatus::Failed { .. })
+                })
+        }) else {
+            return Ok(());
+        };
+        let approved = &review.snapshot.git;
+        let current = self
+            .features
+            .workspaces
+            .snapshot(&env, &project, feature_id)
+            .await
+            .map_err(workspace_error)?;
+        if current.git != *approved
+            || self
+                .refresh_stale_base(actor, &env, &project, feature_id, approved)
+                .await
+        {
+            Ok(())
+        } else {
+            Err(FeatureError::StaleSnapshot)
+        }
     }
 
     /// Publish only after a separate authenticated request names the reviewed snapshot.
@@ -233,14 +280,25 @@ impl FeatureDeliveryService {
                 },
                 None,
             ),
-            Publication::Stale { refresh_base } => (
-                DeliveryStatus::Failed {
-                    reason:
-                        "The reviewed diff changed. Review the current result before publishing."
-                            .into(),
-                },
-                Some(refresh_base),
-            ),
+            Publication::Stale { refresh_base } => {
+                let refreshed = if refresh_base {
+                    self.refresh_stale_base(actor, &env, &project, feature_id, approved)
+                        .await
+                } else {
+                    &current.git != approved
+                };
+                let reason = if refreshed {
+                    "The reviewed diff changed. Review the current result before publishing."
+                } else {
+                    "The reviewed diff is stale. Factory could not prepare the current comparison."
+                };
+                (
+                    DeliveryStatus::Failed {
+                        reason: reason.into(),
+                    },
+                    Some(refreshed),
+                )
+            }
             Publication::Failed(reason) => (
                 DeliveryStatus::Failed {
                     reason: reason.into(),
@@ -263,46 +321,54 @@ impl FeatureDeliveryService {
                 },
             )
             .await?;
-        if let Some(refresh_base) = stale {
+        if let Some(refreshed) = stale {
             self.invalidate(actor, &env, feature_id, snapshot_id)
                 .await?;
-            let refresh_allowed = refresh_base
-                && self
-                    .repository
-                    .draft_access(
-                        RepositoryActor {
-                            actor,
-                            environment_id: env.id,
-                            generation: env.generation,
-                        },
-                        &project,
-                    )
-                    .await
-                    .is_ok();
-            let refreshed = if refresh_allowed {
-                match self
-                    .git
-                    .refresh_base(&env, &project, feature_id, approved)
-                    .await
-                {
-                    Ok(diff) => diff.git != *approved,
-                    Err(WorkspaceError::Uncertain) => self
-                        .features
-                        .workspaces
-                        .snapshot(&env, &project, feature_id)
-                        .await
-                        .is_ok_and(|diff| diff.git != *approved),
-                    Err(_) => false,
-                }
-            } else {
-                &current.git != approved
-            };
             if refreshed {
                 self.features.schedule(actor, feature_id);
             }
             return Err(FeatureError::StaleSnapshot);
         }
         Ok(receipt.state)
+    }
+
+    async fn refresh_stale_base(
+        &self,
+        actor: EnvironmentActor,
+        env: &Environment,
+        project: &Project,
+        feature_id: Uuid,
+        approved: &GitSnapshot,
+    ) -> bool {
+        let repository_actor = RepositoryActor {
+            actor,
+            environment_id: env.id,
+            generation: env.generation,
+        };
+        if self
+            .repository
+            .draft_access(repository_actor, project)
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        // Hold the delivery claim while refreshing the private comparison.
+        // The Git controller also revalidates any existing remote head's receipt.
+        match self
+            .git
+            .refresh_base(env, project, feature_id, approved)
+            .await
+        {
+            Ok(diff) => diff.git != *approved,
+            Err(WorkspaceError::Uncertain) => self
+                .features
+                .workspaces
+                .snapshot(env, project, feature_id)
+                .await
+                .is_ok_and(|diff| diff.git != *approved),
+            Err(_) => false,
+        }
     }
 
     async fn invalidate(
@@ -388,7 +454,7 @@ impl FeatureDeliveryService {
                 refresh_base: false,
             };
         }
-        match verified_remote(&remote, request.approved) {
+        match verified_remote(&remote, request.approved, request.recovering) {
             Err(outcome) => return outcome,
             Ok(RemoteBranch::Ready) => {}
             Ok(RemoteBranch::NeedsPush) => {
@@ -412,7 +478,8 @@ impl FeatureDeliveryService {
                     Ok(remote) => remote,
                     Err(_) => return Publication::Uncertain,
                 };
-                match verified_remote(&after, request.approved) {
+                let unproven_push = request.recovering || push == Err(WorkspaceError::Uncertain);
+                match verified_remote(&after, request.approved, unproven_push) {
                     Err(outcome) => return outcome,
                     Ok(RemoteBranch::Ready) => {}
                     Ok(RemoteBranch::NeedsPush) => {
@@ -451,11 +518,11 @@ impl FeatureDeliveryService {
             Ok(remote) => remote,
             Err(_) => return Publication::Uncertain,
         };
-        match verified_remote(&before, request.approved) {
+        match verified_remote(&before, request.approved, request.recovering) {
             Err(outcome) => return outcome,
             Ok(RemoteBranch::NeedsPush) => {
                 return Publication::Failed(
-                    "The remote feature branch disappeared before draft creation.",
+                    "The remote feature branch changed before draft creation.",
                 );
             }
             Ok(RemoteBranch::Ready) => {}
@@ -505,7 +572,7 @@ impl FeatureDeliveryService {
                 .is_ok_and(|diff| diff.git != *request.approved)
             || remote.as_ref().is_ok_and(|refs| {
                 !matches!(
-                    verified_remote(refs, request.approved),
+                    verified_remote(refs, request.approved, request.recovering),
                     Ok(RemoteBranch::Ready)
                 )
             })
@@ -580,20 +647,23 @@ mod tests {
         let remote = FeatureRemoteRefs {
             base_oid: Some("d".repeat(40)),
             head_oid: Some(approved.head_oid.clone()),
+            managed_head_oid: Some(approved.head_oid.clone()),
         };
         assert!(matches!(
-            verified_remote(&remote, &approved),
-            Err(Publication::Stale {
-                refresh_base: false
-            })
+            verified_remote(&remote, &approved, false),
+            Err(Publication::Stale { refresh_base: true })
         ));
-        let remote = FeatureRemoteRefs {
-            head_oid: None,
+        let unowned = FeatureRemoteRefs {
+            managed_head_oid: None,
             ..remote
         };
         assert!(matches!(
-            verified_remote(&remote, &approved),
-            Err(Publication::Stale { refresh_base: true })
+            verified_remote(&unowned, &approved, false),
+            Err(Publication::Failed(_))
+        ));
+        assert!(matches!(
+            verified_remote(&unowned, &approved, true),
+            Err(Publication::Uncertain)
         ));
     }
 }

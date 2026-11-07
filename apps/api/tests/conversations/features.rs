@@ -3,9 +3,29 @@ use factory_adapters::feature_codec::JsonFeatureCodec;
 use factory_application::features::{FeatureCoordinator, bundle::WORKFLOW_REVISION};
 use factory_core::features::*;
 
+#[path = "features/delivery.rs"]
+mod delivery;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WorkflowInterruption {
+    BeforeCorrection,
+    BeforeIntegratedOutcome,
+}
+
 struct Features {
     inner: Mutex<FeatureState>,
     receipts: Mutex<HashMap<Uuid, FeatureCommand>>,
+    interruption: Mutex<Option<WorkflowInterruption>>,
+}
+
+impl Features {
+    fn new(state: FeatureState) -> Self {
+        Self {
+            inner: Mutex::new(state),
+            receipts: Mutex::default(),
+            interruption: Mutex::new(None),
+        }
+    }
 }
 
 #[async_trait]
@@ -82,6 +102,15 @@ impl FeatureStore for Features {
                 fresh: false,
             });
         }
+        let mut interruption = self.interruption.lock().unwrap();
+        if *interruption == Some(WorkflowInterruption::BeforeIntegratedOutcome)
+            && matches!(command, FeatureCommand::FinishIntegratedCheck { .. })
+        {
+            // The worker exited, but neither its result nor its acknowledgement
+            // survived this driver. Only the runtime's exit receipt can recover it.
+            *interruption = None;
+            return Err(FeatureError::Unavailable);
+        }
         state.apply(
             actor.user_id,
             env.generation,
@@ -89,7 +118,14 @@ impl FeatureStore for Features {
             command.clone(),
             Utc::now(),
         )?;
+        let began_corrections = matches!(command, FeatureCommand::BeginCorrections { .. });
         receipts.insert(operation_id, command);
+        if began_corrections && *interruption == Some(WorkflowInterruption::BeforeCorrection) {
+            // The transition and its receipt survived, but this driver did not
+            // receive a response and therefore never claimed a correction.
+            *interruption = None;
+            return Err(FeatureError::Unavailable);
+        }
         Ok(FeatureReceipt {
             state: state.clone(),
             fresh: true,
@@ -104,15 +140,27 @@ struct NoFeatureWorkers {
 
 #[async_trait]
 impl FeatureWorkspaceRuntime for NoFeatureWorkers {
-    async fn initialize(
+    async fn prepare_initialization(
         &self,
         _: &Environment,
         _: &Project,
+        _: Uuid,
         _: Uuid,
     ) -> Result<FeatureBranch, WorkspaceError> {
         // Gate A may schedule architecture work. Keep this HTTP fixture inert.
         self.initializations.fetch_add(1, Ordering::SeqCst);
         Err(WorkspaceError::Unavailable)
+    }
+
+    async fn confirm_initialization(
+        &self,
+        _: &Environment,
+        _: &Project,
+        _: Uuid,
+        _: Uuid,
+        _: &FeatureBranch,
+    ) -> Result<FeatureBranch, WorkspaceError> {
+        unreachable!()
     }
 
     async fn prepare_task(
@@ -306,10 +354,7 @@ async fn feature_gate_requires_ownership_and_csrf_and_replays_the_exact_command(
     let (_, state, revision) = seed_feature(&f);
     let feature_id = state.feature.id;
     let conversation_id = state.feature.conversation_id;
-    let store = Arc::new(Features {
-        inner: Mutex::new(state),
-        receipts: Mutex::default(),
-    });
+    let store = Arc::new(Features::new(state));
     f.app = feature_router(
         &f,
         store.clone(),
@@ -403,10 +448,7 @@ async fn feature_continue_wakes_stranded_gate_and_requires_proof_for_orphaned_at
             now,
         )
         .unwrap();
-    let store = Arc::new(Features {
-        inner: Mutex::new(state),
-        receipts: Mutex::default(),
-    });
+    let store = Arc::new(Features::new(state));
     let workers = Arc::new(NoFeatureWorkers::default());
     f.app = feature_router(&f, store.clone(), Arc::new(FeatureCatalog), workers.clone());
     let path = format!("/api/features/{feature_id}");
@@ -525,8 +567,11 @@ enum WorkerAction {
 struct WorkflowObservations {
     base: usize,
     launches: Vec<(Uuid, WorkerAction, String)>,
+    candidates: HashMap<String, WorkerAction>,
     integrated: Vec<Uuid>,
-    checks: Vec<(String, i64)>,
+    checks: Vec<(Uuid, String, i64)>,
+    check_receipts: HashMap<Uuid, (String, i64)>,
+    reconciled_checks: Vec<Uuid>,
 }
 
 impl WorkflowObservations {
@@ -551,10 +596,11 @@ fn test_digest(index: usize) -> String {
 
 #[async_trait]
 impl FeatureWorkspaceRuntime for WorkflowWorkers {
-    async fn initialize(
+    async fn prepare_initialization(
         &self,
         _: &Environment,
         _: &Project,
+        _: Uuid,
         _: Uuid,
     ) -> Result<FeatureBranch, WorkspaceError> {
         Ok(FeatureBranch {
@@ -562,6 +608,17 @@ impl FeatureWorkspaceRuntime for WorkflowWorkers {
             base_oid: test_oid(0),
             head_ref: "refs/heads/fixture".into(),
         })
+    }
+
+    async fn confirm_initialization(
+        &self,
+        _: &Environment,
+        _: &Project,
+        _: Uuid,
+        _: Uuid,
+        expected: &FeatureBranch,
+    ) -> Result<FeatureBranch, WorkspaceError> {
+        Ok(expected.clone())
     }
 
     async fn prepare_task(
@@ -579,13 +636,16 @@ impl FeatureWorkspaceRuntime for WorkflowWorkers {
         _: &Project,
         attempt: &TaskAttempt,
     ) -> Result<String, WorkspaceError> {
-        let observed = self.observed.lock().unwrap();
+        let mut observed = self.observed.lock().unwrap();
         let position = observed
             .launches
             .iter()
             .position(|(id, _, _)| *id == attempt.id())
             .unwrap();
-        Ok(test_oid(100 + position))
+        let oid = test_oid(100 + position);
+        let action = observed.launches[position].1;
+        observed.candidates.insert(oid.clone(), action);
+        Ok(oid)
     }
 
     async fn integrate(
@@ -715,17 +775,18 @@ impl FeatureExecutionRuntime for WorkflowWorkers {
         workspace: &TaskWorkspace,
         command: &str,
     ) -> Result<FeatureCheckOutput, ExecutionError> {
-        let is_integrated_check = self
-            .observed
-            .lock()
-            .unwrap()
-            .launches
-            .iter()
-            .all(|(id, _, _)| *id != workspace.attempt_id);
-        if !is_integrated_check && command == "check-alpha" {
+        let candidate = {
+            let observed = self.observed.lock().unwrap();
+            let candidate = observed.candidates.get(&workspace.base_oid).copied();
+            if candidate.is_none() {
+                assert_eq!(workspace.base_oid, test_oid(observed.head()));
+            }
+            candidate
+        };
+        if candidate == Some(WorkerAction::Alpha) && command == "check-alpha" {
             self.alpha_check.notified().await;
         }
-        let exit_code = if is_integrated_check
+        let exit_code = if candidate.is_none()
             && workspace.base_oid == test_oid(2)
             && command == "check-beta"
         {
@@ -733,15 +794,58 @@ impl FeatureExecutionRuntime for WorkflowWorkers {
         } else {
             0
         };
-        self.observed
-            .lock()
-            .unwrap()
+        let mut observed = self.observed.lock().unwrap();
+        assert!(
+            observed
+                .check_receipts
+                .insert(
+                    workspace.attempt_id,
+                    (workspace.base_oid.clone(), exit_code),
+                )
+                .is_none(),
+            "a check workspace already has an unacknowledged exit"
+        );
+        observed
             .checks
-            .push((command.to_owned(), exit_code));
+            .push((workspace.attempt_id, command.to_owned(), exit_code));
         Ok(FeatureCheckOutput {
             exit_code,
             output: "fixture evidence".into(),
         })
+    }
+
+    async fn reconcile_check(
+        &self,
+        _: &Environment,
+        _: &Project,
+        workspace: &TaskWorkspace,
+        _: i64,
+    ) -> Result<CheckObservation, ExecutionError> {
+        let mut observed = self.observed.lock().unwrap();
+        let Some(exit_code) = observed
+            .check_receipts
+            .get(&workspace.attempt_id)
+            .filter(|(base, _)| base == &workspace.base_oid)
+            .map(|(_, exit_code)| *exit_code)
+        else {
+            return Ok(CheckObservation::Unknown);
+        };
+        observed.reconciled_checks.push(workspace.attempt_id);
+        Ok(CheckObservation::Exited { exit_code })
+    }
+
+    async fn acknowledge_check(
+        &self,
+        _: &Environment,
+        _: &Project,
+        workspace: &TaskWorkspace,
+        _: i64,
+    ) -> Result<(), ExecutionError> {
+        let mut observed = self.observed.lock().unwrap();
+        if let Some((base, _)) = observed.check_receipts.remove(&workspace.attempt_id) {
+            assert_eq!(base, workspace.base_oid);
+        }
+        Ok(())
     }
 
     async fn reconcile_task(
@@ -768,6 +872,20 @@ fn feature_task(title: &str, path: &str, check: &str) -> FeatureTask {
 
 #[tokio::test]
 async fn feature_resumes_only_the_failed_writer_and_reviews_the_corrected_snapshot() {
+    exercise_feature_workflow(None).await;
+}
+
+#[tokio::test]
+async fn feature_resume_after_corrections_begin_runs_the_missing_correction_before_review() {
+    exercise_feature_workflow(Some(WorkflowInterruption::BeforeCorrection)).await;
+}
+
+#[tokio::test]
+async fn feature_resume_recovers_an_exited_integrated_check_without_relaunching_it() {
+    exercise_feature_workflow(Some(WorkflowInterruption::BeforeIntegratedOutcome)).await;
+}
+
+async fn exercise_feature_workflow(interruption: Option<WorkflowInterruption>) {
     let mut f = ConversationFixture::new().await;
     let (env, mut state, scope) = seed_feature(&f);
     let feature_id = state.feature.id;
@@ -844,10 +962,8 @@ async fn feature_resumes_only_the_failed_writer_and_reviews_the_corrected_snapsh
             )
             .unwrap();
     }
-    let store = Arc::new(Features {
-        inner: Mutex::new(state),
-        receipts: Mutex::default(),
-    });
+    let store = Arc::new(Features::new(state));
+    *store.interruption.lock().unwrap() = interruption;
     let workers = Arc::new(WorkflowWorkers::default());
     f.app = feature_router(&f, store.clone(), Arc::new(FeatureCatalog), workers.clone());
     let path = format!("/api/features/{feature_id}");
@@ -930,6 +1046,114 @@ async fn feature_resumes_only_the_failed_writer_and_reviews_the_corrected_snapsh
         )
         .await;
     assert_eq!(resumed.status(), StatusCode::OK);
+    if let Some(interruption) = interruption {
+        let interrupted_stage = match interruption {
+            WorkflowInterruption::BeforeCorrection => FeatureStage::Execution,
+            WorkflowInterruption::BeforeIntegratedOutcome => FeatureStage::Review,
+        };
+        until(|| {
+            let state = store.inner.lock().unwrap();
+            state.feature.stage == interrupted_stage && store.interruption.lock().unwrap().is_none()
+        })
+        .await;
+        let original_snapshot = {
+            let state = store.inner.lock().unwrap();
+            assert_eq!(state.reviews.len(), 1);
+            match interruption {
+                WorkflowInterruption::BeforeCorrection => {
+                    assert!(!state.reviews[0].verdict.as_ref().unwrap().ready());
+                }
+                WorkflowInterruption::BeforeIntegratedOutcome => {
+                    assert!(state.reviews[0].verdict.is_none());
+                    let checks = &state.reviews[0].integrated_checks;
+                    assert_eq!(checks.len(), 1);
+                    assert_eq!(checks[0].command, "check-alpha");
+                    assert_eq!(checks[0].status, IntegratedCheckStatus::Launching);
+                }
+            }
+            assert!(
+                !state
+                    .attempts
+                    .iter()
+                    .any(|attempt| { attempt.claim.task.role == TaskRole::Correction })
+            );
+            state.reviews[0].snapshot.clone()
+        };
+        let interrupted_check_id = if interruption == WorkflowInterruption::BeforeIntegratedOutcome
+        {
+            let id =
+                JsonFeatureCodec.derived_id(original_snapshot.id, "integrated-check:check-alpha");
+            assert_eq!(
+                workers.observed.lock().unwrap().check_receipts.get(&id),
+                Some(&(original_snapshot.git.head_oid.clone(), 0)),
+            );
+            Some(id)
+        } else {
+            None
+        };
+
+        // Restart with a new coordinator on the same persisted feature state.
+        f.app = feature_router(&f, store.clone(), Arc::new(FeatureCatalog), workers.clone());
+        let stranded = body_json(f.call("GET", &path, 0, "").await).await;
+        let expected_stage = match interruption {
+            WorkflowInterruption::BeforeCorrection => "execution",
+            WorkflowInterruption::BeforeIntegratedOutcome => "review",
+        };
+        assert_eq!(stranded["feature"]["stage"], expected_stage);
+        assert_eq!(stranded["canContinue"], true);
+        let resumed = f
+            .call(
+                "POST",
+                &format!("{path}/resume"),
+                0,
+                &json!({"operationId": Uuid::new_v4()}).to_string(),
+            )
+            .await;
+        assert_eq!(resumed.status(), StatusCode::OK);
+        until(|| store.inner.lock().unwrap().feature.stage == FeatureStage::Result).await;
+
+        let state = store.inner.lock().unwrap();
+        assert_eq!(state.reviews.len(), 2);
+        assert_eq!(state.reviews[0].snapshot, original_snapshot);
+        assert_ne!(state.reviews[1].snapshot.git, original_snapshot.git);
+        let correction = state
+            .attempts
+            .iter()
+            .find(|attempt| attempt.claim.task.role == TaskRole::Correction)
+            .unwrap();
+        assert_eq!(correction.claim.snapshot_id, Some(original_snapshot.id));
+        assert_eq!(correction.status, AttemptStatus::Validated);
+        let observed = workers.observed.lock().unwrap();
+        let review_actions: Vec<_> = observed
+            .launches
+            .iter()
+            .filter_map(|(_, action, _)| {
+                matches!(action, WorkerAction::Review | WorkerAction::Correction).then_some(*action)
+            })
+            .collect();
+        assert_eq!(
+            review_actions,
+            [
+                WorkerAction::Review,
+                WorkerAction::Correction,
+                WorkerAction::Review
+            ]
+        );
+        assert_eq!(observed.integrated.len(), 3);
+        if let Some(id) = interrupted_check_id {
+            assert_eq!(observed.reconciled_checks, [id]);
+            assert_eq!(
+                observed
+                    .checks
+                    .iter()
+                    .filter(|(check, _, _)| *check == id)
+                    .count(),
+                1
+            );
+            assert!(!observed.check_receipts.contains_key(&id));
+        }
+        return;
+    }
     until(|| store.inner.lock().unwrap().feature.stage == FeatureStage::Result).await;
 
     let detail = body_json(f.call("GET", &path, 0, "").await).await;
@@ -1005,7 +1229,12 @@ async fn feature_resumes_only_the_failed_writer_and_reviews_the_corrected_snapsh
             assert_eq!(launches.len(), count, "{action:?}");
             assert!(launches.iter().all(|(_, _, actual)| actual == model));
         }
-        assert!(observed.checks.contains(&("check-beta".into(), 7)));
+        assert!(
+            observed
+                .checks
+                .iter()
+                .any(|(_, command, exit)| command == "check-beta" && *exit == 7)
+        );
         assert_eq!(observed.integrated.len(), 3);
     }
     {

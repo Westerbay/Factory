@@ -337,8 +337,15 @@ async fn review(
     let actor = state.actor(&headers, true).await?;
     let id = feature_id(path).map_err(error)?;
     let body = payload(body).map_err(error)?;
-    let coordinator = state.runtime().map_err(error)?.coordinator.clone();
+    let runtime = state.runtime().map_err(error)?;
+    let coordinator = runtime.coordinator.clone();
+    let delivery = runtime.delivery.clone();
     command(async move {
+        if let Some(delivery) = delivery {
+            delivery
+                .refresh_stale_comparison(actor, id, body.snapshot_id)
+                .await?;
+        }
         coordinator
             .authorize_additional_review(actor, id, body.operation_id, body.snapshot_id)
             .await
