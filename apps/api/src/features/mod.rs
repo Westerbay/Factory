@@ -17,7 +17,9 @@ use axum::{
 };
 use factory_application::features::{FeatureCoordinator, FeatureDeliveryService};
 use factory_core::{
-    environments::EnvironmentActor, features::FeatureError, identity::IdentityError,
+    environments::EnvironmentActor,
+    features::{DeliveryStatus, FeatureError},
+    identity::IdentityError,
 };
 use std::{future::Future, sync::Arc};
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -197,9 +199,12 @@ async fn get(
     let id = feature_id(path).map_err(error)?;
     let coordinator = &state.runtime().map_err(error)?.coordinator;
     let result = coordinator.get(actor, id).await.map_err(error)?;
-    Ok(Json(FeatureView::from_state(result, |attempt_id| {
-        coordinator.is_attempt_locally_active(id, attempt_id)
-    })))
+    let can_continue = coordinator.can_continue(&result);
+    Ok(Json(FeatureView::from_state(
+        result,
+        can_continue,
+        |attempt_id| coordinator.is_attempt_locally_active(id, attempt_id),
+    )))
 }
 
 #[utoipa::path(post,path="/api/features/{id}/runs",operation_id="discussFeature",request_body=FeatureTurnBody,params(("id"=Uuid,Path),("Origin"=String,Header,description="Exact configured frontend Origin required"),("X-CSRF-Token"=String,Header,description="Session CSRF token required")),security(("sessionCookie"=[])),responses((status=200,body=RunView),(status=400,body=ApiError),(status=401,body=ApiError),(status=403,body=ApiError),(status=404,body=ApiError),(status=409,body=ApiError),(status=429,body=ApiError),(status=503,body=ApiError)))]
@@ -271,9 +276,18 @@ async fn resume(
     let body = payload(body).map_err(error)?;
     let coordinator = state.runtime().map_err(error)?.coordinator.clone();
     command(async move {
-        coordinator
-            .resume(actor, id, body.operation_id, body.attempt_id)
-            .await
+        match body.attempt_id {
+            Some(attempt_id) => {
+                coordinator
+                    .resume(actor, id, body.operation_id, attempt_id)
+                    .await
+            }
+            None => {
+                coordinator
+                    .continue_feature(actor, id, body.operation_id)
+                    .await
+            }
+        }
     })
     .await
 }
@@ -286,9 +300,26 @@ async fn diff(
 ) -> Result<Json<FeatureDiffView>, Response> {
     let actor = state.actor(&headers, false).await?;
     let id = feature_id(path).map_err(error)?;
-    let result = state
-        .runtime()
-        .map_err(error)?
+    let runtime = state.runtime().map_err(error)?;
+    if let Some(delivery) = &runtime.delivery {
+        if let Some(diff) = delivery
+            .published_stale_diff(actor, id)
+            .await
+            .map_err(error)?
+        {
+            return Ok(Json(diff.into()));
+        }
+    } else {
+        let feature = runtime.coordinator.get(actor, id).await.map_err(error)?;
+        if feature
+            .deliveries
+            .iter()
+            .any(|receipt| matches!(receipt.status, DeliveryStatus::PublishedStale { .. }))
+        {
+            return Err(error(FeatureError::Unavailable));
+        }
+    }
+    let result = runtime
         .coordinator
         .reviewed_diff(actor, id)
         .await

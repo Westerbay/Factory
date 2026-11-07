@@ -268,8 +268,11 @@ Repeated setup preserves an initialized database. The explicit v4 upgrade is the
 supported migration to the current schema.
 
 Feature verification commands run in disposable copies of the reviewed checkout.
-They can use the prepared workspace image's tools and project files. A missing
-tool or offline dependency is reported as a failed or unavailable verification.
+They can use the prepared workspace image's tools and project files. The standard
+image includes Git and Python, and does not include Node, pnpm or Cargo. Operators
+who need additional tooling must include it in their prepared image. Verification
+has no package download access. A missing tool or offline dependency is reported as
+a failed or unavailable verification.
 
 Every target is checked against Docker project, owner and checkout labels, container,
 database identity, credentials, volume and exact loopback port before SQL. Docker is

@@ -97,7 +97,10 @@ impl FeatureStore for Features {
     }
 }
 
-struct NoFeatureWorkers;
+#[derive(Default)]
+struct NoFeatureWorkers {
+    initializations: AtomicUsize,
+}
 
 #[async_trait]
 impl FeatureWorkspaceRuntime for NoFeatureWorkers {
@@ -108,6 +111,7 @@ impl FeatureWorkspaceRuntime for NoFeatureWorkers {
         _: Uuid,
     ) -> Result<FeatureBranch, WorkspaceError> {
         // Gate A may schedule architecture work. Keep this HTTP fixture inert.
+        self.initializations.fetch_add(1, Ordering::SeqCst);
         Err(WorkspaceError::Unavailable)
     }
 
@@ -176,7 +180,7 @@ impl FeatureExecutionRuntime for NoFeatureWorkers {
         _: &Project,
         _: &TaskAttempt,
     ) -> Result<TaskObservation, ExecutionError> {
-        unreachable!()
+        Ok(TaskObservation::Unknown)
     }
 }
 
@@ -271,12 +275,29 @@ where
         workers.clone(),
         workers,
         Arc::new(JsonFeatureCodec),
+        Arc::new(FixtureRepositoryVerifier),
     );
     conversations::router(f.auth.clone(), Some(conversations)).merge(factory_api::features::router(
         f.auth.clone(),
         coordinator,
         None,
     ))
+}
+
+struct FixtureRepositoryVerifier;
+
+#[async_trait]
+impl FeatureRepositoryVerifier for FixtureRepositoryVerifier {
+    async fn verify(
+        &self,
+        actor: EnvironmentActor,
+        environment: &Environment,
+        project: &Project,
+    ) -> Result<(), FeatureError> {
+        assert_eq!(actor.user_id, project.user_id);
+        assert_eq!(environment.id, project.environment_id);
+        Ok(())
+    }
 }
 
 #[tokio::test]
@@ -293,7 +314,7 @@ async fn feature_gate_requires_ownership_and_csrf_and_replays_the_exact_command(
         &f,
         store.clone(),
         f.provider.clone(),
-        Arc::new(NoFeatureWorkers),
+        Arc::new(NoFeatureWorkers::default()),
     );
 
     let path = format!("/api/features/{feature_id}");
@@ -366,6 +387,104 @@ async fn feature_gate_requires_ownership_and_csrf_and_replays_the_exact_command(
 }
 
 struct FeatureCatalog;
+
+#[tokio::test]
+async fn feature_continue_wakes_stranded_gate_and_requires_proof_for_orphaned_attempt() {
+    let mut f = ConversationFixture::new().await;
+    let (env, mut state, scope) = seed_feature(&f);
+    let feature_id = state.feature.id;
+    let now = Utc::now();
+    state
+        .apply(
+            env.user_id,
+            env.generation,
+            Uuid::new_v4(),
+            FeatureCommand::ApproveRevision(scope.clone()),
+            now,
+        )
+        .unwrap();
+    let store = Arc::new(Features {
+        inner: Mutex::new(state),
+        receipts: Mutex::default(),
+    });
+    let workers = Arc::new(NoFeatureWorkers::default());
+    f.app = feature_router(&f, store.clone(), Arc::new(FeatureCatalog), workers.clone());
+    let path = format!("/api/features/{feature_id}");
+    let before = body_json(f.call("GET", &path, 0, "").await).await;
+    assert_eq!(before["canContinue"], true);
+    assert_eq!(before["feature"]["stage"], "architecture");
+    assert_eq!(workers.initializations.load(Ordering::SeqCst), 0);
+    let resume = format!("{path}/resume");
+    let continued = f
+        .call(
+            "POST",
+            &resume,
+            0,
+            &json!({"operationId": Uuid::new_v4()}).to_string(),
+        )
+        .await;
+    assert_eq!(continued.status(), StatusCode::OK);
+    until(|| workers.initializations.load(Ordering::SeqCst) == 1).await;
+    let continued = body_json(continued).await;
+    assert_eq!(continued["scope"]["id"], before["scope"]["id"]);
+    assert_eq!(
+        continued["scope"]["approvedAt"],
+        before["scope"]["approvedAt"]
+    );
+
+    let attempt_id = Uuid::new_v4();
+    store
+        .inner
+        .lock()
+        .unwrap()
+        .apply(
+            env.user_id,
+            env.generation,
+            Uuid::new_v4(),
+            FeatureCommand::ClaimAttempt(AttemptClaim {
+                task: FeatureTask {
+                    id: Uuid::new_v4(),
+                    title: "Architecture".into(),
+                    instructions: "Prepare the architecture".into(),
+                    role: TaskRole::Architecture,
+                    paths: vec![],
+                    depends_on: vec![],
+                    checks: vec![],
+                },
+                revision: Some(scope),
+                workspace: TaskWorkspace {
+                    feature_id,
+                    attempt_id,
+                    base_oid: test_oid(0),
+                    access: WorkspaceAccess::ReadOnly,
+                },
+                snapshot_id: None,
+                model: "gpt-6-astra".into(),
+                effort: None,
+                skill_revision: WORKFLOW_REVISION.into(),
+                retry_of: None,
+            }),
+            now,
+        )
+        .unwrap();
+    let orphaned = body_json(f.call("GET", &path, 0, "").await).await;
+    assert_eq!(orphaned["canContinue"], false);
+    assert_eq!(orphaned["attempts"][0]["canResume"], true);
+    let cannot_prove_stop = f
+        .call(
+            "POST",
+            &resume,
+            0,
+            &json!({"operationId": Uuid::new_v4(), "attemptId": attempt_id}).to_string(),
+        )
+        .await;
+    assert_eq!(cannot_prove_stop.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(cannot_prove_stop).await["code"],
+        "feature-execution-uncertain"
+    );
+    assert_eq!(store.inner.lock().unwrap().attempts.len(), 1);
+}
 
 #[async_trait]
 impl ExecutionRuntime for FeatureCatalog {
@@ -553,12 +672,18 @@ impl FeatureExecutionRuntime for WorkflowWorkers {
             };
             events.push(ExecutionEvent::Message {
                 provider_item: "valid".into(),
-                text: json!({"patchDigest": digest, "findings": findings}).to_string(),
+                text: json!({"patchDigest": digest, "coverage": "complete", "findings": findings})
+                    .to_string(),
             });
             if head == 2 {
                 events.push(ExecutionEvent::Message {
                     provider_item: "stale".into(),
-                    text: json!({"patchDigest": test_digest(0), "findings": []}).to_string(),
+                    text: json!({"patchDigest": test_digest(0), "coverage": "complete", "findings": []}).to_string(),
+                });
+                events.push(ExecutionEvent::Message {
+                    provider_item: "partial".into(),
+                    text: json!({"patchDigest": digest, "coverage": "partial", "findings": []})
+                        .to_string(),
                 });
             }
         }
@@ -864,37 +989,77 @@ async fn feature_resumes_only_the_failed_writer_and_reviews_the_corrected_snapsh
     assert_eq!(stale.status(), StatusCode::CONFLICT);
     assert_eq!(body_json(stale).await["code"], "feature-stale-snapshot");
 
-    let state = store.inner.lock().unwrap();
-    assert_eq!(state.reviews.len(), 3);
-    assert_eq!(state.additional_review_rounds, 1);
-    let first = state.reviews[0].verdict.as_ref().unwrap();
-    assert!(
-        first
-            .findings
-            .iter()
-            .any(|finding| finding.blocking && finding.summary == "fixture defect")
-    );
-    assert!(
-        first
-            .checks
-            .iter()
-            .any(|check| check.label == "check-beta" && !check.passed)
-    );
-    let observed = workers.observed.lock().unwrap();
-    for (action, count, model) in [
-        (WorkerAction::Alpha, 1, "gpt-6.1-terra"),
-        (WorkerAction::Beta, 2, "gpt-6.1-terra"),
-        (WorkerAction::Correction, 1, "gpt-6.1-terra"),
-        (WorkerAction::Review, 3, "gpt-6.1-sol"),
-    ] {
-        let launches: Vec<_> = observed
-            .launches
-            .iter()
-            .filter(|(_, recorded, _)| *recorded == action)
-            .collect();
-        assert_eq!(launches.len(), count, "{action:?}");
-        assert!(launches.iter().all(|(_, _, actual)| actual == model));
+    {
+        let observed = workers.observed.lock().unwrap();
+        for (action, count, model) in [
+            (WorkerAction::Alpha, 1, "gpt-6.1-terra"),
+            (WorkerAction::Beta, 2, "gpt-6.1-terra"),
+            (WorkerAction::Correction, 1, "gpt-6.1-terra"),
+            (WorkerAction::Review, 3, "gpt-6.1-sol"),
+        ] {
+            let launches: Vec<_> = observed
+                .launches
+                .iter()
+                .filter(|(_, recorded, _)| *recorded == action)
+                .collect();
+            assert_eq!(launches.len(), count, "{action:?}");
+            assert!(launches.iter().all(|(_, _, actual)| actual == model));
+        }
+        assert!(observed.checks.contains(&("check-beta".into(), 7)));
+        assert_eq!(observed.integrated.len(), 3);
     }
-    assert!(observed.checks.contains(&("check-beta".into(), 7)));
-    assert_eq!(observed.integrated.len(), 3);
+    {
+        let mut state = store.inner.lock().unwrap();
+        assert_eq!(state.reviews.len(), 3);
+        assert_eq!(state.additional_review_rounds, 1);
+        let first = state.reviews[0].verdict.as_ref().unwrap();
+        assert!(
+            first
+                .findings
+                .iter()
+                .any(|finding| finding.blocking && finding.summary == "fixture defect")
+        );
+        assert!(
+            first
+                .checks
+                .iter()
+                .any(|check| check.label == "check-beta" && !check.passed)
+        );
+
+        // Emulate a persisted stale GitHub receipt. This router has no delivery
+        // adapter, so it must not show the earlier local patch as a PR diff.
+        let snapshot = state.review().unwrap().snapshot.clone();
+        let request_id = Uuid::new_v4();
+        state
+            .apply(
+                env.user_id,
+                env.generation,
+                request_id,
+                FeatureCommand::ClaimDelivery {
+                    snapshot_id: snapshot.id,
+                    observed: snapshot.git,
+                },
+                Utc::now(),
+            )
+            .unwrap();
+        state
+            .apply(
+                env.user_id,
+                env.generation,
+                Uuid::new_v4(),
+                FeatureCommand::RecordDelivery {
+                    request_id,
+                    status: DeliveryStatus::PublishedStale {
+                        draft_url: "https://github.com/factory/fixture/pull/1".into(),
+                    },
+                },
+                Utc::now(),
+            )
+            .unwrap();
+    }
+    let unavailable_remote_diff = f.call("GET", &format!("{path}/diff"), 0, "").await;
+    assert_eq!(
+        unavailable_remote_diff.status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
 }

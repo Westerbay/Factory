@@ -77,7 +77,8 @@ impl FeatureRevisionBody {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FeatureResumeBody {
     pub operation_id: Uuid,
-    pub attempt_id: Uuid,
+    /// Omit to continue the current workflow stage without retrying an attempt.
+    pub attempt_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -370,6 +371,7 @@ impl From<DeliveryReceipt> for FeatureDeliveryView {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct FeatureView {
     pub feature: FeatureSummaryView,
     pub scope: Option<FeatureScopeView>,
@@ -377,17 +379,19 @@ pub struct FeatureView {
     pub attempts: Vec<FeatureAttemptView>,
     pub review: Option<FeatureReviewView>,
     pub delivery: Option<FeatureDeliveryView>,
+    pub can_continue: bool,
 }
 
 impl From<FeatureState> for FeatureView {
     fn from(state: FeatureState) -> Self {
-        Self::from_state(state, |_| true)
+        Self::from_state(state, false, |_| true)
     }
 }
 
 impl FeatureView {
     pub(super) fn from_state(
         mut state: FeatureState,
+        can_continue: bool,
         is_locally_active: impl Fn(Uuid) -> bool,
     ) -> Self {
         let stage = state.feature.stage;
@@ -519,9 +523,10 @@ impl FeatureView {
                 };
                 let can_resume = seen.insert(key)
                     && matches_stage
-                    && attempt.launch_settled
                     && match attempt.status {
-                        AttemptStatus::Failed | AttemptStatus::Interrupted => true,
+                        AttemptStatus::Failed | AttemptStatus::Interrupted => {
+                            attempt.launch_settled
+                        }
                         status if status.holds_reservation() => !is_locally_active(attempt.id()),
                         _ => false,
                     };
@@ -529,6 +534,12 @@ impl FeatureView {
             })
             .collect();
         attempts.reverse();
+        let can_continue = can_continue
+            && !attempts.iter().any(|attempt| attempt.can_resume)
+            && !state
+                .deliveries
+                .iter()
+                .any(|receipt| matches!(receipt.status, DeliveryStatus::PublishedStale { .. }));
         Self {
             feature: state.feature.into(),
             scope,
@@ -536,6 +547,7 @@ impl FeatureView {
             attempts,
             review,
             delivery: state.deliveries.pop().map(Into::into),
+            can_continue,
         }
     }
 }

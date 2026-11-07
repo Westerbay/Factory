@@ -24,9 +24,15 @@ use factory_application::environments::{
 use factory_application::features::{FeatureCoordinator, FeatureDeliveryService};
 use factory_application::terminals::TerminalService;
 use factory_application::{identity::RepositoryAccessService, projects::ProjectService};
-use factory_core::environments::{EnvironmentError, EnvironmentStart, EnvironmentSupervisor};
-use factory_core::features::FeatureStore;
-use factory_core::identity::{RepositoryAccessProvider, RepositoryTokenCipher};
+use factory_core::environments::{
+    Environment, EnvironmentActor, EnvironmentError, EnvironmentStart, EnvironmentSupervisor,
+};
+use factory_core::features::{FeatureError, FeatureRepositoryVerifier, FeatureStore};
+use factory_core::identity::{
+    RepositoryAccessError, RepositoryAccessProvider, RepositoryActor, RepositoryOriginVerification,
+    RepositoryTokenCipher,
+};
+use factory_core::projects::Project;
 use factory_database::environments::PgEnvironmentSupervisor;
 use factory_database::identity::IdentityDatabase;
 use std::{
@@ -63,6 +69,37 @@ pub struct EnvironmentHost {
 }
 
 struct SharedSupervisor(Arc<Mutex<PgEnvironmentSupervisor>>);
+
+struct FeatureOrigin(Option<Arc<RepositoryAccessService>>);
+
+#[async_trait::async_trait]
+impl FeatureRepositoryVerifier for FeatureOrigin {
+    async fn verify(
+        &self,
+        actor: EnvironmentActor,
+        environment: &Environment,
+        project: &Project,
+    ) -> Result<(), FeatureError> {
+        let repository = self.0.as_ref().ok_or(FeatureError::Unavailable)?;
+        let actor = RepositoryActor {
+            actor,
+            environment_id: environment.id,
+            generation: environment.generation,
+        };
+        match repository.verify_clone_origin(actor, project).await {
+            Ok(RepositoryOriginVerification::Matched) => Ok(()),
+            Ok(RepositoryOriginVerification::Changed)
+            | Err(
+                RepositoryAccessError::Conflict
+                | RepositoryAccessError::Forbidden
+                | RepositoryAccessError::ProviderUnauthorized
+                | RepositoryAccessError::ProviderForbidden,
+            ) => Err(FeatureError::Conflict),
+            Err(RepositoryAccessError::Unauthorized) => Err(FeatureError::Unauthorized),
+            Err(_) => Err(FeatureError::Unavailable),
+        }
+    }
+}
 
 struct UnavailableOnExit(EnvironmentAvailability);
 
@@ -280,6 +317,7 @@ impl EnvironmentHostFactory {
             project_docker.clone(),
             Arc::new(DockerFeatureExecutionRuntime::new(runtime.clone())),
             Arc::new(JsonFeatureCodec),
+            Arc::new(FeatureOrigin(repository_access.clone())),
         );
         let delivery = repository_access.map(|repository| {
             FeatureDeliveryService::new(coordinator.clone(), project_docker, repository)

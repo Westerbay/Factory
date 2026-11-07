@@ -410,6 +410,11 @@ must be renewed before retrying. Verification commands have neither provider cre
 nor network. The main environment owns the trusted Git push; the GitHub token stays on
 the server.
 
+Factory verifies the stable GitHub repository identity before and after initializing
+an owned checkout. A project deletion also quarantines and removes its verified feature
+workspaces. Worker checkouts share the member's Docker volume, whose capacity depends
+on the host storage configuration.
+
 Reviewers and trusted checks use the same committed snapshot. The [delivery service](../crates/application/src/features/delivery.rs)
 compares the approved review with current local and remote refs, verifies the stable
 repository identity and reconciles the draft receipt before retrying. Ordinary Chat

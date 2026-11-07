@@ -582,15 +582,16 @@
         "additionalProperties": false,
         "properties": {
           "attemptId": {
+            "description": "Omit to continue the current workflow stage without retrying an attempt.",
             "format": "uuid",
-            "type": "string"
+            "type": ["string", "null"]
           },
           "operationId": {
             "format": "uuid",
             "type": "string"
           }
         },
-        "required": ["operationId", "attemptId"],
+        "required": ["operationId"],
         "type": "object"
       },
       "FeatureReviewView": {
@@ -791,6 +792,9 @@
             },
             "type": "array"
           },
+          "canContinue": {
+            "type": "boolean"
+          },
           "delivery": {
             "oneOf": [
               {
@@ -825,7 +829,7 @@
             ]
           }
         },
-        "required": ["feature", "attempts"],
+        "required": ["feature", "attempts", "canContinue"],
         "type": "object"
       },
       "HistoryView": {

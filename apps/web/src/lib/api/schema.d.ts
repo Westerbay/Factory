@@ -1070,8 +1070,11 @@ export interface components {
     /** @enum {string} */
     FeatureProvider: "codex" | "claude"
     FeatureResumeBody: {
-      /** Format: uuid */
-      attemptId: string
+      /**
+       * Format: uuid
+       * @description Omit to continue the current workflow stage without retrying an attempt.
+       */
+      attemptId?: string | null
       /** Format: uuid */
       operationId: string
     }
@@ -1148,6 +1151,7 @@ export interface components {
     FeatureView: {
       architecture?: components["schemas"]["FeatureArchitectureView"] | null
       attempts: components["schemas"]["FeatureAttemptView"][]
+      canContinue: boolean
       delivery?: components["schemas"]["FeatureDeliveryView"] | null
       feature: components["schemas"]["FeatureSummaryView"]
       review?: components["schemas"]["FeatureReviewView"] | null
