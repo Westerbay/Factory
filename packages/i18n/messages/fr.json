@@ -509,5 +509,21 @@
   "feature_published_diff": "Diff de la PR publiée",
   "feature_published_diff_unavailable": "Le diff de la PR publiée est indisponible. Ouvrez la PR sur GitHub pour la consulter.",
   "feature_resume_step": "Reprendre cette étape",
-  "feature_reconcile_stale_diff": "Le diff a changé. Vérifiez la publication en attente avant de continuer."
+  "feature_reconcile_stale_diff": "Le diff a changé. Vérifiez la publication en attente avant de continuer.",
+  "feature_review_current_snapshot": "Relecture du patch affiché",
+  "feature_review_previous_snapshot": "Version précédemment relue",
+  "feature_review_previous_note": "Les constats et vérifications ci-dessous concernent cette version antérieure.",
+  "feature_review_base": "Base",
+  "feature_review_head": "Head",
+  "feature_review_digest": "Empreinte du patch",
+  "feature_integrated_checks": "Vérifications intégrées",
+  "feature_check_preparing": "Préparation en attente",
+  "feature_check_running": "Vérification en cours",
+  "feature_check_recovery": "Reprise à confirmer",
+  "feature_check_preparing_reason": "La préparation de l’espace de vérification est en attente pour cette version.",
+  "feature_check_running_reason": "Factory suit cette vérification. Son résultat n’est pas encore confirmé.",
+  "feature_check_recovery_reason": "Factory attend de confirmer l’arrêt de la dernière vérification.",
+  "feature_check_unconfirmed": "Résultat non confirmé",
+  "feature_check_recovery_action": "Reprendre cette étape permet de vérifier cette preuve avant tout nouveau lancement.",
+  "feature_review_snapshot": "Version en relecture"
 }

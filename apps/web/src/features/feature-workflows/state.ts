@@ -36,6 +36,9 @@ export function canPublish(
     feature.feature.stage === "result" &&
     review?.ready &&
     review.checks.every((check) => check.passed) &&
+    review.integratedChecks.every(
+      (check) => check.status === "finished" && check.passed === true
+    ) &&
     !review.findings.some((finding) => finding.blocking) &&
     matchesReviewedDiff(feature, diff) &&
     !hasActiveAttempts(feature) &&

@@ -9,6 +9,8 @@ export type FeaturePage = components["schemas"]["FeaturePageView"]
 export type FeatureDiff = components["schemas"]["FeatureDiffView"]
 export type FeatureAttempt = components["schemas"]["FeatureAttemptView"]
 export type FeatureReview = components["schemas"]["FeatureReviewView"]
+export type FeatureIntegratedCheck =
+  components["schemas"]["FeatureIntegratedCheckView"]
 export type FeatureScope = components["schemas"]["FeatureScopeView"]
 export type FeatureArchitecture =
   components["schemas"]["FeatureArchitectureView"]
@@ -95,6 +97,15 @@ const reviewSchema = z.object({
     z.object({ role: roleSchema, summary: text, blocking: z.boolean() })
   ),
   checks: z.array(z.object({ label: text, passed: z.boolean() })),
+  integratedChecks: z
+    .array(
+      z.object({
+        command: text,
+        status: z.enum(["preparing", "running", "recoveryNeeded", "finished"]),
+        passed: z.boolean().nullish(),
+      })
+    )
+    .default([]),
 })
 const deliverySchema = z.object({
   requestId: id,

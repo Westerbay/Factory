@@ -241,4 +241,75 @@ describe("feature API", () => {
     expect((await api.get(featureId, signal)).attempts).toEqual([attempt])
     expect(await api.diff(featureId, signal)).toEqual(diff)
   })
+
+  it("preserves reported integrated-check states without inferring completion", async () => {
+    const integratedChecks: api.FeatureIntegratedCheck[] = [
+      { command: "pnpm typecheck", status: "preparing" },
+      { command: "pnpm test", status: "running", passed: null },
+      { command: "pnpm build", status: "recoveryNeeded" },
+      { command: "pnpm lint", status: "finished", passed: false },
+      { command: "pnpm check", status: "finished", passed: true },
+      { command: "pnpm docs:check", status: "finished" },
+    ]
+    const review: api.FeatureReview = {
+      snapshotId: revisionId,
+      baseOid: "base",
+      headOid: "head",
+      patchDigest: "digest",
+      ready: false,
+      findings: [],
+      checks: [],
+      canExtend: false,
+      integratedChecks,
+    }
+    vi.spyOn(apiClient, "GET").mockResolvedValueOnce(ok({ ...feature, review }))
+    expect(
+      (await api.get(featureId, new AbortController().signal)).review
+        ?.integratedChecks
+    ).toEqual(integratedChecks)
+  })
+
+  it("accepts legacy reviews that omit integrated checks during rolling updates", async () => {
+    const review = {
+      snapshotId: revisionId,
+      baseOid: "base",
+      headOid: "head",
+      patchDigest: "digest",
+      ready: true,
+      findings: [],
+      checks: [{ label: "Typecheck", passed: true }],
+      canExtend: false,
+    }
+    vi.spyOn(apiClient, "GET").mockResolvedValueOnce(ok({ ...feature, review }))
+    expect(
+      (await api.get(featureId, new AbortController().signal)).review
+    ).toEqual({ ...review, integratedChecks: [] })
+  })
+
+  it("rejects invalid integrated-check data, unknown statuses and non-boolean results", async () => {
+    const review = {
+      snapshotId: revisionId,
+      baseOid: "base",
+      headOid: "head",
+      patchDigest: "digest",
+      ready: false,
+      findings: [],
+      checks: [],
+      canExtend: false,
+    }
+    const get = vi.spyOn(apiClient, "GET")
+    for (const integratedChecks of [
+      null,
+      [{ command: "pnpm test", status: "stopped" }],
+      [{ command: "pnpm test", status: "finished", passed: "yes" }],
+      [{ status: "running" }],
+    ]) {
+      get.mockResolvedValueOnce(
+        ok({ ...feature, review: { ...review, integratedChecks } })
+      )
+      await expect(
+        api.get(featureId, new AbortController().signal)
+      ).rejects.toThrow()
+    }
+  })
 })

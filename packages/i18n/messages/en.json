@@ -509,5 +509,21 @@
   "feature_published_diff": "Published PR diff",
   "feature_published_diff_unavailable": "The published PR diff is unavailable. Open the PR on GitHub to inspect it.",
   "feature_resume_step": "Resume this step",
-  "feature_reconcile_stale_diff": "The diff changed. Check the pending publication before continuing."
+  "feature_reconcile_stale_diff": "The diff changed. Check the pending publication before continuing.",
+  "feature_review_current_snapshot": "Review of the displayed patch",
+  "feature_review_previous_snapshot": "Previous reviewed snapshot",
+  "feature_review_previous_note": "Findings and checks below apply to this earlier snapshot.",
+  "feature_review_base": "Base",
+  "feature_review_head": "Head",
+  "feature_review_digest": "Patch digest",
+  "feature_integrated_checks": "Integrated verification",
+  "feature_check_preparing": "Preparation pending",
+  "feature_check_running": "Verification in progress",
+  "feature_check_recovery": "Recovery needs confirmation",
+  "feature_check_preparing_reason": "Workspace preparation is pending for this snapshot.",
+  "feature_check_running_reason": "Factory is tracking this verification. Its result has not been confirmed yet.",
+  "feature_check_recovery_reason": "Factory is waiting to confirm that the last verification stopped.",
+  "feature_check_unconfirmed": "Result not confirmed",
+  "feature_check_recovery_action": "Resume this step to check that proof before any new launch.",
+  "feature_review_snapshot": "Review snapshot"
 }

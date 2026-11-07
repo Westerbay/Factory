@@ -73,6 +73,44 @@ export function featureAttemptLabel(status: Attempt["status"]): string {
   return labels[status]()
 }
 
+function integratedCheckLabel(
+  check: NonNullable<Feature["review"]>["integratedChecks"][number]
+) {
+  switch (check.status) {
+    case "preparing":
+      return m.feature_check_preparing()
+    case "running":
+      return m.feature_check_running()
+    case "recoveryNeeded":
+      return m.feature_check_recovery()
+    case "finished":
+      return check.passed === true
+        ? m.feature_check_passed()
+        : check.passed === false
+          ? m.feature_check_failed()
+          : m.feature_check_unconfirmed()
+  }
+}
+
+function integratedCheckReason(
+  status: NonNullable<Feature["review"]>["integratedChecks"][number]["status"],
+  canContinue: boolean
+) {
+  switch (status) {
+    case "preparing":
+      return m.feature_check_preparing_reason()
+    case "running":
+      return m.feature_check_running_reason()
+    case "recoveryNeeded":
+      return (
+        m.feature_check_recovery_reason() +
+        (canContinue ? ` ${m.feature_check_recovery_action()}` : "")
+      )
+    case "finished":
+      return null
+  }
+}
+
 function deliveryLabel(status: NonNullable<Feature["delivery"]>["status"]) {
   const labels = {
     claimed: m.feature_delivery_claimed,
@@ -159,9 +197,13 @@ export function FeaturePanels({
       ["running", "starting", "uncertain"].includes(item.status)
     ) ??
     feature.attempts.at(-1)
-  const unsettled = feature.attempts.some((item) =>
-    ["starting", "running", "uncertain"].includes(item.status)
-  )
+  const unsettled =
+    feature.attempts.some((item) =>
+      ["starting", "running", "uncertain"].includes(item.status)
+    ) ||
+    Boolean(
+      review?.integratedChecks.some((check) => check.status !== "finished")
+    )
   const blocked =
     !unsettled &&
     !published &&
@@ -186,6 +228,16 @@ export function FeaturePanels({
     !diffError &&
     !refreshComparison &&
     matchesReviewedDiff(feature, diff)
+  const hasReviewEvidence = Boolean(
+    review &&
+    (review.ready || review.findings.length > 0 || review.checks.length > 0)
+  )
+  const priorReviewEvidence = hasReviewEvidence && !showReviewEvidence
+  const reviewEvidenceTitle = priorReviewEvidence
+    ? m.feature_review_previous_snapshot()
+    : hasReviewEvidence
+      ? m.feature_review_current_snapshot()
+      : m.feature_review_snapshot()
   const readyForDelivery =
     review?.ready &&
     showReviewEvidence &&
@@ -444,67 +496,140 @@ export function FeaturePanels({
                     </code>
                   </div>
                 )}
-                {showReviewEvidence && (
-                  <>
-                    <section className="feature-result-section">
-                      <h4>
-                        {m.feature_findings()}{" "}
-                        <span>{review.findings.length}</span>
-                      </h4>
-                      {review.findings.length === 0 ? (
+                <section
+                  className="feature-review-evidence"
+                  aria-label={reviewEvidenceTitle}
+                  data-previous={priorReviewEvidence ? "" : undefined}
+                  data-snapshot={showReviewEvidence ? undefined : ""}
+                >
+                  {!showReviewEvidence && (
+                    <>
+                      <h4>{reviewEvidenceTitle}</h4>
+                      {priorReviewEvidence && (
                         <p className="feature-panel-note">
-                          {m.feature_empty_findings()}
+                          {m.feature_review_previous_note()}
                         </p>
-                      ) : (
-                        <ul className="feature-finding-list">
-                          {review.findings.map((finding, index) => (
-                            <li key={`${index}:${finding.role}`}>
-                              <div>
-                                <span>{featureRoleLabel(finding.role)}</span>
-                                {finding.blocking && (
-                                  <strong>
+                      )}
+                      <dl className="feature-review-identity">
+                        <div>
+                          <dt>{m.feature_review_base()}</dt>
+                          <dd>
+                            <code>{review.baseOid}</code>
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>{m.feature_review_head()}</dt>
+                          <dd>
+                            <code>{review.headOid}</code>
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>{m.feature_review_digest()}</dt>
+                          <dd>
+                            <code>{review.patchDigest}</code>
+                          </dd>
+                        </div>
+                      </dl>
+                    </>
+                  )}
+                  {review.integratedChecks.length > 0 && (
+                    <section className="feature-result-section">
+                      <h4>{m.feature_integrated_checks()}</h4>
+                      <ul className="feature-integrated-check-list">
+                        {review.integratedChecks.map((check, index) => (
+                          <li key={`${index}:${check.command}`}>
+                            <code>{check.command}</code>
+                            <span
+                              className="feature-integrated-check-status"
+                              role="status"
+                            >
+                              {integratedCheckLabel(check)}
+                            </span>
+                            {integratedCheckReason(
+                              check.status,
+                              feature.canContinue &&
+                                current &&
+                                !refreshComparison
+                            ) && (
+                              <p className="feature-panel-note">
+                                {integratedCheckReason(
+                                  check.status,
+                                  feature.canContinue &&
+                                    current &&
+                                    !refreshComparison
+                                )}
+                              </p>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
+                  {hasReviewEvidence && (
+                    <>
+                      <section className="feature-result-section">
+                        <h4>
+                          {m.feature_findings()}{" "}
+                          <span>{review.findings.length}</span>
+                        </h4>
+                        {review.findings.length === 0 ? (
+                          <p className="feature-panel-note">
+                            {m.feature_empty_findings()}
+                          </p>
+                        ) : (
+                          <ul className="feature-finding-list">
+                            {review.findings.map((finding, index) => (
+                              <li key={`${index}:${finding.role}`}>
+                                <div>
+                                  <span>{featureRoleLabel(finding.role)}</span>
+                                  {finding.blocking && (
+                                    <strong>
+                                      <TriangleAlert
+                                        size={13}
+                                        aria-hidden="true"
+                                      />
+                                      {m.feature_blocking()}
+                                    </strong>
+                                  )}
+                                </div>
+                                <p>{finding.summary}</p>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </section>
+                      <section className="feature-result-section">
+                        <h4>{m.feature_checks()}</h4>
+                        {review.checks.length === 0 ? (
+                          <p className="feature-panel-note">
+                            {m.feature_empty_checks()}
+                          </p>
+                        ) : (
+                          <ul className="feature-check-list">
+                            {review.checks.map((check, index) => (
+                              <li key={`${index}:${check.label}`}>
+                                <span>{check.label}</span>
+                                <span data-passed={check.passed}>
+                                  {check.passed ? (
+                                    <Check size={14} aria-hidden="true" />
+                                  ) : (
                                     <TriangleAlert
-                                      size={13}
+                                      size={14}
                                       aria-hidden="true"
                                     />
-                                    {m.feature_blocking()}
-                                  </strong>
-                                )}
-                              </div>
-                              <p>{finding.summary}</p>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </section>
-                    <section className="feature-result-section">
-                      <h4>{m.feature_checks()}</h4>
-                      {review.checks.length === 0 ? (
-                        <p className="feature-panel-note">
-                          {m.feature_empty_checks()}
-                        </p>
-                      ) : (
-                        <ul className="feature-check-list">
-                          {review.checks.map((check, index) => (
-                            <li key={`${index}:${check.label}`}>
-                              <span>{check.label}</span>
-                              <span data-passed={check.passed}>
-                                {check.passed ? (
-                                  <Check size={14} aria-hidden="true" />
-                                ) : (
-                                  <TriangleAlert size={14} aria-hidden="true" />
-                                )}
-                                {check.passed
-                                  ? m.feature_check_passed()
-                                  : m.feature_check_failed()}
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </section>
-                  </>
-                )}
+                                  )}
+                                  {check.passed
+                                    ? m.feature_check_passed()
+                                    : m.feature_check_failed()}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </section>
+                    </>
+                  )}
+                </section>
                 {review.canExtend && !published && !reconcile && (
                   <Button
                     disabled={busy || unsettled || staleDiff}

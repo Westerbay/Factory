@@ -52,11 +52,17 @@ const feature: Feature = {
     canExtend: false,
     findings: [],
     checks: [],
+    integratedChecks: [],
   },
 }
 function render(
   value: Feature,
-  options: { busy?: boolean; diffError?: boolean; diff?: FeatureDiff } = {}
+  options: {
+    busy?: boolean
+    diffError?: boolean
+    diff?: FeatureDiff
+    viewStage?: Feature["feature"]["stage"]
+  } = {}
 ) {
   return renderToStaticMarkup(
     <FeaturePanels
@@ -65,6 +71,7 @@ function render(
       diffError={options.diffError ?? false}
       diffLoading={false}
       busy={options.busy ?? false}
+      viewStage={options.viewStage}
       onApprove={() => {}}
       onReopen={() => {}}
       onResume={() => {}}
@@ -127,29 +134,39 @@ describe("feature result actions", () => {
     expect(html).toContain("Published draft needs review")
     expect(html).toContain('title="remote-base"')
     expect(html).toContain('title="remote-head"')
-    expect(html).not.toContain('title="reviewed-head"')
+    expect(html).toContain("<code>reviewed-head</code>")
     expect(html).not.toContain("Ready for your review")
     expect(html).not.toContain("Review this diff")
     expect(html).not.toContain("Publish the reviewed draft")
     expect(html).toContain('href="https://github.com/owner/repo/pull/12"')
     expect(html).toContain("+ remote change")
-    expect(html).not.toContain("Prior snapshot finding")
-    expect(html).not.toContain("Prior snapshot typecheck")
-    expect(html).not.toContain('data-passed="true"')
+    expect(html).toContain('aria-label="Previous reviewed snapshot"')
+    expect(html).toContain(
+      "Findings and checks below apply to this earlier snapshot."
+    )
+    expect(html).toContain("Prior snapshot finding")
+    expect(html).toContain("Prior snapshot typecheck")
+    expect(html).toContain("<code>reviewed-digest</code>")
   })
 
-  it("shows review findings and checks only for the displayed exact reviewed patch", () => {
+  it("binds findings and checks to their exact prior snapshot when the current diff differs or is unavailable", () => {
     const bound = render(reviewedFeature, { diff: reviewedDiff })
     expect(bound).toContain("Prior snapshot finding")
     expect(bound).toContain("Prior snapshot typecheck")
     expect(bound).toContain('data-passed="true"')
     expect(bound).toContain("Ready for your review")
+    expect(bound).toContain('aria-label="Review of the displayed patch"')
+    expect(bound).not.toContain('data-previous=""')
     for (const key of ["baseOid", "headOid", "patchDigest"] as const) {
       const changed = render(reviewedFeature, {
         diff: { ...reviewedDiff, [key]: "changed" },
       })
-      expect(changed).not.toContain("Prior snapshot finding")
-      expect(changed).not.toContain("Prior snapshot typecheck")
+      expect(changed).toContain('aria-label="Previous reviewed snapshot"')
+      expect(changed).toContain("<code>reviewed-base</code>")
+      expect(changed).toContain("<code>reviewed-head</code>")
+      expect(changed).toContain("<code>reviewed-digest</code>")
+      expect(changed).toContain("Prior snapshot finding")
+      expect(changed).toContain("Prior snapshot typecheck")
       expect(changed).not.toContain("Ready for your review")
       if (key !== "patchDigest") expect(changed).toContain('title="changed"')
       expect(changed).toContain("+ remote change")
@@ -158,8 +175,9 @@ describe("feature result actions", () => {
       diff: reviewedDiff,
       diffError: true,
     })
-    expect(unavailable).not.toContain("Prior snapshot finding")
-    expect(unavailable).not.toContain("Prior snapshot typecheck")
+    expect(unavailable).toContain('aria-label="Previous reviewed snapshot"')
+    expect(unavailable).toContain("Prior snapshot finding")
+    expect(unavailable).toContain("Prior snapshot typecheck")
     expect(unavailable).not.toContain("Ready for your review")
     const stale = render(
       {
@@ -168,8 +186,9 @@ describe("feature result actions", () => {
       },
       { diff: reviewedDiff }
     )
-    expect(stale).not.toContain("Prior snapshot finding")
-    expect(stale).not.toContain("Prior snapshot typecheck")
+    expect(stale).toContain('aria-label="Previous reviewed snapshot"')
+    expect(stale).toContain("Prior snapshot finding")
+    expect(stale).toContain("Prior snapshot typecheck")
   })
 
   it("does not substitute the local review identity when the published diff is unavailable", () => {
@@ -197,7 +216,8 @@ describe("feature result actions", () => {
     expect(html).not.toContain("Publish the reviewed draft")
     expect(html).toContain("Factory could not prepare the current comparison.")
     expect(html).toContain("Refresh and review the diff")
-    expect(html).not.toContain("Prior snapshot typecheck")
+    expect(html).toContain('aria-label="Previous reviewed snapshot"')
+    expect(html).toContain("Prior snapshot typecheck")
   })
 
   it("offers reopening a settled result and only exposes step continuation projected by the server", () => {
@@ -206,5 +226,95 @@ describe("feature result actions", () => {
     expect(render({ ...feature, canContinue: true })).toContain(
       "Resume this step"
     )
+  })
+
+  it("keeps the exact prior blocking evidence readable during correction when comparison is unavailable", () => {
+    const correcting: Feature = {
+      ...reviewedFeature,
+      feature: { ...reviewedFeature.feature, stage: "execution" },
+      review: {
+        ...reviewedFeature.review!,
+        ready: false,
+        findings: [
+          {
+            role: "securityReview",
+            summary: "The prior route is missing its access check",
+            blocking: true,
+          },
+        ],
+        checks: [{ label: "Prior authorization test", passed: false }],
+      },
+    }
+    const html = render(correcting, { diffError: true, viewStage: "result" })
+    expect(html).toContain('aria-label="Previous reviewed snapshot"')
+    expect(html).toContain("<code>reviewed-base</code>")
+    expect(html).toContain("<code>reviewed-head</code>")
+    expect(html).toContain("<code>reviewed-digest</code>")
+    expect(html).toContain("The prior route is missing its access check")
+    expect(html).toContain("Prior authorization test")
+    expect(html).not.toContain("Ready for your review")
+  })
+
+  it.each([
+    ["preparing", "Preparation pending", "Workspace preparation is pending"],
+    [
+      "running",
+      "Verification in progress",
+      "Its result has not been confirmed yet",
+    ],
+    [
+      "recoveryNeeded",
+      "Recovery needs confirmation",
+      "Factory is waiting to confirm that the last verification stopped",
+    ],
+  ] as const)(
+    "shows the projected %s command and reason without inferring recovery authority",
+    (status, label, reason) => {
+      const value: Feature = {
+        ...feature,
+        feature: { ...feature.feature, stage: "review" },
+        review: {
+          ...feature.review!,
+          ready: false,
+          integratedChecks: [
+            { command: "pnpm test --filter integration", status },
+          ],
+        },
+      }
+      const html = render(value, { diff: reviewedDiff })
+      expect(html).toContain("pnpm test --filter integration")
+      expect(html).toContain(`role="status">${label}</span>`)
+      expect(html).toContain(reason)
+      expect(html).not.toContain("Resume this step</button>")
+      expect(html).not.toContain("Ready for your review")
+      expect(html).not.toContain("No findings were reported for this snapshot.")
+      expect(html).not.toContain("No verification result has been recorded.")
+      const unavailable = render(value, { diffError: true })
+      expect(unavailable).toContain('aria-label="Review snapshot"')
+      expect(unavailable).not.toContain("Previous reviewed snapshot")
+      expect(unavailable).toContain("<code>reviewed-digest</code>")
+      expect(
+        render({ ...value, canContinue: true }, { diff: reviewedDiff })
+      ).toContain("Resume this step</button>")
+    }
+  )
+
+  it("shows the server-confirmed failed settlement reason without offering another reconciliation", () => {
+    const html = render(
+      {
+        ...feature,
+        delivery: {
+          ...receipt,
+          status: "failed",
+          reason:
+            "No draft exists for this verified request; publication was released.",
+        },
+      },
+      { diff: reviewedDiff }
+    )
+    expect(html).toContain(
+      "No draft exists for this verified request; publication was released."
+    )
+    expect(html).not.toContain("Check the draft request")
   })
 })

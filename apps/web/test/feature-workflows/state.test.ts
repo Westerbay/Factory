@@ -41,6 +41,7 @@ const feature: Feature = {
     patchDigest: diff.patchDigest,
     ready: true,
     checks: [{ label: "Typecheck", passed: true }],
+    integratedChecks: [],
     findings: [],
     canExtend: false,
   },
@@ -121,6 +122,60 @@ describe("reviewed publication guard", () => {
     expect(hasActiveAttempts(completed)).toBe(false)
     expect(hasUncertainAttempts(completed)).toBe(false)
     expect(canPublish(completed, diff)).toBe(true)
+  })
+
+  it("requires every integrated check to have a confirmed passing completion", () => {
+    for (const status of ["preparing", "running", "recoveryNeeded"] as const) {
+      const pending: Feature = {
+        ...feature,
+        review: {
+          ...feature.review!,
+          integratedChecks: [{ command: "pnpm test", status, passed: true }],
+        },
+      }
+      expect(canPublish(pending, diff)).toBe(false)
+      expect(
+        canReconcileDraft({
+          ...pending,
+          delivery: {
+            requestId: "62f21847-4f2c-4314-be5b-747e3a8ba882",
+            snapshotId,
+            status: "uncertain",
+          },
+        })
+      ).toBe(true)
+    }
+    for (const passed of [false, null, undefined]) {
+      expect(
+        canPublish(
+          {
+            ...feature,
+            review: {
+              ...feature.review!,
+              integratedChecks: [
+                { command: "pnpm test", status: "finished", passed },
+              ],
+            },
+          },
+          diff
+        )
+      ).toBe(false)
+    }
+    expect(
+      canPublish(
+        {
+          ...feature,
+          review: {
+            ...feature.review!,
+            integratedChecks: [
+              { command: "pnpm test", status: "finished", passed: true },
+            ],
+          },
+        },
+        diff
+      )
+    ).toBe(true)
+    expect(canPublish(feature, diff)).toBe(true)
   })
 
   it("separates fresh publication from pending or completed delivery receipts", () => {
