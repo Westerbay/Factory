@@ -242,8 +242,10 @@ impl ConversationStore for PgConversationStore {
             Box::pin(async move {
                 let mut tx = connection.begin().await.map_err(unavailable)?;
                 authorize_actor(&mut tx, actor).await?;
-                let open=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM factory_identity.conversation_runs r JOIN factory_identity.conversations c ON c.id=r.conversation_id WHERE c.user_id=$1 AND r.status IN ('active','uncertain')) OR EXISTS(SELECT 1 FROM factory_identity.model_probe_leases WHERE user_id=$1)
-                    OR EXISTS(SELECT 1 FROM factory_identity.features f JOIN factory_identity.feature_attempts a ON a.feature_id=f.id WHERE f.user_id=$1 AND a.reserved)").bind(actor.user_id).fetch_one(&mut *tx).await.map_err(unavailable)?;
+                let open=sqlx::query_scalar(r#"SELECT EXISTS(SELECT 1 FROM factory_identity.conversation_runs r JOIN factory_identity.conversations c ON c.id=r.conversation_id WHERE c.user_id=$1 AND r.status IN ('active','uncertain')) OR EXISTS(SELECT 1 FROM factory_identity.model_probe_leases WHERE user_id=$1)
+                    OR EXISTS(SELECT 1 FROM factory_identity.features f JOIN factory_identity.feature_attempts a ON a.feature_id=f.id WHERE f.user_id=$1 AND a.reserved)
+                    OR EXISTS(SELECT 1 FROM factory_identity.features f JOIN factory_identity.feature_reviews r ON r.feature_id=f.id WHERE f.user_id=$1
+                        AND jsonb_path_exists(r.record, '$.integrated_checks[*] ? (@.status == "Preparing" || @.status == "Launching")'))"#).bind(actor.user_id).fetch_one(&mut *tx).await.map_err(unavailable)?;
                 tx.commit().await.map_err(unavailable)?;
                 Ok(open)
             })

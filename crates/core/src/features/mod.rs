@@ -266,6 +266,8 @@ pub enum AttemptUpdate {
     IntegrationConflict {
         retry_base: String,
     },
+    /// Internal only: the controller rejected the candidate before changing the integration ref.
+    DiffUnrenderable,
     Interrupted,
     Uncertain,
 }
@@ -290,6 +292,29 @@ pub struct ReviewRound {
     pub architecture: RevisionKey,
     pub required_roles: Vec<TaskRole>,
     pub verdict: Option<ReviewVerdict>,
+    #[serde(default)]
+    pub integrated_checks: Vec<IntegratedCheck>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IntegratedCheck {
+    pub command: String,
+    pub workspace_id: Uuid,
+    pub generation: i64,
+    pub status: IntegratedCheckStatus,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IntegratedCheckStatus {
+    Preparing,
+    Launching,
+    Finished { passed: bool },
+}
+
+impl IntegratedCheckStatus {
+    fn holds_reservation(self) -> bool {
+        matches!(self, Self::Preparing | Self::Launching)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -362,6 +387,20 @@ pub enum FeatureCommand {
     BeginReview {
         snapshot: ReviewSnapshot,
         required_roles: Vec<TaskRole>,
+    },
+    ClaimIntegratedCheck {
+        snapshot_id: Uuid,
+        command: String,
+        workspace_id: Uuid,
+    },
+    StartIntegratedCheck {
+        snapshot_id: Uuid,
+        workspace_id: Uuid,
+    },
+    FinishIntegratedCheck {
+        snapshot_id: Uuid,
+        workspace_id: Uuid,
+        passed: bool,
     },
     RecordReview {
         snapshot_id: Uuid,

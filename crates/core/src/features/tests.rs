@@ -387,6 +387,11 @@ fn delivery_requires_review_evidence_for_exact_base_head_and_patch() {
         ),
         Err(FeatureError::StaleSnapshot)
     );
+    assert_eq!(
+        apply(&mut state, record_verdict.clone()),
+        Err(FeatureError::ReviewBlocked)
+    );
+    complete_integrated_check(&mut state, snapshot.id, true);
     apply(&mut state, record_verdict).unwrap();
     assert_eq!(state.feature.stage, FeatureStage::Result);
 
@@ -519,8 +524,32 @@ fn retained_work_pins_retry_without_validating_or_erasing_the_failure() {
         Err(FeatureError::Conflict)
     );
     retry.workspace.base_oid = "c".repeat(40);
+    let retry_id = launch(&mut state, retry.clone());
+    update(&mut state, retry_id, AttemptUpdate::DiffUnrenderable).unwrap();
+    assert_eq!(state.attempts[1].status, AttemptStatus::Failed);
+    assert_eq!(
+        state.attempts[1].activity.as_deref(),
+        Some(WorkspaceError::DiffUnrenderable.to_string().as_str())
+    );
+    assert_eq!(
+        apply(
+            &mut state,
+            FeatureCommand::SaveRetryBase {
+                attempt_id: retry_id,
+                base_oid: "d".repeat(40),
+            },
+        ),
+        Err(FeatureError::Conflict)
+    );
+
+    retry.workspace.attempt_id = Uuid::new_v4();
+    retry.retry_of = Some(retry_id);
+    assert_eq!(
+        apply(&mut state, FeatureCommand::ClaimAttempt(retry.clone())),
+        Err(FeatureError::Conflict)
+    );
+    retry.workspace.base_oid = state.attempts[0].claim.workspace.base_oid.clone();
     apply(&mut state, FeatureCommand::ClaimAttempt(retry)).unwrap();
-    assert_eq!(state.attempts[1].status, AttemptStatus::Starting);
 }
 
 #[test]
@@ -586,4 +615,154 @@ fn observed_worker_proof_recovers_unknown_provider_and_check_launches() {
         state.attempts[1].process_receipt.as_deref(),
         Some("provider-runtime")
     );
+}
+
+fn complete_integrated_check(state: &mut FeatureState, snapshot_id: Uuid, passed: bool) {
+    let workspace_id = Uuid::new_v4();
+    apply(
+        state,
+        FeatureCommand::ClaimIntegratedCheck {
+            snapshot_id,
+            workspace_id,
+            command: CHECK.into(),
+        },
+    )
+    .unwrap();
+    apply(
+        state,
+        FeatureCommand::StartIntegratedCheck {
+            snapshot_id,
+            workspace_id,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        apply(
+            state,
+            FeatureCommand::StartIntegratedCheck {
+                snapshot_id,
+                workspace_id
+            },
+        ),
+        Err(FeatureError::Conflict)
+    );
+    apply(
+        state,
+        FeatureCommand::FinishIntegratedCheck {
+            snapshot_id,
+            workspace_id,
+            passed,
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_blocked_round_cannot_be_superseded_before_its_correction_or_with_the_same_patch() {
+    let mut state = feature();
+    let writer = task(TaskRole::Implementation, Some("src/"));
+    let revision = approve_both(&mut state, vec![writer.clone()]);
+    let initial = claim(&state, writer, Some(revision.clone()), None);
+    let writer_id = launch(&mut state, initial);
+    let original = ReviewSnapshot {
+        id: Uuid::new_v4(),
+        git: GitSnapshot {
+            base_oid: "a".repeat(40),
+            head_oid: "b".repeat(40),
+            patch_digest: "c".repeat(64),
+        },
+    };
+    update(
+        &mut state,
+        writer_id,
+        AttemptUpdate::Validated {
+            checkpoint: Some(original.git.head_oid.clone()),
+        },
+    )
+    .unwrap();
+    let begin = |snapshot: ReviewSnapshot| FeatureCommand::BeginReview {
+        snapshot,
+        required_roles: vec![TaskRole::GeneralReview],
+    };
+    apply(&mut state, begin(original.clone())).unwrap();
+    let reviewer = claim(
+        &state,
+        task(TaskRole::GeneralReview, None),
+        Some(revision.clone()),
+        Some(&original),
+    );
+    let reviewer_id = launch(&mut state, reviewer);
+    update(
+        &mut state,
+        reviewer_id,
+        AttemptUpdate::Result {
+            text: "Blocking issue".into(),
+        },
+    )
+    .unwrap();
+    update(
+        &mut state,
+        reviewer_id,
+        AttemptUpdate::Validated { checkpoint: None },
+    )
+    .unwrap();
+    complete_integrated_check(&mut state, original.id, true);
+    apply(
+        &mut state,
+        FeatureCommand::RecordReview {
+            snapshot_id: original.id,
+            patch_digest: original.git.patch_digest.clone(),
+            verdict: ReviewVerdict {
+                findings: vec![ReviewFinding {
+                    role: TaskRole::GeneralReview,
+                    blocking: true,
+                    summary: "Regression in src".into(),
+                }],
+                checks: vec![ReviewCheck {
+                    label: CHECK.into(),
+                    passed: true,
+                }],
+            },
+        },
+    )
+    .unwrap();
+    apply(
+        &mut state,
+        FeatureCommand::BeginCorrections {
+            snapshot_id: original.id,
+        },
+    )
+    .unwrap();
+
+    let mut next = ReviewSnapshot {
+        id: Uuid::new_v4(),
+        git: original.git.clone(),
+    };
+    assert_eq!(
+        apply(&mut state, begin(next.clone())),
+        Err(FeatureError::ReviewBlocked)
+    );
+    let correction = claim(
+        &state,
+        task(TaskRole::Correction, Some("src/")),
+        Some(revision),
+        Some(&original),
+    );
+    let correction_id = launch(&mut state, correction);
+    update(
+        &mut state,
+        correction_id,
+        AttemptUpdate::Validated {
+            checkpoint: Some("d".repeat(40)),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        apply(&mut state, begin(next.clone())),
+        Err(FeatureError::ReviewBlocked)
+    );
+    next.git.head_oid = "d".repeat(40);
+    next.git.patch_digest = "e".repeat(64);
+    apply(&mut state, begin(next.clone())).unwrap();
+    assert_eq!(state.review().unwrap().snapshot, next);
 }

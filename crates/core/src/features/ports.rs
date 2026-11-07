@@ -116,6 +116,14 @@ pub enum TaskObservation {
     Unknown,
 }
 
+/// Evidence from the exact isolated check worker. Absence cannot settle a launch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CheckObservation {
+    Running,
+    Unknown,
+    Exited { exit_code: i64 },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FeatureCheckOutput {
     pub exit_code: i64,
@@ -147,8 +155,19 @@ pub trait FeatureExecutionRuntime: Send + Sync {
         _environment: &Environment,
         _project: &Project,
         _workspace: &TaskWorkspace,
+        _generation: i64,
     ) -> Result<(), ExecutionError> {
         Ok(())
+    }
+
+    async fn reconcile_check(
+        &self,
+        _environment: &Environment,
+        _project: &Project,
+        _workspace: &TaskWorkspace,
+        _generation: i64,
+    ) -> Result<CheckObservation, ExecutionError> {
+        Ok(CheckObservation::Unknown)
     }
 
     /// The runtime must identify the workspace and attempt even when the launch
@@ -169,6 +188,10 @@ pub enum WorkspaceError {
     Conflict,
     #[error("The task changed files outside its approved scope")]
     ScopeViolation,
+    #[error(
+        "The combined diff exceeds Factory's preview limits or cannot be displayed. Reduce the task's changes and retry."
+    )]
+    DiffUnrenderable,
     #[error("The workspace operation is unavailable")]
     Unavailable,
     #[error("The workspace operation may still be active")]
@@ -191,11 +214,23 @@ pub struct WorkspaceDiff {
 
 #[async_trait]
 pub trait FeatureWorkspaceRuntime: Send + Sync {
-    async fn initialize(
+    /// Fetch a new candidate that is private until the origin has been rechecked.
+    async fn prepare_initialization(
         &self,
         environment: &Environment,
         project: &Project,
         feature_id: Uuid,
+        candidate_id: Uuid,
+    ) -> Result<FeatureBranch, WorkspaceError>;
+
+    /// Promote only the exact candidate observed before the origin recheck.
+    async fn confirm_initialization(
+        &self,
+        environment: &Environment,
+        project: &Project,
+        feature_id: Uuid,
+        candidate_id: Uuid,
+        expected: &FeatureBranch,
     ) -> Result<FeatureBranch, WorkspaceError>;
 
     async fn prepare_task(
@@ -234,6 +269,7 @@ pub trait FeatureWorkspaceRuntime: Send + Sync {
 pub struct FeatureRemoteRefs {
     pub base_oid: Option<String>,
     pub head_oid: Option<String>,
+    pub managed_head_oid: Option<String>,
 }
 
 /// Trusted Git operations used only by authenticated draft delivery.

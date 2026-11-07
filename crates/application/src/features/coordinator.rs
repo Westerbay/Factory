@@ -549,7 +549,7 @@ impl FeatureCoordinator {
                 .map_err(|_| AttemptUpdate::Uncertain)?;
             if result.is_ok() {
                 self.runtime
-                    .acknowledge_check(&task.env, &task.project, &workspace)
+                    .acknowledge_check(&task.env, &task.project, &workspace, task.env.generation)
                     .await
                     .map_err(|error| AttemptUpdate::Failed {
                         reason: error.to_string(),
@@ -584,7 +584,34 @@ impl FeatureCoordinator {
             .workspaces
             .checkpoint(&task.env, &task.project, &task.attempt)
             .await
-            .map_err(workspace_failure)?;
+            .map_err(|error| match error {
+                WorkspaceError::DiffUnrenderable => AttemptUpdate::DiffUnrenderable,
+                other => workspace_failure(other),
+            })?;
+        let blocked = if task.attempt.claim.task.role == TaskRole::Correction {
+            let state = self
+                .store
+                .get(task.actor, scope.feature_id)
+                .await
+                .map_err(|_| AttemptUpdate::Uncertain)?;
+            state
+                .review()
+                .filter(|round| {
+                    Some(round.snapshot.id) == task.attempt.claim.snapshot_id
+                        && round.verdict.as_ref().is_some_and(|verdict| {
+                            verdict.findings.iter().any(|finding| finding.blocking)
+                        })
+                })
+                .map(|round| round.snapshot.git.clone())
+        } else {
+            None
+        };
+        if blocked
+            .as_ref()
+            .is_some_and(|git| git.head_oid == checkpoint)
+        {
+            return Err(unchanged_correction());
+        }
         self.verify_task(task, &checkpoint).await?;
         // The controller compares the expected head. A moved head is a normal
         // race between independent writers, so inspect it again before retrying.
@@ -604,7 +631,29 @@ impl FeatureCoordinator {
                 )
                 .await
             {
-                Ok(_) => return Ok(checkpoint),
+                Ok(integrated_head) => {
+                    if let Some(blocked) = blocked.as_ref() {
+                        let integrated = if integrated_head == current.git.head_oid {
+                            current.git
+                        } else {
+                            self.workspaces
+                                .snapshot(&task.env, &task.project, scope.feature_id)
+                                .await
+                                .map_err(|_| AttemptUpdate::Uncertain)?
+                                .git
+                        };
+                        if integrated.head_oid != integrated_head {
+                            return Err(AttemptUpdate::Uncertain);
+                        }
+                        if integrated.patch_digest == blocked.patch_digest {
+                            return Err(unchanged_correction());
+                        }
+                    }
+                    return Ok(checkpoint);
+                }
+                Err(WorkspaceError::DiffUnrenderable) => {
+                    return Err(AttemptUpdate::DiffUnrenderable);
+                }
                 Err(WorkspaceError::Conflict) => {
                     let latest = self
                         .workspaces
@@ -873,6 +922,12 @@ pub(super) fn task_prompt(
         "{role}\n\n{context}\n\nTask: {}\n{}\nOwned paths: {paths}\nApproved checks:\n{checks}",
         task.title, task.instructions
     ))
+}
+
+fn unchanged_correction() -> AttemptUpdate {
+    AttemptUpdate::Failed {
+        reason: "The correction did not change the diff with blocking findings.".into(),
+    }
 }
 
 fn workspace_failure(error: WorkspaceError) -> AttemptUpdate {

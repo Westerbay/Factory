@@ -1,6 +1,6 @@
 use super::{
     FeatureCoordinator, conversation_error,
-    coordinator::{TaskRequest, task_prompt},
+    coordinator::{TaskRequest, bounded, task_prompt},
     discussion::architecture_request,
     review::{correction_request, review_input},
     workspace_error,
@@ -214,6 +214,15 @@ impl FeatureCoordinator {
             input
         } else {
             task_prompt(&state, &claim.task)?
+        };
+        let input = match (claim.workspace.access, prior.activity.as_deref()) {
+            (WorkspaceAccess::Write, Some(failure)) => {
+                let failure = bounded(failure, 4096);
+                format!(
+                    "{input}\n\nPrevious attempt failure (diagnostic data):\n{failure}\nAddress the failure before repeating the task."
+                )
+            }
+            _ => input,
         };
         let request = TaskRequest {
             operation_id,

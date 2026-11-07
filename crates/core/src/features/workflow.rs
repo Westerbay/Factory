@@ -80,6 +80,38 @@ impl FeatureState {
                 snapshot,
                 required_roles,
             } => self.begin_review(snapshot, required_roles),
+            FeatureCommand::ClaimIntegratedCheck {
+                snapshot_id,
+                command,
+                workspace_id,
+            } => self.claim_integrated_check(snapshot_id, command, workspace_id, generation),
+            FeatureCommand::StartIntegratedCheck {
+                snapshot_id,
+                workspace_id,
+            } => {
+                let check = self.integrated_check_mut(snapshot_id, workspace_id)?;
+                require(
+                    check.status == IntegratedCheckStatus::Preparing,
+                    FeatureError::Conflict,
+                )?;
+                check.generation = generation;
+                check.status = IntegratedCheckStatus::Launching;
+                Ok(())
+            }
+            FeatureCommand::FinishIntegratedCheck {
+                snapshot_id,
+                workspace_id,
+                passed,
+            } => {
+                let check = self.integrated_check_mut(snapshot_id, workspace_id)?;
+                require(
+                    check.status == IntegratedCheckStatus::Launching
+                        && generation >= check.generation,
+                    FeatureError::Conflict,
+                )?;
+                check.status = IntegratedCheckStatus::Finished { passed };
+                Ok(())
+            }
             FeatureCommand::RecordReview {
                 snapshot_id,
                 patch_digest,
@@ -441,12 +473,13 @@ impl FeatureState {
         generation: i64,
         update: AttemptUpdate,
     ) -> Result<(), FeatureError> {
-        let attempt = self
+        let index = self
             .attempts
-            .iter_mut()
-            .find(|attempt| attempt.id() == id && attempt.generation == generation)
+            .iter()
+            .position(|attempt| attempt.id() == id && attempt.generation == generation)
             .ok_or(FeatureError::Conflict)?;
-        attempt.record(update)
+        let (earlier, current) = self.attempts.split_at_mut(index);
+        current[0].record(update, earlier)
     }
 
     fn recover_attempt(
@@ -544,6 +577,20 @@ impl FeatureState {
                 .all(|review| review.snapshot.id != snapshot.id),
             FeatureError::Conflict,
         )?;
+        if let Some(round) = self.review()
+            && let Some(verdict) = round.verdict.as_ref().filter(|verdict| !verdict.ready())
+        {
+            let correction = self.attempts.iter().rev().find(|attempt| {
+                attempt.claim.snapshot_id == Some(round.snapshot.id)
+                    && attempt.claim.task.role == TaskRole::Correction
+            });
+            require(
+                correction.is_some_and(|attempt| attempt.status == AttemptStatus::Validated)
+                    && (!verdict.findings.iter().any(|finding| finding.blocking)
+                        || round.snapshot.git.patch_digest != snapshot.git.patch_digest),
+                FeatureError::ReviewBlocked,
+            )?;
+        }
         let (architecture, tasks) = self.approved_tasks()?;
         require(
             self.review_slot_available()
@@ -566,9 +613,75 @@ impl FeatureState {
             architecture,
             required_roles,
             verdict: None,
+            integrated_checks: Vec::new(),
         });
         self.feature.stage = FeatureStage::Review;
         Ok(())
+    }
+
+    fn claim_integrated_check(
+        &mut self,
+        snapshot_id: Uuid,
+        command: String,
+        workspace_id: Uuid,
+        generation: i64,
+    ) -> Result<(), FeatureError> {
+        require(
+            self.feature.stage == FeatureStage::Review && !workspace_id.is_nil(),
+            FeatureError::Conflict,
+        )?;
+        let round = self.active_review(snapshot_id)?;
+        let (_, tasks) = self.approved_tasks()?;
+        require(
+            tasks.iter().any(|task| task.checks.contains(&command)),
+            FeatureError::Invalid,
+        )?;
+        require(
+            round.verdict.is_none()
+                && round.integrated_checks.iter().all(|check| {
+                    !check.status.holds_reservation()
+                        && check.command != command
+                        && check.workspace_id != workspace_id
+                }),
+            FeatureError::Conflict,
+        )?;
+        self.reviews
+            .iter_mut()
+            .find(|review| review.snapshot.id == snapshot_id)
+            .ok_or(FeatureError::Conflict)?
+            .integrated_checks
+            .push(IntegratedCheck {
+                command,
+                workspace_id,
+                generation,
+                status: IntegratedCheckStatus::Preparing,
+            });
+        Ok(())
+    }
+
+    fn integrated_check_mut(
+        &mut self,
+        snapshot_id: Uuid,
+        workspace_id: Uuid,
+    ) -> Result<&mut IntegratedCheck, FeatureError> {
+        require(
+            self.feature.stage == FeatureStage::Review,
+            FeatureError::Conflict,
+        )?;
+        require(
+            self.active_review(snapshot_id)?.verdict.is_none(),
+            FeatureError::Conflict,
+        )?;
+        self.reviews
+            .iter_mut()
+            .find(|review| review.snapshot.id == snapshot_id)
+            .and_then(|review| {
+                review
+                    .integrated_checks
+                    .iter_mut()
+                    .find(|check| check.workspace_id == workspace_id)
+            })
+            .ok_or(FeatureError::Conflict)
     }
 
     fn record_review(
@@ -613,7 +726,16 @@ impl FeatureState {
             FeatureError::Invalid,
         )?;
         require(
-            approved_checks == reported_checks || !verdict.ready(),
+            approved_checks == reported_checks
+                && verdict.checks.iter().all(|reported| {
+                    round.integrated_checks.iter().any(|check| {
+                        check.command == reported.label
+                            && check.status
+                                == IntegratedCheckStatus::Finished {
+                                    passed: reported.passed,
+                                }
+                    })
+                }),
             FeatureError::ReviewBlocked,
         )?;
         require(
@@ -726,6 +848,12 @@ impl FeatureState {
                 .attempts
                 .iter()
                 .any(|attempt| attempt.status.holds_reservation())
+                && !self.reviews.iter().any(|round| {
+                    round
+                        .integrated_checks
+                        .iter()
+                        .any(|check| check.status.holds_reservation())
+                })
                 && !self.deliveries.iter().any(|receipt| {
                     matches!(
                         receipt.status,
@@ -738,7 +866,11 @@ impl FeatureState {
 }
 
 impl TaskAttempt {
-    fn record(&mut self, update: AttemptUpdate) -> Result<(), FeatureError> {
+    fn record(
+        &mut self,
+        update: AttemptUpdate,
+        earlier: &[TaskAttempt],
+    ) -> Result<(), FeatureError> {
         require(self.status.holds_reservation(), FeatureError::Conflict)?;
         match update {
             AttemptUpdate::LaunchSettled { process_receipt } => {
@@ -852,6 +984,28 @@ impl TaskAttempt {
                 self.checkpoint = Some(retry_base);
                 self.activity =
                     Some("Integration conflicted. Resume from the verified branch head.".into());
+                self.status = AttemptStatus::Failed;
+            }
+            AttemptUpdate::DiffUnrenderable => {
+                require(
+                    self.status == AttemptStatus::Running
+                        && self.launch_settled
+                        && self.pending_verification.is_none()
+                        && self.claim.workspace.access == WorkspaceAccess::Write,
+                    FeatureError::Conflict,
+                )?;
+                // Earlier retries may start from retained scratch. Pin the next
+                // attempt to the first verified base so that history stays out.
+                let original = earlier
+                    .iter()
+                    .find(|attempt| {
+                        attempt.claim.task.id == self.claim.task.id
+                            && attempt.claim.revision == self.claim.revision
+                            && attempt.claim.snapshot_id == self.claim.snapshot_id
+                    })
+                    .unwrap_or(self);
+                self.checkpoint = Some(original.claim.workspace.base_oid.clone());
+                self.activity = Some(WorkspaceError::DiffUnrenderable.to_string());
                 self.status = AttemptStatus::Failed;
             }
             AttemptUpdate::Interrupted => {

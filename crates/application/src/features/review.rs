@@ -3,12 +3,14 @@ use super::{
     coordinator::{TaskRequest, approved_context},
 };
 use factory_core::{
+    conversations::execution::ExecutionError,
     environments::{Environment, EnvironmentActor},
     features::{
-        AttemptStatus, FeatureCodec, FeatureCommand, FeatureError, FeatureReplyFinding,
-        FeatureStage, FeatureState, FeatureTask, GateContent, GateRevision, ReviewCheck,
-        ReviewFinding, ReviewRound, ReviewSnapshot, ReviewVerdict, RevisionKey, TaskRole,
-        TaskWorkspace, WorkspaceAccess, WorkspaceDiff, WorkspaceError,
+        AttemptStatus, CheckObservation, FeatureCodec, FeatureCommand, FeatureError,
+        FeatureReplyFinding, FeatureStage, FeatureState, FeatureTask, GateContent, GateRevision,
+        IntegratedCheck, IntegratedCheckStatus, ReviewCheck, ReviewFinding, ReviewRound,
+        ReviewSnapshot, ReviewVerdict, RevisionKey, TaskRole, TaskWorkspace, WorkspaceAccess,
+        WorkspaceDiff, WorkspaceError,
     },
     projects::Project,
 };
@@ -65,6 +67,35 @@ impl FeatureCoordinator {
             ) {
                 return Ok(());
             }
+            if feature.feature.stage == FeatureStage::Execution
+                && let Some(round) = feature.review()
+                && let Some(verdict) = round.verdict.as_ref().filter(|verdict| !verdict.ready())
+            {
+                // The persisted Execution stage and blocked round are correction
+                // intent even if the previous process never claimed the writer.
+                let correction = feature.attempts.iter().rev().find(|attempt| {
+                    attempt.claim.snapshot_id == Some(round.snapshot.id)
+                        && attempt.claim.task.role == TaskRole::Correction
+                });
+                match correction.map(|attempt| attempt.status) {
+                    Some(AttemptStatus::Validated) => {}
+                    Some(_) => return Err(FeatureError::ReviewBlocked),
+                    None => {
+                        if self.feature_diff(&env, &project, feature_id).await?.git
+                            != round.snapshot.git
+                        {
+                            return Err(FeatureError::StaleSnapshot);
+                        }
+                        let request =
+                            correction_request(self.codec.as_ref(), &feature, round, verdict)?;
+                        let result = self.run_task(actor, &feature, request).await?;
+                        if result.attempt.status != AttemptStatus::Validated {
+                            return Err(FeatureError::ReviewBlocked);
+                        }
+                        continue;
+                    }
+                }
+            }
             let diff = self.feature_diff(&env, &project, feature_id).await?;
             let reviewed_diff_changed = feature.review().is_some_and(|round| {
                 round.verdict.as_ref().is_some_and(ReviewVerdict::ready)
@@ -103,7 +134,7 @@ impl FeatureCoordinator {
                     findings.push(finding);
                 }
                 let checks = self
-                    .verify_integrated(&env, &project, &feature, &round)
+                    .verify_integrated(actor, &env, &project, &feature, &round)
                     .await?;
                 if self.feature_diff(&env, &project, feature_id).await?.git != round.snapshot.git {
                     return Err(FeatureError::StaleSnapshot);
@@ -142,9 +173,10 @@ impl FeatureCoordinator {
             if used >= 2 + feature.additional_review_rounds as usize {
                 return Err(FeatureError::ReviewBlocked);
             }
-            let request = correction_request(self.codec.as_ref(), &feature, &round, verdict)?;
-            feature = self
-                .store
+            // Validate that the exact correction request is reconstructible
+            // before recording the transition.
+            correction_request(self.codec.as_ref(), &feature, &round, verdict)?;
+            self.store
                 .apply(
                     actor,
                     &env,
@@ -155,12 +187,7 @@ impl FeatureCoordinator {
                         snapshot_id: round.snapshot.id,
                     },
                 )
-                .await?
-                .state;
-            let result = self.run_task(actor, &feature, request).await?;
-            if result.attempt.status != AttemptStatus::Validated {
-                return Err(FeatureError::ReviewBlocked);
-            }
+                .await?;
         }
     }
 
@@ -378,6 +405,7 @@ impl FeatureCoordinator {
 
     async fn verify_integrated(
         &self,
+        actor: EnvironmentActor,
         env: &Environment,
         project: &Project,
         feature: &FeatureState,
@@ -385,31 +413,14 @@ impl FeatureCoordinator {
     ) -> Result<Vec<ReviewCheck>, FeatureError> {
         let tasks = plan_tasks(feature)?;
         let commands: BTreeSet<_> = tasks.iter().flat_map(|task| &task.checks).collect();
-        let mut checks = Vec::new();
+        if commands.len() > 128 {
+            return Err(FeatureError::ReviewBlocked);
+        }
+        let mut checks = Vec::with_capacity(commands.len());
         for command in commands {
-            let workspace = TaskWorkspace {
-                feature_id: feature.feature.id,
-                attempt_id: Uuid::new_v4(),
-                base_oid: round.snapshot.git.head_oid.clone(),
-                access: WorkspaceAccess::Write,
-            };
-            let passed = match self.workspaces.prepare_task(env, project, &workspace).await {
-                Ok(()) => match self
-                    .runtime
-                    .run_check(env, project, &workspace, command)
-                    .await
-                {
-                    Ok(result) => {
-                        let acknowledged = self
-                            .runtime
-                            .acknowledge_check(env, project, &workspace)
-                            .await;
-                        result.exit_code == 0 && acknowledged.is_ok()
-                    }
-                    Err(_) => false,
-                },
-                Err(_) => false,
-            };
+            let passed = self
+                .integrated_check(actor, env, project, feature.feature.id, round, command)
+                .await?;
             checks.push(ReviewCheck {
                 label: command.clone(),
                 passed,
@@ -417,6 +428,131 @@ impl FeatureCoordinator {
         }
         Ok(checks)
     }
+
+    async fn integrated_check(
+        &self,
+        actor: EnvironmentActor,
+        env: &Environment,
+        project: &Project,
+        feature_id: Uuid,
+        round: &ReviewRound,
+        command: &str,
+    ) -> Result<bool, FeatureError> {
+        let snapshot_id = round.snapshot.id;
+        let workspace_id = self
+            .codec
+            .derived_id(snapshot_id, &format!("integrated-check:{command}"));
+        let workspace = TaskWorkspace {
+            feature_id,
+            attempt_id: workspace_id,
+            base_oid: round.snapshot.git.head_oid.clone(),
+            access: WorkspaceAccess::Write,
+        };
+        let claim = self
+            .store
+            .apply(
+                actor,
+                env,
+                feature_id,
+                self.codec
+                    .derived_id(workspace_id, "claim-integrated-check"),
+                FeatureCommand::ClaimIntegratedCheck {
+                    snapshot_id,
+                    command: command.to_owned(),
+                    workspace_id,
+                },
+            )
+            .await?;
+        let mut check = check_record(&claim.state, snapshot_id, workspace_id)?;
+        let mut launch = false;
+        if check.status == IntegratedCheckStatus::Preparing {
+            self.workspaces
+                .prepare_task(env, project, &workspace)
+                .await
+                .map_err(workspace_error)?;
+            let start = self
+                .store
+                .apply(
+                    actor,
+                    env,
+                    feature_id,
+                    self.codec
+                        .derived_id(workspace_id, "start-integrated-check"),
+                    FeatureCommand::StartIntegratedCheck {
+                        snapshot_id,
+                        workspace_id,
+                    },
+                )
+                .await?;
+            launch = start.fresh;
+            check = check_record(&start.state, snapshot_id, workspace_id)?;
+        }
+        let generation = check.generation;
+        if let IntegratedCheckStatus::Finished { passed } = check.status {
+            let _ = self
+                .runtime
+                .acknowledge_check(env, project, &workspace, generation)
+                .await;
+            return Ok(passed);
+        }
+        let passed = if launch {
+            match self
+                .runtime
+                .run_check(env, project, &workspace, command)
+                .await
+            {
+                Ok(result) => result.exit_code == 0,
+                Err(ExecutionError::PreflightUnavailable | ExecutionError::Invalid) => false,
+                Err(_) => return Err(FeatureError::ExecutionUncertain),
+            }
+        } else {
+            match self
+                .runtime
+                .reconcile_check(env, project, &workspace, generation)
+                .await
+            {
+                Ok(CheckObservation::Exited { exit_code }) => exit_code == 0,
+                _ => return Err(FeatureError::ExecutionUncertain),
+            }
+        };
+        self.store
+            .apply(
+                actor,
+                env,
+                feature_id,
+                self.codec
+                    .derived_id(workspace_id, "finish-integrated-check"),
+                FeatureCommand::FinishIntegratedCheck {
+                    snapshot_id,
+                    workspace_id,
+                    passed,
+                },
+            )
+            .await?;
+        let _ = self
+            .runtime
+            .acknowledge_check(env, project, &workspace, generation)
+            .await;
+        Ok(passed)
+    }
+}
+
+fn check_record(
+    state: &FeatureState,
+    snapshot_id: Uuid,
+    workspace_id: Uuid,
+) -> Result<IntegratedCheck, FeatureError> {
+    state
+        .review()
+        .filter(|round| round.snapshot.id == snapshot_id)
+        .and_then(|round| {
+            round
+                .integrated_checks
+                .iter()
+                .find(|check| check.workspace_id == workspace_id)
+        })
+        .cloned()
+        .ok_or(FeatureError::StaleSnapshot)
 }
 
 fn collect_findings(
@@ -649,7 +785,9 @@ fn workspace_error(error: WorkspaceError) -> FeatureError {
     match error {
         WorkspaceError::Conflict => FeatureError::StaleSnapshot,
         WorkspaceError::Uncertain => FeatureError::ExecutionUncertain,
-        WorkspaceError::Invalid | WorkspaceError::ScopeViolation => FeatureError::Invalid,
+        WorkspaceError::Invalid
+        | WorkspaceError::ScopeViolation
+        | WorkspaceError::DiffUnrenderable => FeatureError::Invalid,
         WorkspaceError::Unavailable => FeatureError::Unavailable,
     }
 }

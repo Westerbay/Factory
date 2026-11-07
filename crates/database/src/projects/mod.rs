@@ -95,7 +95,7 @@ async fn has_blocking_work(
     project_id: Uuid,
 ) -> Result<bool, ProjectError> {
     sqlx::query_scalar(
-        "SELECT EXISTS (
+        r#"SELECT EXISTS (
             SELECT 1 FROM factory_identity.conversation_runs r
             JOIN factory_identity.conversations c ON c.id=r.conversation_id
             WHERE c.project_id=$1 AND c.user_id=$2 AND r.status IN ('active','uncertain')
@@ -107,7 +107,12 @@ async fn has_blocking_work(
             SELECT 1 FROM factory_identity.features f
             JOIN factory_identity.feature_deliveries d ON d.feature_id=f.id
             WHERE f.project_id=$1 AND f.user_id=$2 AND d.unsettled
-         )",
+         ) OR EXISTS (
+            SELECT 1 FROM factory_identity.features f
+            JOIN factory_identity.feature_reviews r ON r.feature_id=f.id
+            WHERE f.project_id=$1 AND f.user_id=$2
+              AND jsonb_path_exists(r.record, '$.integrated_checks[*] ? (@.status == "Preparing" || @.status == "Launching")')
+         )"#,
     )
     .bind(project_id)
     .bind(user_id)

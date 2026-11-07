@@ -411,3 +411,164 @@ async fn upgrading_v4_preserves_existing_project_conversations() {
     );
     tx.rollback().await.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires the explicitly owned PostgreSQL integration fixture"]
+async fn reserved_review_check_fences_project_deletion_until_its_outcome_is_saved() {
+    let (database, sql) = fixture().await;
+    let (actor, environment, project_id) = member(&database, &sql).await;
+    let store = database.feature_store();
+    let id = store
+        .create(actor, &environment, request(project_id))
+        .await
+        .unwrap()
+        .feature
+        .id;
+    let apply = async |command| {
+        store
+            .apply(actor, &environment, id, Uuid::new_v4(), command)
+            .await
+            .unwrap()
+    };
+    let scope = RevisionKey {
+        id: Uuid::new_v4(),
+        digest: "a".repeat(64),
+    };
+    let architecture = RevisionKey {
+        id: Uuid::new_v4(),
+        digest: "b".repeat(64),
+    };
+    let command = "git diff --check".to_owned();
+    let writer = FeatureTask {
+        id: Uuid::new_v4(),
+        title: "Implement".into(),
+        instructions: "Update the source".into(),
+        role: TaskRole::Implementation,
+        paths: vec!["src/".into()],
+        depends_on: Vec::new(),
+        checks: vec![command.clone()],
+    };
+    apply(FeatureCommand::ProposeRevision(GateRevision {
+        key: scope.clone(),
+        approval: None,
+        content: GateContent::Scope {
+            brief: "Fix the source".into(),
+        },
+    }))
+    .await;
+    apply(FeatureCommand::ApproveRevision(scope.clone())).await;
+    apply(FeatureCommand::ProposeRevision(GateRevision {
+        key: architecture.clone(),
+        approval: None,
+        content: GateContent::Architecture {
+            scope,
+            summary: "Small change".into(),
+            tasks: vec![writer.clone()],
+            diagrams: vec![FeatureDiagram {
+                title: "Flow".into(),
+                source: "flowchart TD; A-->B".into(),
+            }],
+        },
+    }))
+    .await;
+    apply(FeatureCommand::ApproveRevision(architecture.clone())).await;
+    let attempt_id = Uuid::new_v4();
+    let base_oid = "a".repeat(40);
+    let head_oid = "b".repeat(40);
+    apply(FeatureCommand::ClaimAttempt(AttemptClaim {
+        task: writer,
+        revision: Some(architecture),
+        snapshot_id: None,
+        model: "fixture".into(),
+        effort: None,
+        skill_revision: "build-feature/1".into(),
+        retry_of: None,
+        workspace: TaskWorkspace {
+            feature_id: id,
+            attempt_id,
+            base_oid: base_oid.clone(),
+            access: WorkspaceAccess::Write,
+        },
+    }))
+    .await;
+    apply(FeatureCommand::RecordAttempt {
+        attempt_id,
+        update: AttemptUpdate::LaunchSettled {
+            process_receipt: Some("worker".into()),
+        },
+    })
+    .await;
+    apply(FeatureCommand::RecordAttempt {
+        attempt_id,
+        update: AttemptUpdate::Validated {
+            checkpoint: Some(head_oid.clone()),
+        },
+    })
+    .await;
+    let snapshot_id = Uuid::new_v4();
+    apply(FeatureCommand::BeginReview {
+        snapshot: ReviewSnapshot {
+            id: snapshot_id,
+            git: GitSnapshot {
+                base_oid,
+                head_oid,
+                patch_digest: "c".repeat(64),
+            },
+        },
+        required_roles: vec![TaskRole::GeneralReview],
+    })
+    .await;
+
+    let workspace_id = Uuid::new_v4();
+    for command in [
+        FeatureCommand::ClaimIntegratedCheck {
+            snapshot_id,
+            command,
+            workspace_id,
+        },
+        FeatureCommand::StartIntegratedCheck {
+            snapshot_id,
+            workspace_id,
+        },
+    ] {
+        apply(command).await;
+        assert!(
+            database
+                .conversation_store()
+                .has_open_runs(actor)
+                .await
+                .unwrap()
+        );
+        assert!(matches!(
+            database
+                .project_store()
+                .begin_delete(actor, environment.id, environment.generation, project_id)
+                .await,
+            Err(ProjectError::InUse)
+        ));
+    }
+    let outcome = apply(FeatureCommand::FinishIntegratedCheck {
+        snapshot_id,
+        workspace_id,
+        passed: true,
+    })
+    .await;
+    assert_eq!(
+        outcome.state.review().unwrap().integrated_checks[0].status,
+        IntegratedCheckStatus::Finished { passed: true }
+    );
+    assert!(
+        !database
+            .conversation_store()
+            .has_open_runs(actor)
+            .await
+            .unwrap()
+    );
+    assert!(
+        database
+            .project_store()
+            .begin_delete(actor, environment.id, environment.generation, project_id)
+            .await
+            .is_ok()
+    );
+}
