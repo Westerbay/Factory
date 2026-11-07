@@ -80,6 +80,26 @@ const receipt = {
   snapshotId: "snapshot",
   status: "uncertain" as const,
 }
+const reviewedFeature: Feature = {
+  ...feature,
+  review: {
+    ...feature.review!,
+    findings: [
+      {
+        role: "generalReview",
+        summary: "Prior snapshot finding",
+        blocking: false,
+      },
+    ],
+    checks: [{ label: "Prior snapshot typecheck", passed: true }],
+  },
+}
+const reviewedDiff: FeatureDiff = {
+  ...diff,
+  baseOid: reviewedFeature.review!.baseOid,
+  headOid: reviewedFeature.review!.headOid,
+  patchDigest: reviewedFeature.review!.patchDigest,
+}
 
 describe("feature result actions", () => {
   it("keeps reconciliation available for a changed diff and disables it when commands are unavailable", () => {
@@ -97,7 +117,7 @@ describe("feature result actions", () => {
 
   it("shows stale remote receipt and fetched remote identity without Ready or another review/publication action", () => {
     const html = render({
-      ...feature,
+      ...reviewedFeature,
       delivery: {
         ...receipt,
         status: "publishedStale",
@@ -112,6 +132,44 @@ describe("feature result actions", () => {
     expect(html).not.toContain("Review this diff")
     expect(html).not.toContain("Publish the reviewed draft")
     expect(html).toContain('href="https://github.com/owner/repo/pull/12"')
+    expect(html).toContain("+ remote change")
+    expect(html).not.toContain("Prior snapshot finding")
+    expect(html).not.toContain("Prior snapshot typecheck")
+    expect(html).not.toContain('data-passed="true"')
+  })
+
+  it("shows review findings and checks only for the displayed exact reviewed patch", () => {
+    const bound = render(reviewedFeature, { diff: reviewedDiff })
+    expect(bound).toContain("Prior snapshot finding")
+    expect(bound).toContain("Prior snapshot typecheck")
+    expect(bound).toContain('data-passed="true"')
+    expect(bound).toContain("Ready for your review")
+    for (const key of ["baseOid", "headOid", "patchDigest"] as const) {
+      const changed = render(reviewedFeature, {
+        diff: { ...reviewedDiff, [key]: "changed" },
+      })
+      expect(changed).not.toContain("Prior snapshot finding")
+      expect(changed).not.toContain("Prior snapshot typecheck")
+      expect(changed).not.toContain("Ready for your review")
+      if (key !== "patchDigest") expect(changed).toContain('title="changed"')
+      expect(changed).toContain("+ remote change")
+    }
+    const unavailable = render(reviewedFeature, {
+      diff: reviewedDiff,
+      diffError: true,
+    })
+    expect(unavailable).not.toContain("Prior snapshot finding")
+    expect(unavailable).not.toContain("Prior snapshot typecheck")
+    expect(unavailable).not.toContain("Ready for your review")
+    const stale = render(
+      {
+        ...reviewedFeature,
+        delivery: { ...receipt, status: "publishedStale" },
+      },
+      { diff: reviewedDiff }
+    )
+    expect(stale).not.toContain("Prior snapshot finding")
+    expect(stale).not.toContain("Prior snapshot typecheck")
   })
 
   it("does not substitute the local review identity when the published diff is unavailable", () => {

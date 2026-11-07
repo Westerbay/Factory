@@ -175,12 +175,14 @@ export function FeaturePanels({
   const staleDiff = Boolean(
     review && diff && !matchesReviewedDiff(feature, diff)
   )
+  const showReviewEvidence =
+    !publishedStale && !diffError && matchesReviewedDiff(feature, diff)
   const diffLabel = publishedStale
     ? m.feature_published_diff()
     : staleDiff
       ? m.feature_current_diff()
       : m.feature_diff()
-  const identity = publishedStale ? (diffError ? undefined : diff) : review
+  const identity = diffError ? undefined : diff
   const publishable =
     current && !busy && !diffLoading && !diffError && canPublish(feature, diff)
   const url = draftLink(delivery?.draftUrl)
@@ -401,7 +403,7 @@ export function FeaturePanels({
             ) : (
               <>
                 <div className="feature-result-verdict">
-                  {review.ready && !staleDiff && !publishedStale ? (
+                  {review.ready && showReviewEvidence ? (
                     <Check size={18} aria-hidden="true" />
                   ) : (
                     <Circle size={14} aria-hidden="true" />
@@ -409,7 +411,7 @@ export function FeaturePanels({
                   <h3>
                     {publishedStale
                       ? m.feature_delivery_stale()
-                      : review.ready && !staleDiff
+                      : review.ready && showReviewEvidence
                         ? m.feature_review_ready()
                         : m.feature_review_pending()}
                   </h3>
@@ -429,59 +431,67 @@ export function FeaturePanels({
                     </code>
                   </div>
                 )}
-                <section className="feature-result-section">
-                  <h4>
-                    {m.feature_findings()} <span>{review.findings.length}</span>
-                  </h4>
-                  {review.findings.length === 0 ? (
-                    <p className="feature-panel-note">
-                      {m.feature_empty_findings()}
-                    </p>
-                  ) : (
-                    <ul className="feature-finding-list">
-                      {review.findings.map((finding, index) => (
-                        <li key={`${index}:${finding.role}`}>
-                          <div>
-                            <span>{featureRoleLabel(finding.role)}</span>
-                            {finding.blocking && (
-                              <strong>
-                                <TriangleAlert size={13} aria-hidden="true" />
-                                {m.feature_blocking()}
-                              </strong>
-                            )}
-                          </div>
-                          <p>{finding.summary}</p>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </section>
-                <section className="feature-result-section">
-                  <h4>{m.feature_checks()}</h4>
-                  {review.checks.length === 0 ? (
-                    <p className="feature-panel-note">
-                      {m.feature_empty_checks()}
-                    </p>
-                  ) : (
-                    <ul className="feature-check-list">
-                      {review.checks.map((check, index) => (
-                        <li key={`${index}:${check.label}`}>
-                          <span>{check.label}</span>
-                          <span data-passed={check.passed}>
-                            {check.passed ? (
-                              <Check size={14} aria-hidden="true" />
-                            ) : (
-                              <TriangleAlert size={14} aria-hidden="true" />
-                            )}
-                            {check.passed
-                              ? m.feature_check_passed()
-                              : m.feature_check_failed()}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </section>
+                {showReviewEvidence && (
+                  <>
+                    <section className="feature-result-section">
+                      <h4>
+                        {m.feature_findings()}{" "}
+                        <span>{review.findings.length}</span>
+                      </h4>
+                      {review.findings.length === 0 ? (
+                        <p className="feature-panel-note">
+                          {m.feature_empty_findings()}
+                        </p>
+                      ) : (
+                        <ul className="feature-finding-list">
+                          {review.findings.map((finding, index) => (
+                            <li key={`${index}:${finding.role}`}>
+                              <div>
+                                <span>{featureRoleLabel(finding.role)}</span>
+                                {finding.blocking && (
+                                  <strong>
+                                    <TriangleAlert
+                                      size={13}
+                                      aria-hidden="true"
+                                    />
+                                    {m.feature_blocking()}
+                                  </strong>
+                                )}
+                              </div>
+                              <p>{finding.summary}</p>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </section>
+                    <section className="feature-result-section">
+                      <h4>{m.feature_checks()}</h4>
+                      {review.checks.length === 0 ? (
+                        <p className="feature-panel-note">
+                          {m.feature_empty_checks()}
+                        </p>
+                      ) : (
+                        <ul className="feature-check-list">
+                          {review.checks.map((check, index) => (
+                            <li key={`${index}:${check.label}`}>
+                              <span>{check.label}</span>
+                              <span data-passed={check.passed}>
+                                {check.passed ? (
+                                  <Check size={14} aria-hidden="true" />
+                                ) : (
+                                  <TriangleAlert size={14} aria-hidden="true" />
+                                )}
+                                {check.passed
+                                  ? m.feature_check_passed()
+                                  : m.feature_check_failed()}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </section>
+                  </>
+                )}
                 {review.canExtend && !published && !reconcile && (
                   <Button
                     disabled={busy || unsettled || staleDiff}
