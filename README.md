@@ -1,6 +1,6 @@
 # Factory
 
-Factory is a private React/TypeScript web application with a Rust API. Its current
+Factory is a self-hosted React/TypeScript web application with a Rust API. Its current
 foundation provides GitHub sign-in, administrator-controlled admission, revocable
 server sessions, a user-access backoffice and private local Docker environments,
 with Codex and Claude Code conversations, a persistent web terminal and personal account connections.
@@ -12,70 +12,53 @@ exec and tmux. Both agents run with full access inside the user container, inclu
 and credentials. Members can authorize GitHub access, import projects and start chats and
 independent persistent terminals in each repository. Global skills remain future work.
 The existing TypeScript execution packages remain porting references;
-their history is not assigned or exposed to web users. Hosting and deployment are
-outside the current local increment.
+their history is not assigned or exposed to web users.
 
-## Get started
+## Install and run locally
 
-Use Node.js 24.22.1, pnpm 12.11.2 and Rust 1.90.0 with rustfmt, clippy and a native
-linker. Windows Rust builds need the MSVC C++ tools and Windows SDK. After
-`pnpm install --frozen-lockfile`, copy [.env.example](.env.example) to `.env` at the
-repository root and fill in the two GitHub OAuth values. See the
-[GitHub OAuth setup](docs/DEVELOPMENT.md#github-oauth-setup) for registration and the
-administrator CLI setup. Factory automatically creates and retains the local key used to
-protect repository credentials. Existing terminal variables override `.env` values.
+Install Node.js 24.22.1, pnpm 12.11.2, Rust 1.90.0 with rustfmt, clippy and a native
+linker, and Docker Engine 28 or newer with Compose and isolated bridge support.
+On Windows, use Docker Desktop with Linux containers, the MSVC C++ tools and the
+Windows SDK.
 
-With Docker running, initialize the owned local database explicitly:
+Clone the repository and install dependencies.
 
-```bash
+```sh
+git clone https://github.com/Westerbay/Factory.git
+cd Factory
+pnpm install --frozen-lockfile
+```
+
+Register a GitHub OAuth App with homepage `http://localhost:3000` and callback
+`http://localhost:3001/api/auth/github/callback`. Copy [.env.example](.env.example)
+to `.env` at the repository root, then set `FACTORY_GITHUB_CLIENT_ID` and
+`FACTORY_GITHUB_CLIENT_SECRET`. See the [local OAuth setup](docs/DEVELOPMENT.md#github-oauth-setup)
+for details.
+
+With Docker running, prepare the database, confirm the initial administrator and
+build the workspace images.
+
+```sh
 pnpm db:setup
 pnpm factory admin setup --provider github --username YOUR_GITHUB_USERNAME
 pnpm environments:prepare
+pnpm dev
 ```
 
-The CLI displays the selected profile and asks you to type its username to confirm.
-It stores the stable provider ID and refuses to replace an existing administrator.
-Environment preparation builds pinned workspace and egress-proxy images and records
-their immutable identities in `.factory/environments`; it does not create user containers.
-Workspace entry automatically initializes the user's container and persistent home or
-starts an existing stopped environment after checking recovery. Profile **Stop environment**
-requires confirmation, preserves saved files and ends running processes; it stays stopped
-until **Return to workspace** or a new browser entry. Keep the preparation directory with
-its Docker resources. Docker Engine API 1.48+ and isolated bridge support are required;
-the runtime refuses unsupported isolation instead of falling back.
-Then run these in separate terminals:
+Open `http://localhost:3000` and sign in as the configured administrator. Factory
+prepares your persistent workspace on entry. Connect a personal Codex or Claude
+Code account to run an agent. Both providers run with full access to the member's
+container files and credentials. See the [development guide](docs/DEVELOPMENT.md)
+for troubleshooting, environment lifecycle and provider setup.
 
-```bash
-pnpm dev:api
-pnpm dev:web
-```
+## Deploy to production
 
-`pnpm dev` starts both processes together. After `pnpm build`, `pnpm start` runs
-the release API and local static preview together; it is not a deployment command.
-
-Open `http://localhost:3000`. The browser calls the separate API at
-`http://localhost:3001`. The application can start without provider credentials;
-sign-in remains unavailable until OAuth configuration, the verified owned PostgreSQL
-target and initial database schema are ready. Runtime startup does not change the database.
-For a clean local database, stop the API and run `pnpm db:reset`. This deletes all local
-users, sessions and conversations. Existing Docker homes and containers are not removed;
-they are no longer associated with the new database. Set up the administrator again.
-Missing environment preparation leaves only environments unavailable when identity is otherwise ready.
-
-After workspace preparation, choose **Codex** or **Claude Code** and connect your personal
-account. Both can be connected from Settings; the model selector combines their models.
-A saved connected account opens chat directly. The terminal icon folds or opens the side panel;
-drag its separator to resize, or maximize it from its header. The chats sidebar can
-collapse independently. Returning to the tab checks the session in the background.
-The selected full-access assistant
-can read and modify the container user's files and credentials without per-action
-approval. Closing Factory leaves the shell running; reconnecting never replays unsent input. See the
-[terminal and account instructions](docs/DEVELOPMENT.md#terminal-and-provider-accounts).
-
-See [development](docs/DEVELOPMENT.md) for explicit local database setup, API
-configuration, [persistent environment lifecycle](docs/DEVELOPMENT.md#local-environments),
-built PWA inspection and human acceptance. No real OAuth application
-registration or credential setup is performed by installation or routine checks.
+Run the API, PostgreSQL and agent runtime on a dedicated Linux host with Docker
+Compose. A published GitHub Release builds the server images and deployment
+bundle. Build the frontend as static files with the public HTTPS API URL and
+serve it on a sibling subdomain using any static host with SPA routing.
+The [production runbook](docs/DEPLOYMENT.md) covers server prerequisites, local
+secret configuration, first sign-in, frontend publishing and recovery.
 
 ## Validation
 
@@ -100,6 +83,7 @@ remain versioned.
 - [Architecture](docs/ARCHITECTURE.md)
 - [Design](docs/DESIGN.md)
 - [Development](docs/DEVELOPMENT.md)
+- [Deployment](docs/DEPLOYMENT.md)
 - [Reuse and attribution](docs/REUSE.md)
 
 Derived from WebApp Template under the [MIT license](LICENSE), with selected mechanisms

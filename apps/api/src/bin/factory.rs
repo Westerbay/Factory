@@ -1,8 +1,8 @@
-//! Explicit local operator commands. Never invoked by the API or build process.
+//! Explicit operator commands. Never invoked by the API or build process.
 use factory_adapters::identity::lookup_github_account;
-use factory_api::config::RuntimeConfig;
+use factory_api::{bootstrap::connect_database, config::RuntimeConfig};
 use factory_core::identity::IdentityError;
-use factory_database::{identity::IdentityDatabase, local_target, schema::Readiness};
+use factory_database::{identity::IdentityDatabase, schema::Readiness};
 use std::{
     io::{self, BufRead, Write},
     process::ExitCode,
@@ -118,12 +118,7 @@ async fn run() -> Result<(), &'static str> {
         return Ok(());
     }
     let config = RuntimeConfig::from_environment()?;
-    let target = local_target::from_workspace(config.workspace())
-        .await
-        .map_err(|_| "OWNED_DATABASE_REQUIRED")?;
-    let database = IdentityDatabase::connect(&target)
-        .await
-        .map_err(|_| "IDENTITY_DATABASE_UNAVAILABLE")?;
+    let database = connect_database(&config).await?;
     let result = match command {
         Command::Admin(username) => configure(&database, username).await,
         Command::Help => unreachable!(),

@@ -246,6 +246,33 @@ fn authorization_requests_identity_and_repository_access_with_state_and_s256() {
     );
 }
 
+#[test]
+fn production_callback_preserves_the_configured_https_url() {
+    let callback = "https://api.example.com/api/auth/github/callback";
+    let provider = GitHubProvider::new("client".into(), "secret".into(), callback.into()).unwrap();
+    let (challenge, _) = oauth2::PkceCodeChallenge::new_random_sha256();
+    let url = Url::parse(
+        &provider
+            .authorization_url(&"s".repeat(43), challenge.as_str())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        url.query_pairs()
+            .find(|(key, _)| key == "redirect_uri")
+            .unwrap()
+            .1,
+        callback,
+    );
+    for invalid in [
+        "http://api.example.com/api/auth/github/callback",
+        "https://user@api.example.com/api/auth/github/callback",
+        "https://api.example.com/api/auth/github/callback?redirect=other",
+    ] {
+        assert!(GitHubProvider::new("client".into(), "secret".into(), invalid.into()).is_err());
+    }
+}
+
 #[tokio::test]
 async fn exchange_posts_secret_and_pkce_then_returns_only_stable_identity() {
     let (provider, state, _server) = fixture(Fixture::default()).await;

@@ -1,4 +1,4 @@
-//! Validate local runtime configuration before opening sockets.
+//! Validate runtime configuration before opening sockets.
 mod local;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -11,6 +11,7 @@ pub struct RuntimeConfig {
     api_origin: String,
     workspace: PathBuf,
     identity: Option<IdentityConfig>,
+    production_database_password: Option<String>,
 }
 
 // Never derive Debug: the provider secret must stay server-side.
@@ -22,27 +23,34 @@ pub struct IdentityConfig {
 
 impl RuntimeConfig {
     pub fn from_values(get: impl Fn(&str) -> Option<String>) -> Result<Self, &'static str> {
+        let production = match get("FACTORY_DEPLOYMENT").as_deref() {
+            None | Some("local") => false,
+            Some("production") => true,
+            Some(_) => return Err("DEPLOYMENT_INVALID"),
+        };
+        let default_bind = if production {
+            "0.0.0.0:3001"
+        } else {
+            "127.0.0.1:3001"
+        };
         let bind: SocketAddr = get("FACTORY_API_BIND")
-            .unwrap_or_else(|| "127.0.0.1:3001".into())
+            .unwrap_or_else(|| default_bind.into())
             .parse()
             .map_err(|_| "API_BIND_INVALID")?;
-        if !bind.ip().is_loopback() || bind.port() == 0 {
-            return Err("API_BIND_NOT_LOCAL");
+        if bind.port() == 0 {
+            return Err("API_BIND_INVALID");
         }
-        let web_origin = local_origin(
-            &get("FACTORY_WEB_ORIGIN").unwrap_or_else(|| "http://localhost:3000".into()),
-        )?;
-        let api = local_origin(
-            &get("FACTORY_API_ORIGIN").unwrap_or_else(|| "http://localhost:3001".into()),
-        )?;
-        let api_url = Url::parse(&api).map_err(|_| "ORIGIN_INVALID")?;
-        if api_url.port_or_known_default() != Some(bind.port()) {
-            return Err("API_ORIGIN_PORT_MISMATCH");
-        }
-        let web_url = Url::parse(&web_origin).map_err(|_| "ORIGIN_INVALID")?;
-        if web_url.host() != api_url.host() {
-            return Err("ORIGINS_MUST_SHARE_LOCAL_HOST");
-        }
+        let (web_origin, api_origin, production_database_password) = if production {
+            let domain = get("FACTORY_DOMAIN").ok_or("PRODUCTION_DOMAIN_REQUIRED")?;
+            let (web, api) = production_origins(&domain)?;
+            let password = get("FACTORY_DB_PASSWORD")
+                .filter(|value| !value.trim().is_empty() && value != "local-fixture-only")
+                .ok_or("PRODUCTION_DATABASE_PASSWORD_REQUIRED")?;
+            (web, api, Some(password))
+        } else {
+            let (web, api) = local_origins(&get, bind)?;
+            (web, api, None)
+        };
         let workspace = match get("FACTORY_WORKSPACE_ROOT") {
             Some(value) => PathBuf::from(value),
             None => std::env::current_dir().map_err(|_| "WORKSPACE_UNAVAILABLE")?,
@@ -64,12 +72,16 @@ impl RuntimeConfig {
             }
             _ => None,
         };
+        if production && identity.is_none() {
+            return Err("IDENTITY_CONFIGURATION_REQUIRED");
+        }
         Ok(Self {
             bind,
             web_origin,
-            api_origin: api,
+            api_origin,
             workspace,
             identity,
+            production_database_password,
         })
     }
 
@@ -91,6 +103,56 @@ impl RuntimeConfig {
     pub fn identity(&self) -> Option<&IdentityConfig> {
         self.identity.as_ref()
     }
+    pub(crate) fn production_database_password(&self) -> Option<&str> {
+        self.production_database_password.as_deref()
+    }
+}
+
+fn production_origins(domain: &str) -> Result<(String, String), &'static str> {
+    // Both browser origins are sibling subdomains of an operator-owned domain.
+    if domain.len() > 249
+        || !domain.contains('.')
+        || !domain.rsplit('.').next().is_some_and(|suffix| {
+            suffix.bytes().any(|byte| byte.is_ascii_lowercase()) && suffix != "localhost"
+        })
+        || domain.split('.').any(|label| {
+            label.is_empty()
+                || label.len() > 63
+                || label.starts_with('-')
+                || label.ends_with('-')
+                || !label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
+    {
+        return Err("PRODUCTION_DOMAIN_INVALID");
+    }
+    Ok((
+        format!("https://app.{domain}"),
+        format!("https://api.{domain}"),
+    ))
+}
+
+fn local_origins(
+    get: impl Fn(&str) -> Option<String>,
+    bind: SocketAddr,
+) -> Result<(String, String), &'static str> {
+    if !bind.ip().is_loopback() {
+        return Err("API_BIND_NOT_LOCAL");
+    }
+    let web =
+        local_origin(&get("FACTORY_WEB_ORIGIN").unwrap_or_else(|| "http://localhost:3000".into()))?;
+    let api =
+        local_origin(&get("FACTORY_API_ORIGIN").unwrap_or_else(|| "http://localhost:3001".into()))?;
+    let api_url = Url::parse(&api).map_err(|_| "ORIGIN_INVALID")?;
+    if api_url.port_or_known_default() != Some(bind.port()) {
+        return Err("API_ORIGIN_PORT_MISMATCH");
+    }
+    let web_url = Url::parse(&web).map_err(|_| "ORIGIN_INVALID")?;
+    if web_url.host() != api_url.host() {
+        return Err("ORIGINS_MUST_SHARE_LOCAL_HOST");
+    }
+    Ok((web, api))
 }
 
 fn local_origin(value: &str) -> Result<String, &'static str> {
@@ -157,6 +219,51 @@ mod tests {
     fn local_cookies_require_matching_browser_hosts() {
         assert!(configured("FACTORY_WEB_ORIGIN", "http://127.0.0.1:3000").is_err());
         assert!(configured("FACTORY_WORKSPACE_ROOT", "relative/path").is_err());
+    }
+
+    fn production(key: &str, value: Option<&str>) -> Result<RuntimeConfig, &'static str> {
+        RuntimeConfig::from_values(|name| {
+            if name == key {
+                return value.map(str::to_owned);
+            }
+            match name {
+                "FACTORY_DEPLOYMENT" => Some("production".into()),
+                "FACTORY_DOMAIN" => Some("example.com".into()),
+                "FACTORY_DB_PASSWORD" => Some("synthetic-password".into()),
+                "FACTORY_GITHUB_CLIENT_ID" => Some("synthetic-client".into()),
+                "FACTORY_GITHUB_CLIENT_SECRET" => Some("synthetic-secret".into()),
+                _ => None,
+            }
+        })
+    }
+
+    #[test]
+    fn production_derives_https_sibling_origins_and_requires_credentials() {
+        let config = production("", None).unwrap();
+        assert_eq!(config.bind(), "0.0.0.0:3001".parse().unwrap());
+        assert_eq!(config.web_origin(), "https://app.example.com");
+        assert_eq!(config.api_origin(), "https://api.example.com");
+        for domain in [
+            "example.com/path",
+            "https://example.com",
+            "example.com:443",
+            "a..com",
+            "127.0.0.1",
+            "app.localhost",
+        ] {
+            assert!(matches!(
+                production("FACTORY_DOMAIN", Some(domain)),
+                Err("PRODUCTION_DOMAIN_INVALID")
+            ));
+        }
+        assert!(matches!(
+            production("FACTORY_DB_PASSWORD", None),
+            Err("PRODUCTION_DATABASE_PASSWORD_REQUIRED")
+        ));
+        assert!(matches!(
+            production("FACTORY_GITHUB_CLIENT_SECRET", None),
+            Err("IDENTITY_CONFIGURATION_REQUIRED")
+        ));
     }
 
     #[test]

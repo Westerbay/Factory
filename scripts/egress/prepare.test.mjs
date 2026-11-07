@@ -20,6 +20,23 @@ test("host deny addresses include every IPv4 interface and cannot contain rule t
   )
 })
 
+test("production bridge churn does not change the deny inventory for already blocked ranges", () => {
+  const interfaces = {
+    eth0: [{ family: "IPv4", address: "8.8.8.8" }],
+    bridge: [
+      { family: "IPv4", address: "10.0.0.1" },
+      { family: "IPv4", address: "172.17.0.1" },
+      { family: "IPv4", address: "192.168.1.1" },
+      { family: "IPv4", address: "172.32.0.1" },
+    ],
+  }
+  assert.deepEqual(hostAddresses(interfaces, true), [
+    "127.0.0.1",
+    "172.32.0.1",
+    "8.8.8.8",
+  ])
+})
+
 test("preparation preserves the previous contract until incompatible proxy maintenance is complete", async () => {
   const directory = await mkdtemp(join(tmpdir(), "factory-egress-prepare-"))
   const installationId = randomUUID()

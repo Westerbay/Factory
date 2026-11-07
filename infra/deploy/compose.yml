@@ -1,0 +1,83 @@
+services:
+  caddy:
+    image: caddy:2-alpine@sha256:78bd35025c7ba85961dd149ae670315129954e77abe2383ac47c89106b35ade9
+    restart: unless-stopped
+    environment:
+      FACTORY_DOMAIN: ${FACTORY_DOMAIN:?Set FACTORY_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [edge]
+    logging:
+      driver: local
+
+  api:
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    image: ${FACTORY_API_IMAGE:?Use release.env}
+    restart: unless-stopped
+    environment:
+      FACTORY_DEPLOYMENT: production
+      FACTORY_DOMAIN: ${FACTORY_DOMAIN:?Set FACTORY_DOMAIN}
+      FACTORY_DB_PASSWORD: ${FACTORY_DB_PASSWORD:?Set FACTORY_DB_PASSWORD}
+      FACTORY_GITHUB_CLIENT_ID: ${FACTORY_GITHUB_CLIENT_ID:?Set FACTORY_GITHUB_CLIENT_ID}
+      FACTORY_GITHUB_CLIENT_SECRET: ${FACTORY_GITHUB_CLIENT_SECRET:?Set FACTORY_GITHUB_CLIENT_SECRET}
+      FACTORY_WORKSPACE_ROOT: /var/lib/factory
+    volumes:
+      - ${FACTORY_STATE_DIR:?Set FACTORY_STATE_DIR}:/var/lib/factory
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [edge, database]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          CMD,
+          curl,
+          --fail,
+          --silent,
+          --max-time,
+          "6",
+          http://127.0.0.1:3001/health/ready,
+        ]
+      interval: 5s
+      timeout: 7s
+      retries: 12
+    logging:
+      driver: local
+
+  postgres:
+    image: postgres:17.11-bookworm@sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: factory
+      POSTGRES_PASSWORD: ${FACTORY_POSTGRES_PASSWORD:?Set FACTORY_POSTGRES_PASSWORD}
+      FACTORY_DB_PASSWORD: ${FACTORY_DB_PASSWORD:?Set FACTORY_DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ${FACTORY_BOOTSTRAP_DIR:?Set FACTORY_BOOTSTRAP_DIR}/init-postgres.sh:/docker-entrypoint-initdb.d/10-factory.sh:ro
+      - ${FACTORY_BOOTSTRAP_DIR:?Set FACTORY_BOOTSTRAP_DIR}/schema.sql:/usr/local/share/factory/schema.sql:ro
+    networks: [database]
+    healthcheck:
+      test: [CMD, pg_isready, -h, 127.0.0.1, -U, factory, -d, factory]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    logging:
+      driver: local
+
+networks:
+  edge:
+  database:
+    internal: true
+
+volumes:
+  caddy_data:
+  caddy_config:
+  postgres_data:

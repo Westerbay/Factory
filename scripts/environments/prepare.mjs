@@ -12,7 +12,8 @@ const imageId = /^sha256:[0-9a-f]{64}$/
 
 export async function prepare(
   directory = resolve(root, ".factory/environments"),
-  runDocker = docker
+  runDocker = docker,
+  images = {}
 ) {
   await mkdir(directory, { recursive: true })
   const installationPath = resolve(directory, "installation.json")
@@ -33,19 +34,21 @@ export async function prepare(
   ) {
     throw new Error("Invalid local environment installation identity")
   }
-  const tag = `factory-environment:${installation.installationId}`
-  // Preparation is the only build/pull path, explicitly invoked by the operator.
-  runDocker(
-    [
-      "build",
-      "--pull",
-      "--force-rm",
-      "--tag",
-      tag,
-      resolve(root, "infra/environments"),
-    ],
-    { timeout: 600_000 }
-  )
+  const tag =
+    images.workspace ?? `factory-environment:${installation.installationId}`
+  if (!images.workspace) {
+    runDocker(
+      [
+        "build",
+        "--pull",
+        "--force-rm",
+        "--tag",
+        tag,
+        resolve(root, "infra/environments"),
+      ],
+      { timeout: 600_000 }
+    )
+  }
   const [image] = JSON.parse(runDocker(["image", "inspect", tag]))
   if (
     !imageId.test(image.Id) ||
@@ -65,7 +68,7 @@ export async function prepare(
   }
   const temporary = resolve(directory, `prepared-${randomUUID()}.tmp`)
   // Never publish the user manifest before proxy image and engine validation succeeds.
-  await prepareEgress(directory, runDocker)
+  await prepareEgress(directory, runDocker, images.egress)
   try {
     await writeFile(temporary, JSON.stringify(metadata, null, 2) + "\n", {
       flag: "wx",
@@ -86,16 +89,29 @@ if (
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
   const args = process.argv.slice(2)
+  const [directoryFlag, directory, imagesFlag, workspace, egress] = args
+  const digestReference = /^ghcr\.io\/[a-z0-9_./-]+@sha256:[0-9a-f]{64}$/
+  const validDirectory = directoryFlag === "--directory" && directory
+  const validImages =
+    imagesFlag === "--images" &&
+    digestReference.test(workspace ?? "") &&
+    digestReference.test(egress ?? "")
   if (
     args.length !== 0 &&
-    !(args.length === 2 && args[0] === "--directory" && args[1])
+    !(
+      validDirectory &&
+      (args.length === 2 || (args.length === 5 && validImages))
+    )
   ) {
     throw new Error(
-      "Usage: environments:prepare [--directory <local preparation directory>]"
+      "Usage: environments:prepare [--directory <state directory> [--images <workspace digest ref> <egress digest ref>]]"
     )
   }
-  await prepare(args[1] ? resolve(args[1]) : undefined)
+  await prepare(directory ? resolve(directory) : undefined, docker, {
+    workspace,
+    egress,
+  })
   console.log(
-    "Local environment image prepared. Existing environments retain their recorded image."
+    "Environment images prepared. Existing environments retain their recorded image."
   )
 }

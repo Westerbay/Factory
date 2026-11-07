@@ -67,13 +67,17 @@ test("repeated preparation preserves installation and changes only the prepared 
   let claudeVersion = "2.1.284"
   let proxyFailure = false
   const commands = []
+  const images = {
+    workspace: `ghcr.io/example/factory-workspace@sha256:${"1".repeat(64)}`,
+    egress: `ghcr.io/example/factory-egress@sha256:${"2".repeat(64)}`,
+  }
   const docker = (args) => {
     commands.push(args)
     if (args[0] === "build") return ""
     if (args[0] === "container" && args[1] === "ls") return ""
     if (args[0] === "version")
       return JSON.stringify({ Os: "linux", ApiVersion: "1.56" })
-    if (args[2].startsWith("factory-egress:")) {
+    if (args[2].startsWith("factory-egress:") || args[2] === images.egress) {
       if (proxyFailure) throw new Error("fixture proxy failure")
       return JSON.stringify([
         {
@@ -130,6 +134,20 @@ test("repeated preparation preserves installation and changes only the prepared 
         "image",
         "container",
       ]
+    )
+    const before = commands.length
+    assert.deepEqual(await prepare(directory, docker, images), second)
+    const registryPreparation = commands.slice(before)
+    assert.deepEqual(
+      registryPreparation.filter(([command]) => command === "image"),
+      [
+        ["image", "inspect", images.workspace],
+        ["image", "inspect", images.egress],
+      ]
+    )
+    assert.equal(
+      registryPreparation.some(([command]) => command === "build"),
+      false
     )
     proxyFailure = true
     image = "d"

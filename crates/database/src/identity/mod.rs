@@ -31,9 +31,27 @@ pub struct IdentityDatabase {
 }
 
 impl IdentityDatabase {
-    /// A verified target is the sole connection input. No DATABASE_URL is consulted.
+    /// Local development requires fresh ownership proof.
     pub async fn connect(target: &VerifiedTarget) -> Result<Self, IdentityError> {
-        let options = connection_options(target)?;
+        Self::connect_with(connection_options(
+            target.host(),
+            target.port(),
+            target.database(),
+            target.username(),
+            target.password(),
+        )?)
+        .await
+    }
+
+    /// Production uses the dedicated PostgreSQL service on the private Compose network.
+    pub async fn connect_production(password: &str) -> Result<Self, IdentityError> {
+        Self::connect_with(connection_options(
+            "postgres", 5432, "factory", "factory", password,
+        )?)
+        .await
+    }
+
+    async fn connect_with(options: PgConnectOptions) -> Result<Self, IdentityError> {
         let pool = tokio::time::timeout(
             Duration::from_secs(5),
             PgPoolOptions::new()
@@ -110,7 +128,13 @@ impl IdentityDatabase {
     }
 }
 
-fn connection_options(target: &VerifiedTarget) -> Result<PgConnectOptions, IdentityError> {
+fn connection_options(
+    host: &str,
+    port: u16,
+    database: &str,
+    username: &str,
+    password: &str,
+) -> Result<PgConnectOptions, IdentityError> {
     // SQLx otherwise inherits PostgreSQL environment settings, even with explicit
     // host/credentials. Reject their presence without exposing any value.
     for name in [
@@ -132,11 +156,11 @@ fn connection_options(target: &VerifiedTarget) -> Result<PgConnectOptions, Ident
         }
     }
     Ok(PgConnectOptions::new_without_pgpass()
-        .host(target.host())
-        .port(target.port())
-        .database(target.database())
-        .username(target.username())
-        .password(target.password())
+        .host(host)
+        .port(port)
+        .database(database)
+        .username(username)
+        .password(password)
         .ssl_mode(sqlx::postgres::PgSslMode::Disable)
         .options([
             ("search_path", "factory_identity"),

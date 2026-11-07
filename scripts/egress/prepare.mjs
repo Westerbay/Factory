@@ -9,11 +9,28 @@ import { docker } from "../environments/docker.mjs"
 const root = fileURLToPath(new URL("../../", import.meta.url))
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
-export function hostAddresses(interfaces = networkInterfaces()) {
+// Production Docker bridges use RFC 1918 ranges already rejected by Squid and nftables.
+function privateAddress(address) {
+  const [first, second] = address.split(".").map(Number)
+  return (
+    first === 10 ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168)
+  )
+}
+
+export function hostAddresses(
+  interfaces = networkInterfaces(),
+  omitPrivate = false
+) {
   const addresses = new Set(["127.0.0.1"])
   for (const entries of Object.values(interfaces)) {
     for (const entry of entries ?? []) {
-      if (entry.family === "IPv4" && isIPv4(entry.address))
+      if (
+        entry.family === "IPv4" &&
+        isIPv4(entry.address) &&
+        !(omitPrivate && privateAddress(entry.address))
+      )
         addresses.add(entry.address)
     }
   }
@@ -92,7 +109,7 @@ async function requireCompatibleProxy(directory, metadata, runDocker) {
 }
 
 // Only builds the proxy image. Runtime creation requires the exclusive Rust supervisor.
-export async function prepareEgress(directory, runDocker = docker) {
+export async function prepareEgress(directory, runDocker = docker, reference) {
   const installation = JSON.parse(
     await readFile(resolve(directory, "installation.json"), "utf8")
   )
@@ -115,10 +132,15 @@ export async function prepareEgress(directory, runDocker = docker) {
   ) {
     throw new Error("Docker API 1.48+ with isolated bridge support is required")
   }
-  const tag = `factory-egress:${installation.installationId}`
-  runDocker(["build", "--pull", "--tag", tag, resolve(root, "infra/egress")], {
-    timeout: 1_200_000,
-  })
+  const tag = reference ?? `factory-egress:${installation.installationId}`
+  if (!reference) {
+    runDocker(
+      ["build", "--pull", "--tag", tag, resolve(root, "infra/egress")],
+      {
+        timeout: 1_200_000,
+      }
+    )
+  }
   const [image] = JSON.parse(runDocker(["image", "inspect", tag]))
   if (
     !/^sha256:[0-9a-f]{64}$/.test(image.Id) ||
@@ -133,7 +155,7 @@ export async function prepareEgress(directory, runDocker = docker) {
     schemaVersion: 1,
     installationId: installation.installationId,
     imageId: image.Id,
-    hostIpv4: hostAddresses(),
+    hostIpv4: hostAddresses(undefined, Boolean(reference)),
   }
   await requireCompatibleProxy(directory, metadata, runDocker)
   const temporary = resolve(directory, `egress-${randomUUID()}.tmp`)
