@@ -1,4 +1,6 @@
-use super::{FeatureCoordinator, bundle, conversation_error, profiles, workspace_error};
+use super::{
+    FeatureCoordinator, LocalAttempt, bundle, conversation_error, profiles, workspace_error,
+};
 use factory_core::{
     conversations::execution::{ExecutionError, ExecutionEvent, ExecutionSession},
     environments::{Environment, EnvironmentActor},
@@ -32,6 +34,7 @@ pub(super) struct ReservedTask {
     pub attempt: TaskAttempt,
     pub input: String,
     pub fresh: bool,
+    local_attempt: Option<LocalAttempt>,
 }
 
 impl FeatureCoordinator {
@@ -127,6 +130,9 @@ impl FeatureCoordinator {
             .require_connected(actor, &provider)
             .await
             .is_ok();
+        // Publish the local reservation before persisting the claim. A resume
+        // request can otherwise see Starting while this process is still launching it.
+        let local_attempt = self.local_attempts.claim((id, request.attempt_id))?;
         let receipt = self
             .store
             .apply(
@@ -154,6 +160,7 @@ impl FeatureCoordinator {
             attempt: find_attempt(receipt.state, request.attempt_id)?,
             input,
             fresh: receipt.fresh,
+            local_attempt: receipt.fresh.then_some(local_attempt),
         };
         if reserved.fresh && (assigned.is_none() || !connected) {
             let reason = if connected {
@@ -166,6 +173,7 @@ impl FeatureCoordinator {
             };
             reserved.attempt = self.fail_before_launch(&reserved, &reason).await?;
             reserved.fresh = false;
+            reserved.local_attempt = None;
         }
         Ok(reserved)
     }

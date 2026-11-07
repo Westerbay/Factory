@@ -380,7 +380,16 @@ pub struct FeatureView {
 }
 
 impl From<FeatureState> for FeatureView {
-    fn from(mut state: FeatureState) -> Self {
+    fn from(state: FeatureState) -> Self {
+        Self::from_state(state, |_| true)
+    }
+}
+
+impl FeatureView {
+    pub(super) fn from_state(
+        mut state: FeatureState,
+        is_locally_active: impl Fn(Uuid) -> bool,
+    ) -> Self {
         let stage = state.feature.stage;
         let idle = !state
             .attempts
@@ -485,13 +494,37 @@ impl From<FeatureState> for FeatureView {
                     attempt.claim.revision.as_ref().map(|revision| revision.id),
                     attempt.claim.snapshot_id,
                 );
+                let revision = attempt.claim.revision.as_ref();
+                let role = attempt.claim.task.role;
+                let matches_stage = match stage {
+                    FeatureStage::Scope => {
+                        role == TaskRole::Coordinator && revision == state.scope.as_ref()
+                    }
+                    FeatureStage::Architecture => match role {
+                        TaskRole::Coordinator | TaskRole::Architecture => {
+                            revision == state.scope.as_ref()
+                        }
+                        TaskRole::ArchitectureReview => revision == state.architecture.as_ref(),
+                        _ => false,
+                    },
+                    FeatureStage::Execution => {
+                        !role.is_reviewer() && revision == state.architecture.as_ref()
+                    }
+                    FeatureStage::Review => {
+                        role.is_reviewer()
+                            && attempt.claim.snapshot_id == state.current_review
+                            && revision == state.architecture.as_ref()
+                    }
+                    FeatureStage::Result | FeatureStage::Draft => false,
+                };
                 let can_resume = seen.insert(key)
-                    && matches!(
-                        attempt.status,
-                        AttemptStatus::Failed
-                            | AttemptStatus::Interrupted
-                            | AttemptStatus::Uncertain
-                    );
+                    && matches_stage
+                    && attempt.launch_settled
+                    && match attempt.status {
+                        AttemptStatus::Failed | AttemptStatus::Interrupted => true,
+                        status if status.holds_reservation() => !is_locally_active(attempt.id()),
+                        _ => false,
+                    };
                 FeatureAttemptView::new(attempt, can_resume)
             })
             .collect();

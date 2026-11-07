@@ -45,8 +45,9 @@ impl FeatureCoordinator {
             .ok_or(FeatureError::NotFound)?
             .clone();
         if prior.status.holds_reservation() {
-            if self.runtime.reconcile_task(&env, &project, &prior).await
-                != Ok(TaskObservation::Stopped)
+            if self.is_attempt_locally_active(id, attempt_id)
+                || self.runtime.reconcile_task(&env, &project, &prior).await
+                    != Ok(TaskObservation::Stopped)
             {
                 return Err(FeatureError::ExecutionUncertain);
             }

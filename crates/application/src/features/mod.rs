@@ -20,7 +20,7 @@ use factory_core::{
     projects::Project,
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex, Weak},
 };
 use uuid::Uuid;
@@ -32,6 +32,7 @@ pub struct FeatureCoordinator {
     pub(super) runtime: Arc<dyn FeatureExecutionRuntime>,
     pub(super) codec: Arc<dyn FeatureCodec>,
     drivers: Mutex<HashMap<Uuid, Weak<tokio::sync::Mutex<()>>>>,
+    local_attempts: LocalAttempts,
 }
 
 impl FeatureCoordinator {
@@ -49,6 +50,7 @@ impl FeatureCoordinator {
             runtime,
             codec,
             drivers: Mutex::new(HashMap::new()),
+            local_attempts: LocalAttempts::default(),
         })
     }
 
@@ -153,6 +155,12 @@ impl FeatureCoordinator {
         Ok(receipt.state)
     }
 
+    /// A locally owned attempt may still be verifying or integrating after its
+    /// provider process stops. Only another process can reconcile its durable state.
+    pub fn is_attempt_locally_active(&self, feature_id: Uuid, attempt_id: Uuid) -> bool {
+        self.local_attempts.contains((feature_id, attempt_id))
+    }
+
     fn driver(&self, feature: Uuid) -> Result<Arc<tokio::sync::Mutex<()>>, FeatureError> {
         let mut drivers = self.drivers.lock().map_err(|_| FeatureError::Unavailable)?;
         drivers.retain(|_, driver| driver.strong_count() > 0);
@@ -186,6 +194,43 @@ impl FeatureCoordinator {
     }
 }
 
+type AttemptKey = (Uuid, Uuid);
+
+#[derive(Default)]
+struct LocalAttempts(Arc<Mutex<HashSet<AttemptKey>>>);
+
+impl LocalAttempts {
+    fn claim(&self, key: AttemptKey) -> Result<LocalAttempt, FeatureError> {
+        let mut active = self.0.lock().map_err(|_| FeatureError::Unavailable)?;
+        if !active.insert(key) {
+            return Err(FeatureError::ExecutionUncertain);
+        }
+        Ok(LocalAttempt {
+            registry: self.0.clone(),
+            key,
+        })
+    }
+
+    fn contains(&self, key: AttemptKey) -> bool {
+        // A poisoned registry cannot establish that a local worker has finished.
+        self.0.lock().map_or(true, |active| active.contains(&key))
+    }
+}
+
+struct LocalAttempt {
+    registry: Arc<Mutex<HashSet<AttemptKey>>>,
+    key: AttemptKey,
+}
+
+impl Drop for LocalAttempt {
+    fn drop(&mut self) {
+        self.registry
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.key);
+    }
+}
+
 fn conversation_error(error: ConversationError) -> FeatureError {
     match error {
         ConversationError::Unauthorized => FeatureError::Unauthorized,
@@ -202,5 +247,33 @@ fn workspace_error(error: WorkspaceError) -> FeatureError {
         WorkspaceError::Conflict => FeatureError::Conflict,
         WorkspaceError::Unavailable => FeatureError::Unavailable,
         WorkspaceError::Uncertain => FeatureError::ExecutionUncertain,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_local_owner_holds_one_feature_attempt_until_it_is_dropped() {
+        let attempts = LocalAttempts::default();
+        let attempt = Uuid::new_v4();
+        let key = (Uuid::new_v4(), attempt);
+        let other_key = (Uuid::new_v4(), attempt);
+
+        let guard = attempts.claim(key).unwrap();
+        assert!(attempts.contains(key));
+        assert!(matches!(
+            attempts.claim(key),
+            Err(FeatureError::ExecutionUncertain)
+        ));
+        assert!(!attempts.contains(other_key));
+
+        let other = attempts.claim(other_key).unwrap();
+        drop(guard);
+        assert!(!attempts.contains(key));
+        assert!(attempts.contains(other_key));
+        assert!(attempts.claim(key).is_ok());
+        drop(other);
     }
 }

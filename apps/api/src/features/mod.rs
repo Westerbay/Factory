@@ -195,14 +195,11 @@ async fn get(
 ) -> Result<Json<FeatureView>, Response> {
     let actor = state.actor(&headers, false).await?;
     let id = feature_id(path).map_err(error)?;
-    let result = state
-        .runtime()
-        .map_err(error)?
-        .coordinator
-        .get(actor, id)
-        .await
-        .map_err(error)?;
-    Ok(Json(result.into()))
+    let coordinator = &state.runtime().map_err(error)?.coordinator;
+    let result = coordinator.get(actor, id).await.map_err(error)?;
+    Ok(Json(FeatureView::from_state(result, |attempt_id| {
+        coordinator.is_attempt_locally_active(id, attempt_id)
+    })))
 }
 
 #[utoipa::path(post,path="/api/features/{id}/runs",operation_id="discussFeature",request_body=FeatureTurnBody,params(("id"=Uuid,Path),("Origin"=String,Header,description="Exact configured frontend Origin required"),("X-CSRF-Token"=String,Header,description="Session CSRF token required")),security(("sessionCookie"=[])),responses((status=200,body=RunView),(status=400,body=ApiError),(status=401,body=ApiError),(status=403,body=ApiError),(status=404,body=ApiError),(status=409,body=ApiError),(status=429,body=ApiError),(status=503,body=ApiError)))]

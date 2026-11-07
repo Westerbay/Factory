@@ -180,9 +180,7 @@ impl FeatureExecutionRuntime for NoFeatureWorkers {
     }
 }
 
-#[tokio::test]
-async fn feature_gate_requires_ownership_and_csrf_and_replays_the_exact_command() {
-    let mut f = ConversationFixture::new().await;
+fn seed_feature(f: &ConversationFixture) -> (Environment, FeatureState, RevisionKey) {
     let env = f.store.environment.lock().unwrap().clone();
     let project_id = Uuid::new_v4();
     let conversation_id = Uuid::new_v4();
@@ -240,10 +238,18 @@ async fn feature_gate_requires_ownership_and_csrf_and_replays_the_exact_command(
             now,
         )
         .unwrap();
-    let store = Arc::new(Features {
-        inner: Mutex::new(state),
-        receipts: Mutex::default(),
-    });
+    (env, state, revision)
+}
+
+fn feature_router<W>(
+    f: &ConversationFixture,
+    store: Arc<Features>,
+    provider: Arc<dyn ExecutionRuntime>,
+    workers: Arc<W>,
+) -> Router
+where
+    W: FeatureExecutionRuntime + FeatureWorkspaceRuntime + 'static,
+{
     let accounts = Arc::new(AgentConnectionService::new(
         f.environments.clone(),
         Arc::new(Connected(true)),
@@ -254,7 +260,7 @@ async fn feature_gate_requires_ownership_and_csrf_and_replays_the_exact_command(
             id: "codex",
             display_name: "Codex",
             accounts,
-            runtime: f.provider.clone(),
+            runtime: provider,
         }],
         store.clone(),
     )
@@ -262,12 +268,32 @@ async fn feature_gate_requires_ownership_and_csrf_and_replays_the_exact_command(
     let coordinator = FeatureCoordinator::new(
         store.clone(),
         conversations.clone(),
-        Arc::new(NoFeatureWorkers),
-        Arc::new(NoFeatureWorkers),
+        workers.clone(),
+        workers,
         Arc::new(JsonFeatureCodec),
     );
-    f.app = conversations::router(f.auth.clone(), Some(conversations)).merge(
-        factory_api::features::router(f.auth.clone(), coordinator, None),
+    conversations::router(f.auth.clone(), Some(conversations)).merge(factory_api::features::router(
+        f.auth.clone(),
+        coordinator,
+        None,
+    ))
+}
+
+#[tokio::test]
+async fn feature_gate_requires_ownership_and_csrf_and_replays_the_exact_command() {
+    let mut f = ConversationFixture::new().await;
+    let (_, state, revision) = seed_feature(&f);
+    let feature_id = state.feature.id;
+    let conversation_id = state.feature.conversation_id;
+    let store = Arc::new(Features {
+        inner: Mutex::new(state),
+        receipts: Mutex::default(),
+    });
+    f.app = feature_router(
+        &f,
+        store.clone(),
+        f.provider.clone(),
+        Arc::new(NoFeatureWorkers),
     );
 
     let path = format!("/api/features/{feature_id}");
@@ -337,4 +363,485 @@ async fn feature_gate_requires_ownership_and_csrf_and_replays_the_exact_command(
     ).await;
     assert_eq!(generic_turn.status(), StatusCode::CONFLICT);
     assert_eq!(f.provider.opens.load(Ordering::SeqCst), 0);
+}
+
+struct FeatureCatalog;
+
+#[async_trait]
+impl ExecutionRuntime for FeatureCatalog {
+    async fn models(&self, _: &Environment) -> Result<Vec<ExecutionModel>, ExecutionError> {
+        Ok(["gpt-6.1-terra", "gpt-6.1-sol"]
+            .into_iter()
+            .map(|model| ExecutionModel {
+                id: model.into(),
+                name: model.into(),
+                resolved_model: Some(model.into()),
+                effort_levels: vec!["medium".into(), "high".into()],
+                default_effort: Some("medium".into()),
+            })
+            .collect())
+    }
+
+    async fn open(
+        &self,
+        _: &Environment,
+        _: Option<&str>,
+        _: &str,
+        _: Option<&str>,
+        _: &str,
+    ) -> Result<ExecutionSession, ExecutionError> {
+        panic!("a feature must not use the unrestricted conversation launcher")
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorkerAction {
+    Alpha,
+    Beta,
+    Review,
+    Correction,
+}
+
+#[derive(Default)]
+struct WorkflowObservations {
+    launches: Vec<(Uuid, WorkerAction, String)>,
+    integrated: Vec<Uuid>,
+    checks: Vec<(String, i64)>,
+}
+
+#[derive(Default)]
+struct WorkflowWorkers {
+    observed: Mutex<WorkflowObservations>,
+    alpha_check: Notify,
+}
+
+fn test_oid(index: usize) -> String {
+    format!("{:040x}", index + 1)
+}
+
+fn test_digest(index: usize) -> String {
+    format!("{:064x}", index + 1)
+}
+
+#[async_trait]
+impl FeatureWorkspaceRuntime for WorkflowWorkers {
+    async fn initialize(
+        &self,
+        _: &Environment,
+        _: &Project,
+        _: Uuid,
+    ) -> Result<FeatureBranch, WorkspaceError> {
+        Ok(FeatureBranch {
+            base_ref: "refs/heads/main".into(),
+            base_oid: test_oid(0),
+            head_ref: "refs/heads/fixture".into(),
+        })
+    }
+
+    async fn prepare_task(
+        &self,
+        _: &Environment,
+        _: &Project,
+        _: &TaskWorkspace,
+    ) -> Result<(), WorkspaceError> {
+        Ok(())
+    }
+
+    async fn checkpoint(
+        &self,
+        _: &Environment,
+        _: &Project,
+        attempt: &TaskAttempt,
+    ) -> Result<String, WorkspaceError> {
+        let observed = self.observed.lock().unwrap();
+        let position = observed
+            .launches
+            .iter()
+            .position(|(id, _, _)| *id == attempt.id())
+            .unwrap();
+        Ok(test_oid(100 + position))
+    }
+
+    async fn integrate(
+        &self,
+        _: &Environment,
+        _: &Project,
+        attempt: &TaskAttempt,
+        expected_head: &str,
+    ) -> Result<String, WorkspaceError> {
+        let mut observed = self.observed.lock().unwrap();
+        if expected_head != test_oid(observed.integrated.len()) {
+            return Err(WorkspaceError::Conflict);
+        }
+        assert!(!observed.integrated.contains(&attempt.id()));
+        observed.integrated.push(attempt.id());
+        Ok(test_oid(observed.integrated.len()))
+    }
+
+    async fn snapshot(
+        &self,
+        _: &Environment,
+        _: &Project,
+        _: Uuid,
+    ) -> Result<WorkspaceDiff, WorkspaceError> {
+        let observed = self.observed.lock().unwrap();
+        let head = observed.integrated.len();
+        Ok(WorkspaceDiff {
+            git: GitSnapshot {
+                base_oid: test_oid(0),
+                head_oid: test_oid(head),
+                patch_digest: test_digest(head),
+            },
+            patch: format!("Fixture diff at integration {head}"),
+            changed_paths: vec!["src/alpha.rs".into(), "src/beta.rs".into()],
+        })
+    }
+}
+
+#[async_trait]
+impl FeatureExecutionRuntime for WorkflowWorkers {
+    async fn open_task(
+        &self,
+        _: &Environment,
+        _: &Project,
+        run: &FeatureRun,
+    ) -> Result<FeatureExecution, ExecutionError> {
+        let action = if run.workspace.access == WorkspaceAccess::ReadOnly {
+            WorkerAction::Review
+        } else if run.input.contains("Task: Alpha writer") {
+            WorkerAction::Alpha
+        } else if run.input.contains("Task: Beta writer") {
+            WorkerAction::Beta
+        } else {
+            assert!(run.input.contains("fixture defect"));
+            WorkerAction::Correction
+        };
+        let (first_beta, head) = {
+            let mut observed = self.observed.lock().unwrap();
+            let first_beta = action == WorkerAction::Beta
+                && observed
+                    .launches
+                    .iter()
+                    .all(|(_, action, _)| *action != WorkerAction::Beta);
+            observed
+                .launches
+                .push((run.workspace.attempt_id, action, run.model.clone()));
+            (first_beta, observed.integrated.len())
+        };
+        let mut events = vec![
+            ExecutionEvent::ThreadReady {
+                provider_thread: "private-fixture-thread".into(),
+            },
+            ExecutionEvent::ModelObserved {
+                model: run.model.clone(),
+            },
+        ];
+        if action == WorkerAction::Review {
+            let digest = test_digest(head);
+            assert!(run.input.contains(&digest));
+            let findings = if head == 2 {
+                vec![json!({"summary": "fixture defect", "blocking": true})]
+            } else {
+                vec![]
+            };
+            events.push(ExecutionEvent::Message {
+                provider_item: "valid".into(),
+                text: json!({"patchDigest": digest, "findings": findings}).to_string(),
+            });
+            if head == 2 {
+                events.push(ExecutionEvent::Message {
+                    provider_item: "stale".into(),
+                    text: json!({"patchDigest": test_digest(0), "findings": []}).to_string(),
+                });
+            }
+        }
+        events.push(if first_beta {
+            ExecutionEvent::Failed
+        } else {
+            ExecutionEvent::Completed
+        });
+        let (tx, rx) = mpsc::channel(events.len());
+        for event in events {
+            tx.try_send(event).unwrap();
+        }
+        Ok(FeatureExecution {
+            process_receipt: "private-fixture-process".into(),
+            session: ExecutionSession {
+                control: Box::new(Control {
+                    started: Arc::default(),
+                    stopped: Arc::default(),
+                }),
+                output: Box::new(Output(rx)),
+            },
+        })
+    }
+
+    async fn run_check(
+        &self,
+        _: &Environment,
+        _: &Project,
+        workspace: &TaskWorkspace,
+        command: &str,
+    ) -> Result<FeatureCheckOutput, ExecutionError> {
+        let is_integrated_check = self
+            .observed
+            .lock()
+            .unwrap()
+            .launches
+            .iter()
+            .all(|(id, _, _)| *id != workspace.attempt_id);
+        if !is_integrated_check && command == "check-alpha" {
+            self.alpha_check.notified().await;
+        }
+        let exit_code = if is_integrated_check
+            && workspace.base_oid == test_oid(2)
+            && command == "check-beta"
+        {
+            7
+        } else {
+            0
+        };
+        self.observed
+            .lock()
+            .unwrap()
+            .checks
+            .push((command.to_owned(), exit_code));
+        Ok(FeatureCheckOutput {
+            exit_code,
+            output: "fixture evidence".into(),
+        })
+    }
+
+    async fn reconcile_task(
+        &self,
+        _: &Environment,
+        _: &Project,
+        _: &TaskAttempt,
+    ) -> Result<TaskObservation, ExecutionError> {
+        Ok(TaskObservation::Stopped)
+    }
+}
+
+fn feature_task(title: &str, path: &str, check: &str) -> FeatureTask {
+    FeatureTask {
+        id: Uuid::new_v4(),
+        title: title.into(),
+        instructions: format!("Implement {title}"),
+        role: TaskRole::Implementation,
+        paths: vec![path.into()],
+        depends_on: vec![],
+        checks: vec![check.into()],
+    }
+}
+
+#[tokio::test]
+async fn feature_resumes_only_the_failed_writer_and_reviews_the_corrected_snapshot() {
+    let mut f = ConversationFixture::new().await;
+    let (env, mut state, scope) = seed_feature(&f);
+    let feature_id = state.feature.id;
+    let architecture = RevisionKey {
+        id: Uuid::new_v4(),
+        digest: "c".repeat(64),
+    };
+    let alpha = feature_task("Alpha writer", "src/alpha.rs", "check-alpha");
+    let beta = feature_task("Beta writer", "src/beta.rs", "check-beta");
+    let critique_id = Uuid::new_v4();
+    let critique = FeatureTask {
+        id: Uuid::new_v4(),
+        title: "Architecture critique".into(),
+        instructions: "Review design".into(),
+        role: TaskRole::ArchitectureReview,
+        paths: vec![],
+        depends_on: vec![],
+        checks: vec![],
+    };
+    for command in [
+        FeatureCommand::ApproveRevision(scope.clone()),
+        FeatureCommand::ProposeRevision(GateRevision {
+            key: architecture.clone(),
+            content: GateContent::Architecture {
+                scope,
+                summary: "Two disjoint implementation tasks".into(),
+                diagrams: vec![FeatureDiagram {
+                    title: "Flow".into(),
+                    source: "flowchart LR\nA --> B".into(),
+                }],
+                tasks: vec![alpha.clone(), beta.clone()],
+            },
+            approval: None,
+        }),
+        FeatureCommand::ClaimAttempt(AttemptClaim {
+            task: critique,
+            revision: Some(architecture.clone()),
+            workspace: TaskWorkspace {
+                feature_id,
+                attempt_id: critique_id,
+                base_oid: test_oid(0),
+                access: WorkspaceAccess::ReadOnly,
+            },
+            snapshot_id: None,
+            model: "gpt-6-astra".into(),
+            effort: None,
+            skill_revision: WORKFLOW_REVISION.into(),
+            retry_of: None,
+        }),
+        FeatureCommand::RecordAttempt {
+            attempt_id: critique_id,
+            update: AttemptUpdate::LaunchSettled {
+                process_receipt: Some("private-critique-process".into()),
+            },
+        },
+        FeatureCommand::RecordAttempt {
+            attempt_id: critique_id,
+            update: AttemptUpdate::Result {
+                text: "Design verified".into(),
+            },
+        },
+        FeatureCommand::RecordAttempt {
+            attempt_id: critique_id,
+            update: AttemptUpdate::Validated { checkpoint: None },
+        },
+    ] {
+        state
+            .apply(
+                env.user_id,
+                env.generation,
+                Uuid::new_v4(),
+                command,
+                Utc::now(),
+            )
+            .unwrap();
+    }
+    let store = Arc::new(Features {
+        inner: Mutex::new(state),
+        receipts: Mutex::default(),
+    });
+    let workers = Arc::new(WorkflowWorkers::default());
+    f.app = feature_router(&f, store.clone(), Arc::new(FeatureCatalog), workers.clone());
+    let path = format!("/api/features/{feature_id}");
+    let approved = f
+        .call(
+            "POST",
+            &format!("{path}/approve"),
+            0,
+            &json!({
+                "operationId": Uuid::new_v4(),
+                "revisionId": architecture.id,
+                "digest": architecture.digest,
+            })
+            .to_string(),
+        )
+        .await;
+    assert_eq!(approved.status(), StatusCode::OK);
+
+    until(|| {
+        let state = store.inner.lock().unwrap();
+        state
+            .attempts
+            .iter()
+            .any(|a| a.claim.task.id == alpha.id && a.status == AttemptStatus::Running)
+            && state
+                .attempts
+                .iter()
+                .any(|a| a.claim.task.id == beta.id && a.status == AttemptStatus::Failed)
+    })
+    .await;
+    let before = body_json(f.call("GET", &path, 0, "").await).await;
+    let attempts = before["attempts"].as_array().unwrap();
+    let active = attempts
+        .iter()
+        .find(|item| item["title"] == alpha.title)
+        .unwrap();
+    assert_eq!(active["canResume"], false);
+    let active_resume = f
+        .call(
+            "POST",
+            &format!("{path}/resume"),
+            0,
+            &json!({"operationId": Uuid::new_v4(), "attemptId": active["id"]}).to_string(),
+        )
+        .await;
+    assert_eq!(active_resume.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(active_resume).await["code"],
+        "feature-execution-uncertain"
+    );
+    workers.alpha_check.notify_one();
+    until(|| {
+        store
+            .inner
+            .lock()
+            .unwrap()
+            .attempts
+            .iter()
+            .any(|a| a.claim.task.id == alpha.id && a.status == AttemptStatus::Validated)
+    })
+    .await;
+    let failed = attempts
+        .iter()
+        .find(|item| item["title"] == beta.title)
+        .unwrap();
+    assert_eq!(failed["canResume"], true);
+    assert_eq!(failed["observedModel"], "gpt-6.1-terra");
+    assert!(failed.get("processReceipt").is_none());
+    assert!(before["architecture"].get("tasks").is_none());
+    let resumed = f
+        .call(
+            "POST",
+            &format!("{path}/resume"),
+            0,
+            &json!({
+                "operationId": Uuid::new_v4(),
+                "attemptId": failed["id"],
+            })
+            .to_string(),
+        )
+        .await;
+    assert_eq!(resumed.status(), StatusCode::OK);
+    until(|| store.inner.lock().unwrap().feature.stage == FeatureStage::Result).await;
+
+    let detail = body_json(f.call("GET", &path, 0, "").await).await;
+    let diff = body_json(f.call("GET", &format!("{path}/diff"), 0, "").await).await;
+    assert_eq!(detail["review"]["ready"], true);
+    assert_eq!(detail["review"]["patchDigest"], diff["patchDigest"]);
+    assert_eq!(diff["patchDigest"], test_digest(3));
+    assert_eq!(
+        detail["review"]["checks"],
+        json!([
+            {"label":"check-alpha","passed":true},
+            {"label":"check-beta","passed":true},
+        ])
+    );
+    let state = store.inner.lock().unwrap();
+    assert_eq!(state.reviews.len(), 2);
+    let first = state.reviews[0].verdict.as_ref().unwrap();
+    assert!(
+        first
+            .findings
+            .iter()
+            .any(|finding| finding.blocking && finding.summary == "fixture defect")
+    );
+    assert!(
+        first
+            .checks
+            .iter()
+            .any(|check| check.label == "check-beta" && !check.passed)
+    );
+    let observed = workers.observed.lock().unwrap();
+    for (action, count, model) in [
+        (WorkerAction::Alpha, 1, "gpt-6.1-terra"),
+        (WorkerAction::Beta, 2, "gpt-6.1-terra"),
+        (WorkerAction::Correction, 1, "gpt-6.1-terra"),
+        (WorkerAction::Review, 2, "gpt-6.1-sol"),
+    ] {
+        let launches: Vec<_> = observed
+            .launches
+            .iter()
+            .filter(|(_, recorded, _)| *recorded == action)
+            .collect();
+        assert_eq!(launches.len(), count, "{action:?}");
+        assert!(launches.iter().all(|(_, _, actual)| actual == model));
+    }
+    assert!(observed.checks.contains(&("check-beta".into(), 7)));
+    assert_eq!(observed.integrated.len(), 3);
 }
