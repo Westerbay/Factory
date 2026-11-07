@@ -11,8 +11,15 @@ struct RemoteObservation {
     base: usize,
     head: Option<String>,
     managed: Option<String>,
+    move_base_after_push: bool,
+    lose_push_proof: bool,
     advanced: bool,
     refresh_failures: usize,
+    replace_on_stage: bool,
+    replace_on_lookup: Option<usize>,
+    replaced: bool,
+    staged: Option<(Uuid, GitSnapshot)>,
+    confirmed: usize,
     pushes: Vec<GitSnapshot>,
 }
 
@@ -30,7 +37,7 @@ impl FeatureDeliveryRuntime for DeliveryGit {
             head_oid: state.head.clone(),
             managed_head_oid: state.managed.clone(),
         };
-        if state.pushes.len() == 1 && !state.advanced {
+        if state.move_base_after_push && state.pushes.len() == 1 && !state.advanced {
             // The push confirmation read succeeds. The next observation, just
             // before the draft POST, sees the advanced default branch.
             state.base = 5;
@@ -58,17 +65,52 @@ impl FeatureDeliveryRuntime for DeliveryGit {
             assert_ne!(previous, &approved.head_oid);
         }
         state.head = Some(approved.head_oid.clone());
-        state.managed = state.head.clone();
         state.pushes.push(approved.clone());
+        if state.lose_push_proof {
+            return Err(WorkspaceError::Uncertain);
+        }
+        state.managed = state.head.clone();
         Ok(())
     }
 
-    async fn refresh_base(
+    async fn stage_refresh(
         &self,
         env: &Environment,
         project: &Project,
         feature_id: Uuid,
+        candidate_id: Uuid,
         approved: &GitSnapshot,
+    ) -> Result<GitSnapshot, WorkspaceError> {
+        assert_eq!(
+            self.workers.snapshot(env, project, feature_id).await?.git,
+            *approved
+        );
+        let integrated = self.workers.observed.lock().unwrap().integrated.len();
+        let mut state = self.remote.lock().unwrap();
+        assert_eq!(state.head.as_deref(), Some(approved.head_oid.as_str()));
+        assert_eq!(state.managed, state.head);
+        if state.refresh_failures > 0 {
+            state.refresh_failures -= 1;
+            return Err(WorkspaceError::Conflict);
+        }
+        let proposed = GitSnapshot {
+            base_oid: test_oid(state.base),
+            head_oid: test_oid(state.base + integrated),
+            patch_digest: test_digest(state.base + integrated),
+        };
+        state.staged = Some((candidate_id, proposed.clone()));
+        state.replaced = state.replace_on_stage;
+        Ok(proposed)
+    }
+
+    async fn confirm_refresh(
+        &self,
+        env: &Environment,
+        project: &Project,
+        feature_id: Uuid,
+        candidate_id: Uuid,
+        approved: &GitSnapshot,
+        proposed: &GitSnapshot,
     ) -> Result<WorkspaceDiff, WorkspaceError> {
         assert_eq!(
             self.workers.snapshot(env, project, feature_id).await?.git,
@@ -76,12 +118,12 @@ impl FeatureDeliveryRuntime for DeliveryGit {
         );
         let new_base = {
             let mut state = self.remote.lock().unwrap();
-            assert_eq!(state.head.as_deref(), Some(approved.head_oid.as_str()));
-            assert_eq!(state.managed, state.head);
-            if state.refresh_failures > 0 {
-                state.refresh_failures -= 1;
-                return Err(WorkspaceError::Conflict);
-            }
+            assert_eq!(
+                state.staged.as_ref(),
+                Some(&(candidate_id, proposed.clone()))
+            );
+            assert!(!state.replaced);
+            state.confirmed += 1;
             state.base
         };
         self.workers.observed.lock().unwrap().base = new_base;
@@ -92,6 +134,7 @@ impl FeatureDeliveryRuntime for DeliveryGit {
 struct DraftFixture {
     git: Arc<DeliveryGit>,
     posts: Mutex<Vec<RepositoryDraft>>,
+    lookups: AtomicUsize,
 }
 
 #[async_trait]
@@ -191,7 +234,11 @@ impl RepositoryAccessProvider for DraftFixture {
         full_name: &str,
     ) -> Result<RepositoryOriginVerification, RepositoryAccessError> {
         assert_eq!((repo, full_name), (42, "factory/fixture"));
-        Ok(RepositoryOriginVerification::Matched)
+        Ok(if self.git.remote.lock().unwrap().replaced {
+            RepositoryOriginVerification::Changed
+        } else {
+            RepositoryOriginVerification::Matched
+        })
     }
     async fn public_key_registered(
         &self,
@@ -216,6 +263,11 @@ impl RepositoryAccessProvider for DraftFixture {
         guard: &dyn RepositoryOperationGuard,
     ) -> Result<Option<RepositoryDraft>, RepositoryAccessError> {
         guard.check().await?;
+        let count = self.lookups.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut remote = self.git.remote.lock().unwrap();
+        if remote.replace_on_lookup == Some(count) {
+            remote.replaced = true;
+        }
         Ok(self.posts.lock().unwrap().last().cloned())
     }
     async fn create_draft(
@@ -381,7 +433,17 @@ async fn feature_can_retry_a_failed_local_refresh_after_the_base_advances() {
     exercise_moved_base(true).await;
 }
 
-async fn exercise_moved_base(retry_refresh: bool) {
+struct PublicationFixture {
+    f: ConversationFixture,
+    workers: Arc<WorkflowWorkers>,
+    store: Arc<Features>,
+    git: Arc<DeliveryGit>,
+    provider: Arc<DraftFixture>,
+    reviewed: ReviewSnapshot,
+    path: String,
+}
+
+async fn publication_fixture(remote: RemoteObservation) -> PublicationFixture {
     let mut f = ConversationFixture::new().await;
     let workers = Arc::new(WorkflowWorkers::default());
     let (state, reviewed) = ready_for_publication(&f, &workers);
@@ -389,15 +451,12 @@ async fn exercise_moved_base(retry_refresh: bool) {
     let store = Arc::new(Features::new(state));
     let git = Arc::new(DeliveryGit {
         workers: workers.clone(),
-        remote: Mutex::new(RemoteObservation {
-            head: Some(reviewed.git.head_oid.clone()),
-            refresh_failures: usize::from(retry_refresh),
-            ..Default::default()
-        }),
+        remote: Mutex::new(remote),
     });
     let provider = Arc::new(DraftFixture {
         git: git.clone(),
         posts: Mutex::default(),
+        lookups: AtomicUsize::default(),
     });
     let accounts = Arc::new(AgentConnectionService::new(
         f.environments.clone(),
@@ -418,7 +477,7 @@ async fn exercise_moved_base(retry_refresh: bool) {
         store.clone(),
         conversations,
         workers.clone(),
-        workers,
+        workers.clone(),
         Arc::new(JsonFeatureCodec),
         Arc::new(FixtureRepositoryVerifier),
     );
@@ -430,13 +489,41 @@ async fn exercise_moved_base(retry_refresh: bool) {
     ));
     let service = FeatureDeliveryService::new(coordinator.clone(), git.clone(), repository);
     f.app = factory_api::features::router(f.auth.clone(), coordinator, Some(service));
-    let path = format!("/api/features/{id}");
+    PublicationFixture {
+        f,
+        workers,
+        store,
+        git,
+        provider,
+        reviewed,
+        path: format!("/api/features/{id}"),
+    }
+}
+
+fn draft_body(operation_id: Uuid, snapshot_id: Uuid) -> String {
+    json!({"snapshotId": snapshot_id, "operationId": operation_id}).to_string()
+}
+
+async fn exercise_moved_base(retry_refresh: bool) {
+    let PublicationFixture {
+        f,
+        store,
+        git,
+        provider,
+        reviewed,
+        path,
+        ..
+    } = publication_fixture(RemoteObservation {
+        move_base_after_push: true,
+        refresh_failures: usize::from(retry_refresh),
+        ..Default::default()
+    })
+    .await;
     let draft_path = format!("{path}/draft");
-    let draft = |snapshot_id: Uuid| {
-        json!({"snapshotId": snapshot_id, "operationId": Uuid::new_v4()}).to_string()
-    };
+    let draft = |snapshot_id: Uuid| draft_body(Uuid::new_v4(), snapshot_id);
 
     // An exact but unowned remote SHA is insufficient to authorize either write.
+    git.remote.lock().unwrap().head = Some(reviewed.git.head_oid.clone());
     let conflict = f.call("POST", &draft_path, 0, &draft(reviewed.id)).await;
     assert_eq!(conflict.status(), StatusCode::OK);
     assert_eq!(body_json(conflict).await["delivery"]["status"], "failed");
@@ -502,4 +589,129 @@ async fn exercise_moved_base(retry_refresh: bool) {
     assert_eq!(posts.len(), 1);
     assert_eq!(posts[0].base_oid, new_review.git.base_oid);
     assert_eq!(posts[0].head_oid, new_review.git.head_oid);
+}
+
+#[tokio::test]
+async fn feature_settles_a_lost_push_receipt_without_adopting_the_remote_branch() {
+    let PublicationFixture {
+        f,
+        store,
+        git,
+        provider,
+        reviewed,
+        path,
+        ..
+    } = publication_fixture(RemoteObservation {
+        lose_push_proof: true,
+        ..Default::default()
+    })
+    .await;
+    let draft_path = format!("{path}/draft");
+    let operation = Uuid::new_v4();
+    let request = draft_body(operation, reviewed.id);
+    let first = f.call("POST", &draft_path, 0, &request).await;
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(body_json(first).await["delivery"]["status"], "uncertain");
+
+    // A moved branch might conceal an in-flight draft, so it is not settled.
+    git.remote.lock().unwrap().head = Some(test_oid(9));
+    let moved = f.call("POST", &draft_path, 0, &request).await;
+    assert_eq!(moved.status(), StatusCode::OK);
+    assert_eq!(body_json(moved).await["delivery"]["status"], "uncertain");
+
+    // A replacement namespace may not supply evidence of draft absence.
+    {
+        let mut remote = git.remote.lock().unwrap();
+        remote.head = Some(reviewed.git.head_oid.clone());
+        remote.replace_on_lookup = Some(provider.lookups.load(Ordering::SeqCst) + 2);
+    }
+    let replaced = f.call("POST", &draft_path, 0, &request).await;
+    assert_eq!(replaced.status(), StatusCode::OK);
+    assert_eq!(body_json(replaced).await["delivery"]["status"], "uncertain");
+    {
+        let mut remote = git.remote.lock().unwrap();
+        remote.replaced = false;
+        remote.replace_on_lookup = None;
+    }
+
+    // An exact, stable, unproved head and guarded draft absence settle the claim.
+    let lookups_before = provider.lookups.load(Ordering::SeqCst);
+    let settled = f.call("POST", &draft_path, 0, &request).await;
+    assert_eq!(settled.status(), StatusCode::OK);
+    let settled = body_json(settled).await;
+    assert_eq!(settled["delivery"]["status"], "failed");
+    assert_eq!(settled["delivery"]["requestId"], operation.to_string());
+    assert!(
+        settled["delivery"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("ownership")
+    );
+    assert_eq!(provider.lookups.load(Ordering::SeqCst) - lookups_before, 2);
+    assert!(matches!(
+        store.inner.lock().unwrap().deliveries[0].status,
+        DeliveryStatus::Failed { .. }
+    ));
+
+    // A repeat returns the exact terminal receipt; a new request cannot adopt it.
+    let repeated = f.call("POST", &draft_path, 0, &request).await;
+    assert_eq!(body_json(repeated).await["delivery"], settled["delivery"]);
+    let new = f
+        .call(
+            "POST",
+            &draft_path,
+            0,
+            &draft_body(Uuid::new_v4(), reviewed.id),
+        )
+        .await;
+    assert_eq!(body_json(new).await["delivery"]["status"], "failed");
+    let remote = git.remote.lock().unwrap();
+    assert_eq!(
+        remote.pushes.as_slice(),
+        std::slice::from_ref(&reviewed.git)
+    );
+    assert_eq!(remote.head.as_deref(), Some(reviewed.git.head_oid.as_str()));
+    assert_eq!(remote.managed, None);
+    assert!(provider.posts.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn feature_does_not_review_a_staged_refresh_after_repository_identity_changes() {
+    let PublicationFixture {
+        f,
+        workers,
+        store,
+        git,
+        provider,
+        reviewed,
+        path,
+    } = publication_fixture(RemoteObservation {
+        move_base_after_push: true,
+        replace_on_stage: true,
+        ..Default::default()
+    })
+    .await;
+    let stale = f
+        .call(
+            "POST",
+            &format!("{path}/draft"),
+            0,
+            &draft_body(Uuid::new_v4(), reviewed.id),
+        )
+        .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(stale).await["code"], "feature-stale-snapshot");
+    let diff = f.call("GET", &format!("{path}/diff"), 0, "").await;
+    let diff = body_json(diff).await;
+    assert_eq!(diff["baseOid"], reviewed.git.base_oid);
+    assert_eq!(diff["headOid"], reviewed.git.head_oid);
+    assert_eq!(diff["patchDigest"], reviewed.git.patch_digest);
+    let observed = store.inner.lock().unwrap();
+    assert_eq!(observed.feature.stage, FeatureStage::Review);
+    assert_eq!(observed.current_review, Some(reviewed.id));
+    let remote = git.remote.lock().unwrap();
+    assert!(remote.replaced && remote.staged.is_some());
+    assert_eq!(remote.confirmed, 0);
+    assert!(workers.observed.lock().unwrap().launches.is_empty());
+    assert!(provider.posts.lock().unwrap().is_empty());
 }

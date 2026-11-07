@@ -414,7 +414,7 @@ async fn upgrading_v4_preserves_existing_project_conversations() {
 
 #[tokio::test]
 #[ignore = "requires the explicitly owned PostgreSQL integration fixture"]
-async fn reserved_review_check_fences_project_deletion_until_its_outcome_is_saved() {
+async fn review_and_delivery_fence_project_deletion_until_outcomes_are_saved() {
     let (database, sql) = fixture().await;
     let (actor, environment, project_id) = member(&database, &sql).await;
     let store = database.feature_store();
@@ -477,7 +477,7 @@ async fn reserved_review_check_fences_project_deletion_until_its_outcome_is_save
     let head_oid = "b".repeat(40);
     apply(FeatureCommand::ClaimAttempt(AttemptClaim {
         task: writer,
-        revision: Some(architecture),
+        revision: Some(architecture.clone()),
         snapshot_id: None,
         model: "fixture".into(),
         effort: None,
@@ -506,14 +506,15 @@ async fn reserved_review_check_fences_project_deletion_until_its_outcome_is_save
     })
     .await;
     let snapshot_id = Uuid::new_v4();
+    let git = GitSnapshot {
+        base_oid,
+        head_oid,
+        patch_digest: "c".repeat(64),
+    };
     apply(FeatureCommand::BeginReview {
         snapshot: ReviewSnapshot {
             id: snapshot_id,
-            git: GitSnapshot {
-                base_oid,
-                head_oid,
-                patch_digest: "c".repeat(64),
-            },
+            git: git.clone(),
         },
         required_roles: vec![TaskRole::GeneralReview],
     })
@@ -523,7 +524,7 @@ async fn reserved_review_check_fences_project_deletion_until_its_outcome_is_save
     for command in [
         FeatureCommand::ClaimIntegratedCheck {
             snapshot_id,
-            command,
+            command: command.clone(),
             workspace_id,
         },
         FeatureCommand::StartIntegratedCheck {
@@ -563,6 +564,97 @@ async fn reserved_review_check_fences_project_deletion_until_its_outcome_is_save
             .has_open_runs(actor)
             .await
             .unwrap()
+    );
+
+    let attempt_id = Uuid::new_v4();
+    apply(FeatureCommand::ClaimAttempt(AttemptClaim {
+        task: FeatureTask {
+            id: Uuid::new_v4(),
+            title: "Review".into(),
+            instructions: "Review the source".into(),
+            role: TaskRole::GeneralReview,
+            paths: Vec::new(),
+            depends_on: Vec::new(),
+            checks: Vec::new(),
+        },
+        revision: Some(architecture),
+        snapshot_id: Some(snapshot_id),
+        model: "fixture".into(),
+        effort: None,
+        skill_revision: "build-feature/1".into(),
+        retry_of: None,
+        workspace: TaskWorkspace {
+            feature_id: id,
+            attempt_id,
+            base_oid: git.head_oid.clone(),
+            access: WorkspaceAccess::ReadOnly,
+        },
+    }))
+    .await;
+    for update in [
+        AttemptUpdate::LaunchSettled {
+            process_receipt: Some("reviewer".into()),
+        },
+        AttemptUpdate::Result {
+            text: "No findings".into(),
+        },
+        AttemptUpdate::Validated { checkpoint: None },
+    ] {
+        apply(FeatureCommand::RecordAttempt { attempt_id, update }).await;
+    }
+    apply(FeatureCommand::RecordReview {
+        snapshot_id,
+        patch_digest: git.patch_digest.clone(),
+        verdict: ReviewVerdict {
+            findings: Vec::new(),
+            checks: vec![ReviewCheck {
+                label: command,
+                passed: true,
+            }],
+        },
+    })
+    .await;
+    let request_id = Uuid::new_v4();
+    store
+        .apply(
+            actor,
+            &environment,
+            id,
+            request_id,
+            FeatureCommand::ClaimDelivery {
+                snapshot_id,
+                observed: git,
+            },
+        )
+        .await
+        .unwrap();
+    apply(FeatureCommand::RecordDelivery {
+        request_id,
+        status: DeliveryStatus::Uncertain,
+    })
+    .await;
+    assert!(matches!(
+        database
+            .project_store()
+            .begin_delete(actor, environment.id, environment.generation, project_id)
+            .await,
+        Err(ProjectError::InUse)
+    ));
+    let status = DeliveryStatus::Failed {
+        reason: "The exact remote head had no verified ownership or draft".into(),
+    };
+    apply(FeatureCommand::RecordDelivery {
+        request_id,
+        status: status.clone(),
+    })
+    .await;
+    assert_eq!(
+        store.get(actor, id).await.unwrap().deliveries,
+        vec![DeliveryReceipt {
+            request_id,
+            snapshot_id,
+            status,
+        }]
     );
     assert!(
         database

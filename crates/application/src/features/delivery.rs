@@ -345,28 +345,37 @@ impl FeatureDeliveryService {
             environment_id: env.id,
             generation: env.generation,
         };
-        if self
+        let Ok(access) = self
             .repository
             .draft_access(repository_actor, project)
             .await
-            .is_err()
-        {
+        else {
+            return false;
+        };
+        // Stage only a candidate identity while the fetched refs are untrusted.
+        let candidate = Uuid::new_v4();
+        let Ok(proposed) = self
+            .git
+            .stage_refresh(env, project, feature_id, candidate, approved)
+            .await
+        else {
+            return false;
+        };
+        if proposed == *approved || access.recheck().await.is_err() {
             return false;
         }
-        // Hold the delivery claim while refreshing the private comparison.
-        // The Git controller also revalidates any existing remote head's receipt.
         match self
             .git
-            .refresh_base(env, project, feature_id, approved)
+            .confirm_refresh(env, project, feature_id, candidate, approved, &proposed)
             .await
         {
-            Ok(diff) => diff.git != *approved,
+            Ok(diff) => diff.git == proposed,
             Err(WorkspaceError::Uncertain) => self
                 .features
                 .workspaces
                 .snapshot(env, project, feature_id)
                 .await
-                .is_ok_and(|diff| diff.git != *approved),
+                .is_ok_and(|diff| diff.git == proposed),
             Err(_) => false,
         }
     }
@@ -449,6 +458,35 @@ impl FeatureDeliveryService {
             Ok(remote) => remote,
             Err(error) => return git_failure(error, request.recovering),
         };
+        if request.recovering
+            && remote.head_oid.is_some()
+            && remote.head_oid != remote.managed_head_oid
+        {
+            if remote.head_oid.as_deref() != Some(request.approved.head_oid.as_str()) {
+                return Publication::Uncertain;
+            }
+            // A draft POST requires a durably proved push. An explicit replay
+            // may release this claim if the exact unproved head is unchanged
+            // and authenticated lookup still finds no draft for the request.
+            if access.recheck().await.is_err()
+                || self
+                    .git
+                    .remote(request.env, request.project, request.feature_id)
+                    .await
+                    .ok()
+                    .as_ref()
+                    != Some(&remote)
+            {
+                return Publication::Uncertain;
+            }
+            return match access.find_draft(&target).await {
+                Ok(Some(draft)) => self.classify_draft(request, draft).await,
+                Ok(None) if access.recheck().await.is_ok() => Publication::Failed(
+                    "Factory could not verify ownership of the pushed branch. Resolve the existing branch before trying again.",
+                ),
+                _ => Publication::Uncertain,
+            };
+        }
         if request.current != request.approved {
             return Publication::Stale {
                 refresh_base: false,
