@@ -406,6 +406,54 @@ class ProjectControllerTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'conflict')
         self.assertEqual((record / 'checkout/witness').read_text(), 'keep')
 
+    def test_delete_resumes_owned_feature_cleanup_and_preserves_recreated_group(self):
+        origin = self.origin()
+        self.clone(origin)
+        feature = str(uuid.uuid4())
+        self.ready_feature_snapshot(origin, feature)
+        groups = self.home / '.factory/features'
+        sibling = groups / str(uuid.uuid4())
+        sibling.mkdir()
+        (sibling / 'keep').write_text('another project')
+        request = dict(project=self.project, operation=self.operation, directory='repo')
+        remove = controller.shutil.rmtree
+
+        def fail_feature_removal(path, **kwargs):
+            if path == feature:
+                raise OSError('interrupted during feature cleanup')
+            return remove(path, **kwargs)
+
+        with patch.object(controller.shutil, 'rmtree', side_effect=fail_feature_removal):
+            with self.assertRaises(OSError):
+                self.execute('delete', **request)
+
+        quarantined = self.home / '.factory/deletions' / self.project / 'features'
+        self.assertTrue((quarantined / feature / 'integration.git').is_dir())
+        original = groups / self.project
+        self.assertFalse(original.exists())
+        original.mkdir()
+        (original / 'keep').write_text('new namesake')
+        self.assertEqual(self.execute('delete', **request), 'deleted')
+        self.assertFalse(quarantined.exists())
+        self.assertEqual((original / 'keep').read_text(), 'new namesake')
+        self.assertEqual((sibling / 'keep').read_text(), 'another project')
+
+    def test_delete_does_not_adopt_an_unmarked_feature_workspace(self):
+        origin = self.origin()
+        self.clone(origin)
+        feature = str(uuid.uuid4())
+        self.feature(origin, feature, 'initialize')
+        group = self.home / '.factory/features' / self.project
+        unowned = group / str(uuid.uuid4())
+        unowned.mkdir(mode=0o700)
+        (unowned / 'keep').write_text('unowned')
+        with self.assertRaises(controller.Problem) as caught:
+            self.execute('delete', project=self.project, operation=self.operation, directory='repo')
+        self.assertEqual(caught.exception.code, 'conflict')
+        self.assertEqual((unowned / 'keep').read_text(), 'unowned')
+        self.assertTrue((group / feature / 'integration.git').is_dir())
+        self.assertEqual((self.home / 'Documents/repo/file.txt').read_text(), 'sample\n')
+
     def test_stopped_import_cleanup_removes_only_owned_checkout_and_is_retryable(self):
         origin = self.origin()
         with patch.object(controller, 'rename_atomic', side_effect=OSError('interrupted')):
@@ -583,6 +631,30 @@ class ProjectControllerTests(unittest.TestCase):
             self.feature(origin, feature, 'prepare', attempt=foreign, base_oid=head, writable=True)
         self.assertEqual(caught.exception.code, 'conflict')
         self.assertEqual((unowned / 'keep').read_text(), 'not owned by this operation')
+
+    def test_feature_initialization_pins_the_fetched_base_when_remote_advances(self):
+        origin = self.origin()
+        self.clone(origin)
+        feature = str(uuid.uuid4())
+        get_remote_default = controller.remote_default
+        remote_git = ['git', '-C', str(origin)]
+
+        def advance_after_advertisement(remote):
+            advertisement = get_remote_default(remote)
+            (origin / 'upstream.txt').write_text('updated upstream\n')
+            subprocess.run([*remote_git, 'add', 'upstream.txt'], check=True)
+            subprocess.run([*remote_git, 'commit', '-qm', 'advance during initialization'], check=True)
+            return advertisement
+
+        with patch.object(controller, 'remote_default', side_effect=advance_after_advertisement):
+            branch = self.feature(origin, feature, 'initialize')
+        new_base = subprocess.check_output([*remote_git, 'rev-parse', 'HEAD'], text=True).strip()
+        self.assertEqual(branch['base_oid'], new_base)
+        self.assertEqual(self.feature(origin, feature, 'initialize'), branch)
+        result = self.feature(origin, feature, 'snapshot')
+        self.assertEqual(result['git']['head_oid'], new_base)
+        self.assertEqual(result['changed_paths'], [])
+        self.assertFalse((self.home / 'Documents/repo/upstream.txt').exists())
 
     def ready_feature_snapshot(self, origin, feature):
         branch = self.feature(origin, feature, 'initialize')

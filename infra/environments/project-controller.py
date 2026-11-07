@@ -590,6 +590,29 @@ def clone(factory, documents, project_id, operation, full_name, name):
 
 
 
+def verify_feature_group(group, project_id, operation):
+    for entry in os.listdir(group):
+        try:
+            pending = entry.startswith('.pending-')
+            feature_id = parse_uuid(entry.removeprefix('.pending-'))
+            feature = directory(group, entry, private=True)
+            try:
+                receipt = read_json_file(feature, 'feature', private=True)
+            finally:
+                os.close(feature)
+            if (not isinstance(receipt, dict)
+                    or set(receipt) != {'version', 'project', 'operation', 'feature', 'repository'}
+                    or type(receipt['version']) is not int or receipt['version'] != 1
+                    or receipt['project'] != project_id or receipt['operation'] != operation):
+                raise Problem('conflict')
+            recorded_feature = parse_uuid(receipt['feature'])
+            if not pending and recorded_feature != feature_id:
+                raise Problem('conflict')
+            repository(receipt['repository'])
+        except (FileNotFoundError, ValueError, Problem) as error:
+            raise Problem('conflict') from error
+
+
 def delete(factory, documents, project_id, operation, name):
     # Isolate the exact marked directory before recursive deletion. A receipt lives
     # independently of the DB so a retry cannot delete a newly created namesake.
@@ -677,53 +700,47 @@ def delete(factory, documents, project_id, operation, name):
                 else:
                     mark_resolved('checkout-resolved', None)
 
-            def resolve_import():
-                if resolved('import-resolved') is not None:
+            def resolve_private(item, group_name, source_name, validate):
+                receipt_name = item + '-resolved'
+                if resolved(receipt_name) is not None:
                     return
-                try:
-                    imports = directory(factory, 'imports', private=True)
-                except FileNotFoundError:
-                    imports = None
-                try:
-                    try:
-                        staged = directory(record, 'import', private=True)
-                    except FileNotFoundError:
-                        staged = None
-                    if staged is None and imports is not None:
+                with contextlib.ExitStack() as stack:
+                    def opened_if_present(parent, child):
                         try:
-                            original = directory(imports, operation, private=True)
+                            fd = directory(parent, child, private=True)
                         except FileNotFoundError:
-                            original = None
-                        if original is not None:
-                            try:
-                                original_info = os.fstat(original)
-                                if read_json_file(original, 'factory-operation', private=True) != expected:
-                                    raise Problem('conflict')
-                                rename_atomic(imports, operation, record, 'import')
-                                os.fsync(imports)
-                                staged = directory(record, 'import', private=True)
-                                moved_info = os.fstat(staged)
-                                if (original_info.st_dev, original_info.st_ino) != (moved_info.st_dev, moved_info.st_ino):
-                                    os.close(staged)
-                                    raise Problem('conflict')
-                            finally:
-                                os.close(original)
-                    if staged is not None:
-                        try:
-                            if read_json_file(staged, 'factory-operation', private=True) != expected:
-                                raise Problem('conflict')
-                            mark_resolved('import-resolved', staged)
-                        finally:
-                            os.close(staged)
-                    else:
-                        mark_resolved('import-resolved', None)
-                finally:
-                    if imports is not None:
-                        os.close(imports)
+                            return None
+                        stack.callback(os.close, fd)
+                        return fd
 
+                    staged = opened_if_present(record, item)
+                    if staged is None:
+                        group = opened_if_present(factory, group_name)
+                        original = opened_if_present(group, source_name) if group is not None else None
+                        if original is not None:
+                            validate(original)
+                            original_info = os.fstat(original)
+                            rename_atomic(group, source_name, record, item)
+                            os.fsync(group)
+                            staged = opened_if_present(record, item)
+                            if staged is None:
+                                raise Problem('conflict')
+                            moved_info = os.fstat(staged)
+                            if (original_info.st_dev, original_info.st_ino) != (moved_info.st_dev, moved_info.st_ino):
+                                raise Problem('conflict')
+                    if staged is not None:
+                        validate(staged)
+                    mark_resolved(receipt_name, staged)
+
+            def verify_import(staged):
+                if read_json_file(staged, 'factory-operation', private=True) != expected:
+                    raise Problem('conflict')
+
+            resolve_private('features', 'features', project_id,
+                            lambda group: verify_feature_group(group, project_id, operation))
             resolve_checkout()
-            resolve_import()
-            for item in ('checkout', 'import'):
+            resolve_private('import', 'imports', operation, verify_import)
+            for item in ('checkout', 'import', 'features'):
                 receipt = resolved(item + '-resolved')
                 try:
                     target = directory(record, item)
@@ -916,16 +933,20 @@ def record_branch(record, remote, feature, initialize):
     except FileNotFoundError:
         if not initialize:
             raise Problem('conflict')
-        base_ref, base_oid = remote_default(remote)
-        branch = {'base_ref': base_ref, 'base_oid': base_oid, 'head_ref': head}
+        base_ref, _ = remote_default(remote)
+        branch = {'base_ref': base_ref, 'head_ref': head}
         create_file(record, 'branch', json.dumps(branch).encode())
         os.fsync(record)
-    if (not isinstance(branch, dict) or set(branch) != {'base_ref', 'base_oid', 'head_ref'}
+    fields = {'base_ref', 'head_ref'}
+    if (not isinstance(branch, dict) or set(branch) not in (fields, fields | {'base_oid'})
             or branch['head_ref'] != head):
         raise Problem('conflict')
     head_ref(branch['base_ref'])
-    oid(branch['base_oid'])
-    return branch
+    if 'base_oid' in branch:
+        # Older records stored the advertised OID before fetching. It cannot
+        # establish the commit fetched into an unfinished private repository.
+        oid(branch['base_oid'])
+    return {'base_ref': branch['base_ref'], 'head_ref': head}
 
 
 def initialize_repository(repo, remote, branch):
@@ -935,17 +956,22 @@ def initialize_repository(repo, remote, branch):
         git_command(['init', '--bare', fd_path(repo)], descriptors=(repo,))
     else:
         os.close(head)
-    if get_ref(repo, branch['head_ref']) is not None:
-        if get_ref(repo, 'refs/factory/base') is None:
+    current_head = get_ref(repo, branch['head_ref'])
+    current_base = get_ref(repo, 'refs/factory/base')
+    if current_head is not None:
+        if current_base is None or not is_ancestor(repo, current_base, current_head):
             raise Problem('conflict')
         return
-    git_command(['fetch', '--no-tags', '--no-recurse-submodules', '--', remote,
-                 branch['base_ref'] + ':refs/factory/base'], repository_fd=repo, timeout=240)
-    if get_ref(repo, 'refs/factory/base') != branch['base_oid']:
+    git_command(['fetch', '--no-tags', '--no-recurse-submodules', '--', remote, branch['base_ref']],
+                repository_fd=repo, timeout=240)
+    fetched = get_ref(repo, 'FETCH_HEAD')
+    if fetched is None:
         raise Problem('conflict')
     git_command(['symbolic-ref', 'HEAD', branch['head_ref']], repository_fd=repo)
-    git_command(['update-ref', branch['head_ref'], branch['base_oid'], '0' * len(branch['base_oid'])],
-                repository_fd=repo)
+    absent = '0' * len(fetched)
+    updates = (f"start\nupdate refs/factory/base {fetched} {current_base or absent}\n"
+               f"update {branch['head_ref']} {fetched} {absent}\nprepare\ncommit\n").encode()
+    git_command(['update-ref', '--stdin'], repository_fd=repo, input_data=updates)
 
 
 def feature_record(parent, name, receipt, expected, create):
