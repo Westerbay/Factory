@@ -621,7 +621,7 @@ export function FeaturePanels({
             {reopening}
           </>
         )}
-        {current && feature.canContinue && (
+        {current && feature.canContinue && !refreshComparison && (
           <Button disabled={busy} onClick={() => onResume()}>
             <RotateCcw size={14} aria-hidden="true" />
             {m.feature_resume_step()}
