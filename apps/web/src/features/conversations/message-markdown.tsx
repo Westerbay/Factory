@@ -1,10 +1,30 @@
 import * as m from "@workspace/i18n/messages"
 import { useLocale } from "../../lib/i18n"
-import { memo, type ReactNode } from "react"
+import {
+  Children,
+  createContext,
+  isValidElement,
+  lazy,
+  memo,
+  Suspense,
+  useContext,
+  useId,
+  useState,
+  type ReactNode,
+} from "react"
+import { Eye, EyeOff } from "lucide-react"
 import Markdown, { type Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
 
+import { Button } from "../../components/ui/button"
+import { useArtifactPreviewLabels } from "./artifact-labels"
 import "./message-markdown.css"
+
+const PreviewsEnabled = createContext(true)
+const ArtifactPreview = lazy(async () => {
+  const preview = await import("../artifacts/artifact-preview")
+  return { default: preview.ArtifactPreview }
+})
 
 function markdownUrl(value: string): string | undefined {
   if (!/^(https?:\/\/|mailto:)/i.test(value)) return undefined
@@ -51,10 +71,66 @@ const components: Components = {
 
 function CodeBlock({ children }: { children?: ReactNode }) {
   useLocale()
-  return (
+  const labels = useArtifactPreviewLabels()
+  const previews = useContext(PreviewsEnabled)
+  const previewId = useId()
+  const [openedSource, setOpenedSource] = useState<string | null>(null)
+  const child = Children.toArray(children)[0]
+  const code = isValidElement<{
+    className?: string
+    children?: ReactNode
+  }>(child)
+    ? child.props
+    : undefined
+  const language = code?.className?.toLowerCase()
+  const kind =
+    language === "language-html"
+      ? "html"
+      : language === "language-mermaid"
+        ? "mermaid"
+        : null
+  const source = typeof code?.children === "string" ? code.children : null
+  const sourceBlock = (
     <pre tabIndex={0} aria-label={m.code_block()}>
       {children}
     </pre>
+  )
+  if (!previews || !kind || !source?.trim()) return sourceBlock
+
+  const open = openedSource === source
+  const title =
+    kind === "mermaid" ? m.artifact_diagram() : m.artifact_html_document()
+  return (
+    <div className="message-markdown-code-preview">
+      <div className="message-markdown-code-toolbar">
+        <span>{kind === "mermaid" ? "Mermaid" : "HTML"}</span>
+        <Button
+          variant="ghost"
+          aria-expanded={open}
+          aria-controls={previewId}
+          onClick={() => setOpenedSource(open ? null : source)}
+        >
+          {open ? (
+            <EyeOff size={14} aria-hidden />
+          ) : (
+            <Eye size={14} aria-hidden />
+          )}
+          {open ? m.artifact_hide_preview() : m.artifact_preview()}
+        </Button>
+      </div>
+      {sourceBlock}
+      <div id={previewId} hidden={!open}>
+        {open && (
+          <Suspense fallback={<p role="status">{m.loading()}</p>}>
+            <ArtifactPreview
+              artifact={{ kind, title, source }}
+              labels={labels}
+              compact
+            />
+          </Suspense>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -75,19 +151,23 @@ function AccessibleTable({ children }: { children?: ReactNode }) {
 /** Render completed and in-progress agent text without executing embedded content. */
 export const MessageMarkdown = memo(function MessageMarkdown({
   children,
+  previews = true,
 }: {
   children: string
+  previews?: boolean
 }) {
   return (
-    <div className="message-markdown">
-      <Markdown
-        remarkPlugins={[remarkGfm]}
-        components={components}
-        skipHtml
-        urlTransform={markdownUrl}
-      >
-        {children}
-      </Markdown>
-    </div>
+    <PreviewsEnabled value={previews}>
+      <div className="message-markdown">
+        <Markdown
+          remarkPlugins={[remarkGfm]}
+          components={components}
+          skipHtml
+          urlTransform={markdownUrl}
+        >
+          {children}
+        </Markdown>
+      </div>
+    </PreviewsEnabled>
   )
 })

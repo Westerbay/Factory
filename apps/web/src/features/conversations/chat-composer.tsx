@@ -20,6 +20,7 @@ export function ChatComposer({
   onEffort,
   onSend,
   onStop,
+  workflow,
 }: {
   input: string
   model: string
@@ -34,6 +35,7 @@ export function ChatComposer({
   onEffort: (value: string) => void
   onSend: () => void
   onStop: () => void
+  workflow?: { modelLabel: string; access: string }
 }) {
   useLocale()
   const inputId = useId()
@@ -77,24 +79,30 @@ export function ChatComposer({
         rows={2}
       />
       <div className="chat-composer-actions">
-        <label className="chat-model">
-          <span className="sr-only">{m.model()}</span>
-          <select
-            value={model}
-            onChange={(event) => onModel(event.target.value)}
-            disabled={disabled || !models.length}
-          >
-            {models.length === 0 && (
-              <option value="">{m.no_models_available()}</option>
-            )}
-            {models.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name.replace(" (1M context)", m.m_1m_context())}
-              </option>
-            ))}
-          </select>
-        </label>
-        {selected && selected.effortLevels.length > 0 && (
+        {workflow ? (
+          <span className="chat-model chat-workflow-model">
+            {workflow.modelLabel}
+          </span>
+        ) : (
+          <label className="chat-model">
+            <span className="sr-only">{m.model()}</span>
+            <select
+              value={model}
+              onChange={(event) => onModel(event.target.value)}
+              disabled={disabled || !models.length}
+            >
+              {models.length === 0 && (
+                <option value="">{m.no_models_available()}</option>
+              )}
+              {models.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name.replace(" (1M context)", m.m_1m_context())}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {!workflow && selected && selected.effortLevels.length > 0 && (
           <label className="chat-effort">
             <span className="sr-only">{m.reasoning_effort()}</span>
             <select
@@ -121,7 +129,8 @@ export function ChatComposer({
             <span className="sr-only">{m.assistant_access()}</span>
           </summary>
           <p>
-            {m.the_selected_assistant_has_full_access_to_files_and_credentials_i()}{" "}
+            {workflow?.access ??
+              m.the_selected_assistant_has_full_access_to_files_and_credentials_i()}{" "}
           </p>
         </details>
         {running ? (

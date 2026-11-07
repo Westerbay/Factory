@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest"
 
 import { MessageMarkdown } from "../../src/features/conversations/message-markdown"
 
-function render(content: string) {
-  return renderToStaticMarkup(<MessageMarkdown>{content}</MessageMarkdown>)
+function render(content: string, previews = true) {
+  return renderToStaticMarkup(
+    <MessageMarkdown previews={previews}>{content}</MessageMarkdown>
+  )
 }
 
 describe("agent message Markdown", () => {
@@ -52,6 +54,47 @@ describe("agent message Markdown", () => {
     expect(render("A [partially written link](https://exam")).toContain(
       "partially written link"
     )
+  })
+
+  it.each(["html", "mermaid"])(
+    "offers an opt-in preview for %s fences without mounting the artifact",
+    (language) => {
+      const source =
+        language === "html"
+          ? '<img src="https://example.test/private">'
+          : "graph LR\nA-->B"
+      const html = render(`\`\`\`${language}\n${source}\n\`\`\``)
+      expect(html).toContain('class="message-markdown-code-toolbar"')
+      expect(html).toContain('aria-expanded="false"')
+      expect(html).toContain("Preview</button>")
+      expect(html).toContain(`<code class="language-${language}">`)
+      expect(html).not.toContain('class="artifact-preview"')
+      expect(html).not.toMatch(/<(iframe|img)\b/)
+    }
+  )
+
+  it("keeps preview actions unavailable while an assistant response streams", () => {
+    const html = render(
+      "```html\n<h1>Pending</h1>\n```\n\n```mermaid\ngraph LR\nA-->B",
+      false
+    )
+    expect(html).toContain('class="language-html"')
+    expect(html).toContain('class="language-mermaid"')
+    expect(html).not.toContain("<button")
+    expect(html).not.toContain("artifact-preview")
+  })
+
+  it.each(["javascript", "xml", "svg", "html-example", ""])(
+    "does not offer a preview for %s code",
+    (language) => {
+      const html = render(`\`\`\`${language}\n<h1>Source only</h1>\n\`\`\``)
+      expect(html).toContain("&lt;h1&gt;Source only&lt;/h1&gt;")
+      expect(html).not.toContain("<button")
+    }
+  )
+
+  it("does not offer a preview for an empty supported code fence", () => {
+    expect(render("```html\n\n``` ")).not.toContain("<button")
   })
 
   it("opens explicit web and mail links without an opener or referrer", () => {
