@@ -13,9 +13,9 @@ use factory_core::{
     conversations::ConversationError,
     environments::{Environment, EnvironmentActor},
     features::{
-        AttemptStatus, FeatureCommand, FeatureError, FeatureExecutionRuntime, FeaturePage,
-        FeatureStage, FeatureState, FeatureStore, FeatureWorkspaceRuntime, NewFeature, RevisionKey,
-        TaskRole, WorkspaceError,
+        AttemptStatus, FeatureCodec, FeatureCommand, FeatureError, FeatureExecutionRuntime,
+        FeaturePage, FeatureStage, FeatureState, FeatureStore, FeatureWorkspaceRuntime, NewFeature,
+        RevisionKey, TaskRole, WorkspaceError,
     },
     projects::Project,
 };
@@ -30,6 +30,7 @@ pub struct FeatureCoordinator {
     conversations: Arc<ConversationRuntime>,
     pub(super) workspaces: Arc<dyn FeatureWorkspaceRuntime>,
     pub(super) runtime: Arc<dyn FeatureExecutionRuntime>,
+    pub(super) codec: Arc<dyn FeatureCodec>,
     drivers: Mutex<HashMap<Uuid, Weak<tokio::sync::Mutex<()>>>>,
 }
 
@@ -39,12 +40,14 @@ impl FeatureCoordinator {
         conversations: Arc<ConversationRuntime>,
         workspaces: Arc<dyn FeatureWorkspaceRuntime>,
         runtime: Arc<dyn FeatureExecutionRuntime>,
+        codec: Arc<dyn FeatureCodec>,
     ) -> Arc<Self> {
         Arc::new(Self {
             store,
             conversations,
             workspaces,
             runtime,
+            codec,
             drivers: Mutex::new(HashMap::new()),
         })
     }

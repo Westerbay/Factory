@@ -12,26 +12,11 @@ use factory_core::{
     features::*,
     projects::Project,
 };
-use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use std::{collections::HashMap, sync::Arc};
 use uuid::Uuid;
 
 const MARKER: &str = "```factory-proposal";
 const PROMPT_LIMIT: usize = 240_000;
-
-#[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
-enum Proposal {
-    Scope {
-        brief: String,
-    },
-    Architecture {
-        summary: String,
-        diagrams: Vec<FeatureDiagram>,
-        tasks: Vec<FeatureTask>,
-    },
-}
 
 impl FeatureCoordinator {
     pub async fn discuss(
@@ -90,7 +75,7 @@ impl FeatureCoordinator {
             .history(actor, conversation)
             .await
             .map_err(conversation_error)?;
-        let prompt = discussion_prompt(&state, role, &history, &input)?;
+        let prompt = discussion_prompt(self.codec.as_ref(), &state, role, &history, &input)?;
         let branch = self
             .workspaces
             .initialize(&env, &project, id)
@@ -162,7 +147,13 @@ impl FeatureCoordinator {
         history
             .messages
             .retain(|message| message.run_id != failed_run);
-        let prompt = discussion_prompt(state, prior.claim.task.role, &history, &input)?;
+        let prompt = discussion_prompt(
+            self.codec.as_ref(),
+            state,
+            prior.claim.task.role,
+            &history,
+            &input,
+        )?;
         let reserved = self
             .reserve_task(
                 actor,
@@ -212,7 +203,7 @@ impl FeatureCoordinator {
         } else {
             TaskRole::Architecture
         };
-        let (task, revision, input) = architecture_request(state, role)?;
+        let (task, revision, input) = architecture_request(self.codec.as_ref(), state, role)?;
         if state.attempts.iter().any(|attempt| {
             attempt.claim.task.id == task.id
                 && attempt.claim.task.role == role
@@ -260,8 +251,8 @@ impl FeatureCoordinator {
             .rev()
             .find_map(|message| proposal_part(message).1)
             .ok_or(FeatureError::Invalid)?;
-        let proposal = serde_json::from_str::<Proposal>(raw).map_err(|_| FeatureError::Invalid)?;
-        let Proposal::Architecture { .. } = proposal else {
+        let proposal = self.codec.parse_proposal(raw)?;
+        let FeatureProposal::Architecture { .. } = proposal else {
             return Err(FeatureError::Invalid);
         };
         if state.architecture.is_some() || result.attempt.claim.revision != state.scope {
@@ -283,11 +274,11 @@ impl FeatureCoordinator {
         env: &Environment,
         id: Uuid,
         scope: Option<RevisionKey>,
-        proposal: Proposal,
+        proposal: FeatureProposal,
     ) -> Result<(), FeatureError> {
         let content = match proposal {
-            Proposal::Scope { brief } => GateContent::Scope { brief },
-            Proposal::Architecture {
+            FeatureProposal::Scope { brief } => GateContent::Scope { brief },
+            FeatureProposal::Architecture {
                 summary,
                 diagrams,
                 tasks,
@@ -298,8 +289,7 @@ impl FeatureCoordinator {
                 tasks,
             },
         };
-        let canonical = serde_json::to_vec(&content).map_err(|_| FeatureError::Invalid)?;
-        let digest = format!("{:x}", Sha256::digest(canonical));
+        let digest = self.codec.revision_digest(&content)?;
         let current = self.store.get(actor, id).await?;
         let previous = match content {
             GateContent::Scope { .. } => current.scope,
@@ -332,7 +322,7 @@ pub(crate) struct ScopedDiscussion {
     owner: Arc<FeatureCoordinator>,
     reserved: ReservedTask,
     conversation: Uuid,
-    proposal: Option<Proposal>,
+    proposal: Option<FeatureProposal>,
     streams: HashMap<String, StreamTail>,
 }
 
@@ -411,7 +401,8 @@ impl ScopedDiscussion {
     pub(crate) fn message(&mut self, provider_item: &str, text: String) -> Option<String> {
         self.streams.remove(provider_item);
         let (visible, proposal) = proposal_part(&text);
-        if let Some(proposal) = proposal.and_then(|json| serde_json::from_str(json).ok()) {
+        if let Some(proposal) = proposal.and_then(|json| self.owner.codec.parse_proposal(json).ok())
+        {
             self.proposal = Some(proposal);
         }
         (!visible.trim().is_empty()).then(|| visible.to_owned())
@@ -465,6 +456,7 @@ fn internal_task(id: Uuid, role: TaskRole, title: &str, instructions: &str) -> F
 }
 
 pub(super) fn architecture_request(
+    codec: &dyn FeatureCodec,
     state: &FeatureState,
     role: TaskRole,
 ) -> Result<(FeatureTask, RevisionKey, String), FeatureError> {
@@ -489,8 +481,7 @@ pub(super) fn architecture_request(
         )),
         TaskRole::ArchitectureReview => {
             let revision = state.current_architecture().ok_or(FeatureError::Conflict)?;
-            let design =
-                serde_json::to_string(&revision.content).map_err(|_| FeatureError::Invalid)?;
+            let design = codec.render_revision(&revision.content)?;
             Ok((
                 internal_task(
                     revision.key.id,
@@ -509,6 +500,7 @@ pub(super) fn architecture_request(
 }
 
 fn discussion_prompt(
+    codec: &dyn FeatureCodec,
     state: &FeatureState,
     role: TaskRole,
     history: &ConversationHistory,
@@ -521,7 +513,11 @@ fn discussion_prompt(
     let architecture = state
         .current_architecture()
         .map(|revision| &revision.content);
-    let plan = serde_json::to_string(&(scope, architecture)).map_err(|_| FeatureError::Invalid)?;
+    let mut plan = String::new();
+    for proposal in [scope, architecture].into_iter().flatten() {
+        plan.push_str(&codec.render_revision(proposal)?);
+        plan.push('\n');
+    }
     let mut prompt = format!(
         "{}\n\n{}\n\nCurrent proposals:\n{plan}\n\nVisible conversation:\n",
         bundle::role_instructions(role),
@@ -562,13 +558,13 @@ fn architecture_protocol() -> &'static str {
 Use UUID strings and existing task UUID strings for prerequisites. Available task roles are Implementation, ComplexImplementation, Visual and Triage. Only implementation roles can own write paths. Assign explicit existing repository test commands and use a trailing slash for a directory scope. At least one task needs a check. If the member is changing an approved product decision, use {"kind":"scope","brief":"updated product brief"} instead and explain the decision. The user approves separately. Do not execute the task graph."#
 }
 
-pub(super) fn valid_architecture_reply(messages: &[String]) -> bool {
+pub(super) fn valid_architecture_reply(codec: &dyn FeatureCodec, messages: &[String]) -> bool {
     messages
         .iter()
         .rev()
         .find_map(|message| proposal_part(message).1)
-        .and_then(|value| serde_json::from_str::<Proposal>(value).ok())
-        .is_some_and(|proposal| matches!(proposal, Proposal::Architecture { .. }))
+        .and_then(|value| codec.parse_proposal(value).ok())
+        .is_some_and(|proposal| matches!(proposal, FeatureProposal::Architecture { .. }))
 }
 
 pub(super) fn proposal_part(text: &str) -> (&str, Option<&str>) {
@@ -627,9 +623,6 @@ mod tests {
             "Ready\n```factory-proposal\n{\"kind\":\"scope\",\"brief\":\"Save a file\"}\n```",
         );
         assert_eq!(visible, "Ready");
-        assert!(matches!(
-            serde_json::from_str(json.unwrap()).unwrap(),
-            Proposal::Scope { .. }
-        ));
+        assert_eq!(json, Some(r#"{"kind":"scope","brief":"Save a file"}"#));
     }
 }

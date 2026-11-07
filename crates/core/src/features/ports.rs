@@ -6,6 +6,36 @@ use crate::{
 };
 use async_trait::async_trait;
 
+pub enum FeatureProposal {
+    Scope {
+        brief: String,
+    },
+    Architecture {
+        summary: String,
+        diagrams: Vec<FeatureDiagram>,
+        tasks: Vec<FeatureTask>,
+    },
+}
+
+pub struct FeatureReviewReply {
+    pub patch_digest: String,
+    pub findings: Vec<FeatureReplyFinding>,
+}
+
+pub struct FeatureReplyFinding {
+    pub summary: String,
+    pub blocking: bool,
+}
+
+/// Provider response encoding and stable content identity are adapter concerns.
+pub trait FeatureCodec: Send + Sync {
+    fn parse_proposal(&self, raw: &str) -> Result<FeatureProposal, FeatureError>;
+    fn revision_digest(&self, content: &GateContent) -> Result<String, FeatureError>;
+    fn render_revision(&self, content: &GateContent) -> Result<String, FeatureError>;
+    fn parse_review(&self, raw: &str) -> Result<FeatureReviewReply, FeatureError>;
+    fn derived_id(&self, namespace: Uuid, label: &str) -> Uuid;
+}
+
 /// Recheck ownership in every transaction. Mutation paths also check the current
 /// environment generation. Match operation inputs before returning a prior receipt.
 #[async_trait]

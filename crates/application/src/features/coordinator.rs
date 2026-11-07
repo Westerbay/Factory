@@ -435,7 +435,12 @@ impl FeatureCoordinator {
             };
             let Some(reply) = messages.iter().rev().find(|text| {
                 text.trim().len() <= 32_768
-                    && super::review::parse_reply(text, &round.snapshot.git.patch_digest).is_ok()
+                    && super::review::parse_reply(
+                        self.codec.as_ref(),
+                        text,
+                        &round.snapshot.git.patch_digest,
+                    )
+                    .is_ok()
             }) else {
                 return AttemptUpdate::Failed {
                     reason: "The reviewer did not return a valid reply for this snapshot".into(),
@@ -444,7 +449,7 @@ impl FeatureCoordinator {
             reply.trim().to_owned()
         } else {
             if role == TaskRole::Architecture
-                && !super::discussion::valid_architecture_reply(messages)
+                && !super::discussion::valid_architecture_reply(self.codec.as_ref(), messages)
             {
                 return AttemptUpdate::Failed {
                     reason: "The architect did not return a structured proposal".into(),
@@ -678,12 +683,16 @@ pub(super) fn task_prompt(
     else {
         return Err(FeatureError::Conflict);
     };
-    let diagrams = serde_json::to_string(diagrams).map_err(|_| FeatureError::Invalid)?;
+    let mut diagram_text = String::new();
+    for diagram in diagrams {
+        use std::fmt::Write;
+        let _ = writeln!(diagram_text, "\n{}:\n{}", diagram.title, diagram.source);
+    }
     let paths = task.paths.join(", ");
     let checks = task.checks.join("\n");
     let role = bundle::role_instructions(task.role);
     Ok(format!(
-        "{role}\n\nApproved product brief:\n{brief}\n\nApproved design:\n{summary}\n{diagrams}\n\nTask: {}\n{}\nOwned paths: {paths}\nApproved checks:\n{checks}",
+        "{role}\n\nApproved product brief:\n{brief}\n\nApproved design:\n{summary}\n{diagram_text}\n\nTask: {}\n{}\nOwned paths: {paths}\nApproved checks:\n{checks}",
         task.title, task.instructions
     ))
 }

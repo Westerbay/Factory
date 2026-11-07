@@ -2,37 +2,22 @@ use super::{FeatureCoordinator, coordinator::TaskRequest};
 use factory_core::{
     environments::{Environment, EnvironmentActor},
     features::{
-        AttemptStatus, FeatureCommand, FeatureError, FeatureStage, FeatureState, FeatureTask,
-        GateContent, GateRevision, ReviewCheck, ReviewFinding, ReviewRound, ReviewSnapshot,
-        ReviewVerdict, RevisionKey, TaskRole, TaskWorkspace, WorkspaceAccess, WorkspaceDiff,
-        WorkspaceError,
+        AttemptStatus, FeatureCodec, FeatureCommand, FeatureError, FeatureReplyFinding,
+        FeatureStage, FeatureState, FeatureTask, GateContent, GateRevision, ReviewCheck,
+        ReviewFinding, ReviewRound, ReviewSnapshot, ReviewVerdict, RevisionKey, TaskRole,
+        TaskWorkspace, WorkspaceAccess, WorkspaceDiff, WorkspaceError,
     },
     projects::Project,
 };
-use futures_util::future::join_all;
-use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, sync::Arc};
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ReviewReply {
-    patch_digest: String,
-    findings: Vec<ReplyFinding>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct ReplyFinding {
-    summary: String,
-    blocking: bool,
-}
-
 pub(super) fn parse_reply(
+    codec: &dyn FeatureCodec,
     text: &str,
     expected_digest: &str,
-) -> Result<Vec<ReplyFinding>, FeatureError> {
+) -> Result<Vec<FeatureReplyFinding>, FeatureError> {
     let text = text.trim();
     let source = text
         .strip_prefix("```json")
@@ -42,7 +27,7 @@ pub(super) fn parse_reply(
     if source.len() > 32_768 {
         return Err(FeatureError::Invalid);
     }
-    let reply: ReviewReply = serde_json::from_str(source).map_err(|_| FeatureError::Invalid)?;
+    let reply = codec.parse_review(source)?;
     if reply.patch_digest != expected_digest {
         return Err(FeatureError::StaleSnapshot);
     }
@@ -62,7 +47,7 @@ impl FeatureCoordinator {
     /// Drive one stable integrated snapshot at a time. Re-entry uses durable
     /// reviewer attempts; only missing work is dispatched automatically.
     pub(super) async fn advance_review(
-        &self,
+        self: &Arc<Self>,
         actor: EnvironmentActor,
         feature_id: Uuid,
     ) -> Result<(), FeatureError> {
@@ -107,7 +92,7 @@ impl FeatureCoordinator {
                 self.launch_reviewers(actor, &feature, &round, &diff)
                     .await?;
                 feature = self.store.get(actor, feature_id).await?;
-                let mut findings = collect_findings(&feature, &round)?;
+                let mut findings = collect_findings(self.codec.as_ref(), &feature, &round)?;
                 if let Some(finding) = scope_finding(&feature, &diff)? {
                     findings.push(finding);
                 }
@@ -124,7 +109,7 @@ impl FeatureCoordinator {
                         actor,
                         &env,
                         feature_id,
-                        related_id(round.snapshot.id, "verdict"),
+                        self.codec.derived_id(round.snapshot.id, "verdict"),
                         FeatureCommand::RecordReview {
                             snapshot_id: round.snapshot.id,
                             patch_digest: round.snapshot.git.patch_digest.clone(),
@@ -151,14 +136,15 @@ impl FeatureCoordinator {
             if used >= 2 + feature.additional_review_rounds as usize {
                 return Err(FeatureError::ReviewBlocked);
             }
-            let request = correction_request(&feature, &round, verdict)?;
+            let request = correction_request(self.codec.as_ref(), &feature, &round, verdict)?;
             feature = self
                 .store
                 .apply(
                     actor,
                     &env,
                     feature_id,
-                    related_id(round.snapshot.id, "begin-corrections"),
+                    self.codec
+                        .derived_id(round.snapshot.id, "begin-corrections"),
                     FeatureCommand::BeginCorrections {
                         snapshot_id: round.snapshot.id,
                     },
@@ -265,7 +251,7 @@ impl FeatureCoordinator {
     }
 
     async fn launch_reviewers(
-        &self,
+        self: &Arc<Self>,
         actor: EnvironmentActor,
         feature: &FeatureState,
         round: &ReviewRound,
@@ -277,8 +263,12 @@ impl FeatureCoordinator {
                     && attempt.claim.task.role == *role
             })
         });
-        let results = join_all(roles.map(|role| {
-            let task_id = related_id(round.snapshot.id, &format!("{role:?}"));
+        let (sender, mut finished) = mpsc::channel(4);
+        let shared = Arc::new(feature.clone());
+        for role in roles {
+            let task_id = self
+                .codec
+                .derived_id(round.snapshot.id, &format!("{role:?}"));
             let task = FeatureTask {
                 id: task_id,
                 role,
@@ -288,26 +278,30 @@ impl FeatureCoordinator {
                 depends_on: Vec::new(),
                 checks: Vec::new(),
             };
-            self.run_task(
-                actor,
-                feature,
-                TaskRequest {
-                    operation_id: related_id(task_id, "initial-launch"),
-                    attempt_id: task_id,
-                    task,
-                    revision: Some(round.architecture.clone()),
-                    snapshot_id: Some(round.snapshot.id),
-                    base_oid: round.snapshot.git.head_oid.clone(),
-                    retry_of: None,
-                    input: review_input(diff),
-                },
-            )
-        }))
-        .await;
-        for result in results {
-            result?;
+            let request = TaskRequest {
+                operation_id: self.codec.derived_id(task_id, "initial-launch"),
+                attempt_id: task_id,
+                task,
+                revision: Some(round.architecture.clone()),
+                snapshot_id: Some(round.snapshot.id),
+                base_oid: round.snapshot.git.head_oid.clone(),
+                retry_of: None,
+                input: review_input(diff),
+            };
+            let owner = self.clone();
+            let feature = shared.clone();
+            let sender = sender.clone();
+            self.conversations.spawn(Box::pin(async move {
+                let outcome = owner.run_task(actor, &feature, request).await.map(|_| ());
+                let _ = sender.send(outcome).await;
+            }));
         }
-        Ok(())
+        drop(sender);
+        let mut outcome = Ok(());
+        while let Some(result) = finished.recv().await {
+            outcome = outcome.and(result);
+        }
+        outcome
     }
 
     async fn verify_integrated(
@@ -345,6 +339,7 @@ impl FeatureCoordinator {
 }
 
 fn collect_findings(
+    codec: &dyn FeatureCodec,
     feature: &FeatureState,
     round: &ReviewRound,
 ) -> Result<Vec<ReviewFinding>, FeatureError> {
@@ -362,6 +357,7 @@ fn collect_findings(
             .filter(|attempt| attempt.status == AttemptStatus::Validated)
             .ok_or(FeatureError::ReviewBlocked)?;
         for finding in parse_reply(
+            codec,
             attempt
                 .result
                 .as_deref()
@@ -474,11 +470,12 @@ pub(super) fn review_input(diff: &WorkspaceDiff) -> String {
 }
 
 pub(super) fn correction_request(
+    codec: &dyn FeatureCodec,
     feature: &FeatureState,
     round: &ReviewRound,
     verdict: &ReviewVerdict,
 ) -> Result<TaskRequest, FeatureError> {
-    let task_id = related_id(round.snapshot.id, "correction-task");
+    let task_id = codec.derived_id(round.snapshot.id, "correction-task");
     let paths: BTreeSet<_> = plan_tasks(feature)?
         .iter()
         .flat_map(|task| task.paths.iter().cloned())
@@ -516,7 +513,7 @@ pub(super) fn correction_request(
         return Err(FeatureError::ReviewBlocked);
     }
     Ok(TaskRequest {
-        operation_id: related_id(task_id, "initial-launch"),
+        operation_id: codec.derived_id(task_id, "initial-launch"),
         attempt_id: task_id,
         task: FeatureTask {
             id: task_id,
@@ -556,16 +553,6 @@ fn review_title(role: TaskRole) -> &'static str {
     }
 }
 
-fn related_id(id: Uuid, label: &str) -> Uuid {
-    let mut hash = Sha256::new();
-    hash.update(id.as_bytes());
-    hash.update(label.as_bytes());
-    let hash = hash.finalize();
-    let mut bytes = [0_u8; 16];
-    bytes.copy_from_slice(&hash[..16]);
-    Uuid::from_bytes(bytes)
-}
-
 fn workspace_error(error: WorkspaceError) -> FeatureError {
     match error {
         WorkspaceError::Conflict => FeatureError::StaleSnapshot,
@@ -578,21 +565,41 @@ fn workspace_error(error: WorkspaceError) -> FeatureError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use factory_core::features::{FeatureProposal, FeatureReviewReply};
+
+    struct DigestReply;
+
+    impl FeatureCodec for DigestReply {
+        fn parse_proposal(&self, _: &str) -> Result<FeatureProposal, FeatureError> {
+            unreachable!()
+        }
+        fn revision_digest(&self, _: &GateContent) -> Result<String, FeatureError> {
+            unreachable!()
+        }
+        fn render_revision(&self, _: &GateContent) -> Result<String, FeatureError> {
+            unreachable!()
+        }
+        fn parse_review(&self, raw: &str) -> Result<FeatureReviewReply, FeatureError> {
+            Ok(FeatureReviewReply {
+                patch_digest: raw.into(),
+                findings: Vec::new(),
+            })
+        }
+        fn derived_id(&self, _: Uuid, _: &str) -> Uuid {
+            unreachable!()
+        }
+    }
 
     #[test]
     fn accepts_only_a_reply_for_the_reviewed_patch() {
-        let clean = r#"{"patchDigest":"exact","findings":[]}"#;
-        assert!(parse_reply(clean, "exact").unwrap().is_empty());
+        assert!(
+            parse_reply(&DigestReply, "exact", "exact")
+                .unwrap()
+                .is_empty()
+        );
         assert!(matches!(
-            parse_reply(clean, "stale"),
+            parse_reply(&DigestReply, "exact", "stale"),
             Err(FeatureError::StaleSnapshot)
-        ));
-        assert!(matches!(
-            parse_reply(
-                r#"{"patchDigest":"exact","findings":[],"checks":[true]}"#,
-                "exact"
-            ),
-            Err(FeatureError::Invalid)
         ));
     }
 }

@@ -112,7 +112,7 @@ impl FeatureCoordinator {
                 .ok_or(FeatureError::StaleSnapshot)?;
             if claim.task.role == TaskRole::Correction {
                 let verdict = round.verdict.as_ref().ok_or(FeatureError::ReviewBlocked)?;
-                correction_request(&state, round, verdict)?.input
+                correction_request(self.codec.as_ref(), &state, round, verdict)?.input
             } else {
                 let diff = self
                     .workspaces
@@ -128,7 +128,8 @@ impl FeatureCoordinator {
             claim.task.role,
             TaskRole::Architecture | TaskRole::ArchitectureReview
         ) {
-            let (_, revision, input) = architecture_request(&state, claim.task.role)?;
+            let (_, revision, input) =
+                architecture_request(self.codec.as_ref(), &state, claim.task.role)?;
             if claim.revision.as_ref() != Some(&revision) {
                 return Err(FeatureError::Conflict);
             }
