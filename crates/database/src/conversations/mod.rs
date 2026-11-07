@@ -242,7 +242,8 @@ impl ConversationStore for PgConversationStore {
             Box::pin(async move {
                 let mut tx = connection.begin().await.map_err(unavailable)?;
                 authorize_actor(&mut tx, actor).await?;
-                let open=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM factory_identity.conversation_runs r JOIN factory_identity.conversations c ON c.id=r.conversation_id WHERE c.user_id=$1 AND r.status IN ('active','uncertain')) OR EXISTS(SELECT 1 FROM factory_identity.model_probe_leases WHERE user_id=$1)").bind(actor.user_id).fetch_one(&mut *tx).await.map_err(unavailable)?;
+                let open=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM factory_identity.conversation_runs r JOIN factory_identity.conversations c ON c.id=r.conversation_id WHERE c.user_id=$1 AND r.status IN ('active','uncertain')) OR EXISTS(SELECT 1 FROM factory_identity.model_probe_leases WHERE user_id=$1)
+                    OR EXISTS(SELECT 1 FROM factory_identity.features f JOIN factory_identity.feature_attempts a ON a.feature_id=f.id WHERE f.user_id=$1 AND a.reserved)").bind(actor.user_id).fetch_one(&mut *tx).await.map_err(unavailable)?;
                 tx.commit().await.map_err(unavailable)?;
                 Ok(open)
             })
@@ -305,12 +306,32 @@ impl ConversationStore for PgConversationStore {
                 authorize(&mut tx, actor, env, generation).await?;
                 // Verify the cursor belongs to this user; a foreign ID never selects another user's rows.
                 let cursor = if let Some(id) = before {
-                    Some(owned(&mut tx, actor.user_id, id).await?)
+                    Some(
+                        sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+                            "SELECT c.created_at FROM factory_identity.conversations c
+                             WHERE c.id=$1 AND c.user_id=$2 AND NOT EXISTS (
+                                SELECT 1 FROM factory_identity.features f WHERE f.conversation_id=c.id
+                             )",
+                        )
+                        .bind(id)
+                        .bind(actor.user_id)
+                        .fetch_optional(&mut *tx)
+                        .await
+                        .map_err(unavailable)?
+                        .ok_or(ConversationError::NotFound)?,
+                    )
                 } else {
                     None
                 };
-                let mut rows = sqlx::query("SELECT * FROM factory_identity.conversations WHERE user_id=$1 AND ($2::timestamptz IS NULL OR (created_at,id)<($2,$3)) ORDER BY created_at DESC,id DESC LIMIT 201")
-                    .bind(actor.user_id).bind(cursor.as_ref().map(|c| c.created_at)).bind(before)
+                let mut rows = sqlx::query(
+                    "SELECT c.* FROM factory_identity.conversations c
+                     WHERE c.user_id=$1 AND ($2::timestamptz IS NULL OR (c.created_at,c.id)<($2,$3))
+                       AND NOT EXISTS (
+                          SELECT 1 FROM factory_identity.features f WHERE f.conversation_id=c.id
+                       )
+                     ORDER BY c.created_at DESC,c.id DESC LIMIT 201",
+                )
+                    .bind(actor.user_id).bind(cursor).bind(before)
                     .fetch_all(&mut *tx).await.map_err(unavailable)?;
                 let has_more = rows.len() > 200;
                 rows.truncate(200);

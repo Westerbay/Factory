@@ -89,6 +89,33 @@ async fn authorize(
     }
     Ok(())
 }
+async fn has_blocking_work(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    project_id: Uuid,
+) -> Result<bool, ProjectError> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM factory_identity.conversation_runs r
+            JOIN factory_identity.conversations c ON c.id=r.conversation_id
+            WHERE c.project_id=$1 AND c.user_id=$2 AND r.status IN ('active','uncertain')
+         ) OR EXISTS (
+            SELECT 1 FROM factory_identity.features f
+            JOIN factory_identity.feature_attempts a ON a.feature_id=f.id
+            WHERE f.project_id=$1 AND f.user_id=$2 AND a.reserved
+         ) OR EXISTS (
+            SELECT 1 FROM factory_identity.features f
+            JOIN factory_identity.feature_deliveries d ON d.feature_id=f.id
+            WHERE f.project_id=$1 AND f.user_id=$2 AND d.unsettled
+         )",
+    )
+    .bind(project_id)
+    .bind(user_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(unavailable)
+}
+
 #[async_trait::async_trait]
 impl ProjectStore for PgProjectStore {
     async fn begin_delete(
@@ -108,9 +135,7 @@ impl ProjectStore for PgProjectStore {
                 .bind(id).bind(actor.user_id).bind(env).fetch_optional(&mut *tx).await.map_err(unavailable)?.ok_or(ProjectError::NotFound)?;
             let existing = project(&row)?;
             if existing.state == ProjectState::Importing { return Err(ProjectError::InUse); }
-            let busy: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM factory_identity.conversation_runs r JOIN factory_identity.conversations c ON c.id=r.conversation_id WHERE c.project_id=$1 AND c.user_id=$2 AND r.status IN ('active','uncertain'))")
-                .bind(id).bind(actor.user_id).fetch_one(&mut *tx).await.map_err(unavailable)?;
-            if busy { return Err(ProjectError::InUse); }
+            if has_blocking_work(&mut tx, actor.user_id, id).await? { return Err(ProjectError::InUse); }
             let row = sqlx::query(&format!("UPDATE factory_identity.projects SET state='deleting',updated_at=clock_timestamp() WHERE id=$1 RETURNING {COLUMNS}"))
                 .bind(id).fetch_one(&mut *tx).await.map_err(unavailable)?;
             let result = project(&row)?;
@@ -134,9 +159,7 @@ impl ProjectStore for PgProjectStore {
             let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM factory_identity.projects WHERE id=$1 AND user_id=$2 AND environment_id=$3 AND state='deleting')")
                 .bind(id).bind(actor.user_id).bind(env).fetch_one(&mut *tx).await.map_err(unavailable)?;
             if !exists { return Err(ProjectError::NotFound); }
-            let busy: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM factory_identity.conversation_runs r JOIN factory_identity.conversations c ON c.id=r.conversation_id WHERE c.project_id=$1 AND c.user_id=$2 AND r.status IN ('active','uncertain'))")
-                .bind(id).bind(actor.user_id).fetch_one(&mut *tx).await.map_err(unavailable)?;
-            if busy { return Err(ProjectError::InUse); }
+            if has_blocking_work(&mut tx, actor.user_id, id).await? { return Err(ProjectError::InUse); }
             sqlx::query("DELETE FROM factory_identity.conversation_requests WHERE run_id IN (SELECT r.id FROM factory_identity.conversation_runs r JOIN factory_identity.conversations c ON c.id=r.conversation_id WHERE c.project_id=$1 AND c.user_id=$2)").bind(id).bind(actor.user_id).execute(&mut *tx).await.map_err(unavailable)?;
             sqlx::query("DELETE FROM factory_identity.conversation_messages WHERE run_id IN (SELECT r.id FROM factory_identity.conversation_runs r JOIN factory_identity.conversations c ON c.id=r.conversation_id WHERE c.project_id=$1 AND c.user_id=$2)").bind(id).bind(actor.user_id).execute(&mut *tx).await.map_err(unavailable)?;
             sqlx::query("DELETE FROM factory_identity.conversation_runs WHERE conversation_id IN (SELECT id FROM factory_identity.conversations WHERE project_id=$1 AND user_id=$2)").bind(id).bind(actor.user_id).execute(&mut *tx).await.map_err(unavailable)?;

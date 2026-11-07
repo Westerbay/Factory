@@ -109,6 +109,7 @@ async function runFixture() {
       ["factory-database", ["--test", "environments"]],
       ["factory-database", ["--test", "conversations"]],
       ["factory-database", ["--test", "projects"]],
+      ["factory-database", ["--test", "features"]],
     ]) {
       const result = runCargo(
         [

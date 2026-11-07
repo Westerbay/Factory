@@ -11,8 +11,8 @@ import {
 } from "./owned.mjs"
 import { createDatabase } from "../../packages/database/dist/index.js"
 const action = process.argv[2]
-if (!["setup", "reset", "status", "stop"].includes(action))
-  throw new Error("Use setup, reset, status or stop")
+if (!["setup", "upgrade", "reset", "status", "stop"].includes(action))
+  throw new Error("Use setup, upgrade, reset, status or stop")
 const directory = resolve(root, ".factory")
 const marker = resolve(directory, "database-owner")
 let owner
@@ -109,6 +109,7 @@ if (action === "stop") {
   const database = createDatabase(inspectTarget(target))
   try {
     if (action === "reset") await database.reset()
+    if (action === "upgrade") await database.upgradeFeatures()
     if (action === "setup") {
       const status = await database.ready()
       if (!status.available) await database.initialize()

@@ -21,6 +21,10 @@ const schemaFile = new URL(
   "../../../crates/database/schema.sql",
   import.meta.url
 )
+const featuresUpgradeFile = new URL(
+  "../../../crates/database/schema-upgrades/0005-features.sql",
+  import.meta.url
+)
 export function createDatabase(proof: DatabaseTarget) {
   const target = verifyDatabaseTarget(proof)
   const client = postgres({
@@ -279,6 +283,13 @@ export function createDatabase(proof: DatabaseTarget) {
               "Schema already exists; use the explicit reset command"
             )
           await tx.unsafe(schema)
+        })
+      }),
+    upgradeFeatures: () =>
+      safe(async () => {
+        const upgrade = await readFile(featuresUpgradeFile, "utf8")
+        await client.begin(async (tx) => {
+          await tx.unsafe(upgrade)
         })
       }),
     reset: () =>

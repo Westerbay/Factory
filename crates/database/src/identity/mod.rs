@@ -74,6 +74,9 @@ impl IdentityDatabase {
             pool: self.pool.clone(),
         }
     }
+    pub fn feature_store(&self) -> crate::features::PgFeatureStore {
+        crate::features::PgFeatureStore::new(self.pool.clone())
+    }
     pub fn project_store(&self) -> crate::projects::PgProjectStore {
         crate::projects::PgProjectStore::new(self.pool.clone())
     }
