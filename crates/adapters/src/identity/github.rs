@@ -330,7 +330,8 @@ fn validate_callback(value: &str) -> Result<(), IdentityError> {
         _ => false,
     };
     let secure = url.scheme() == "https" && url.host().is_some();
-    if (!secure && !(url.scheme() == "http" && local))
+    let loopback_http = url.scheme() == "http" && local;
+    if !(secure || loopback_http)
         || !url.username().is_empty()
         || url.password().is_some()
         || url.path() != "/api/auth/github/callback"
