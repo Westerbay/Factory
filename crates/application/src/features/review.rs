@@ -227,7 +227,7 @@ impl FeatureCoordinator {
             GateContent::Architecture { .. } => &feature.architecture,
         };
         if current.as_ref() != Some(&revision)
-            && !current.as_ref().is_some_and(|key| key.id == operation_id)
+            && current.as_ref().is_none_or(|key| key.id != operation_id)
         {
             return Err(FeatureError::Conflict);
         }
