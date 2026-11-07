@@ -237,6 +237,7 @@ except OSError as error:
                 let created = runtime.docker.create_container(
                     Some(CreateContainerOptions { name: Some(check.name.clone()), ..Default::default() }), body
                 ).await.unwrap();
+                assert_eq!(feature_runtime.reconcile_check(&env, &project, &workspace, env.generation).await.unwrap(), CheckObservation::Unknown);
                 assert_eq!(feature_runtime.reconcile_task(&env, &project, &prior).await.unwrap(), TaskObservation::Unknown);
                 assert!(runtime.inspect_feature_worker(&created.id).await.unwrap().is_some());
                 runtime.stop_feature_workers(&env).await.unwrap();
@@ -258,7 +259,7 @@ except OSError as error:
                 let rejected = collect_check(process, exit).await.unwrap();
                 assert_eq!(rejected.exit_code, 1);
                 assert!(rejected.output.is_empty());
-                feature_runtime.acknowledge_check(&env, &project, &workspace).await.unwrap();
+                feature_runtime.acknowledge_check(&env, &project, &workspace, env.generation).await.unwrap();
                 let body = check_body(&check, &env, "printf observed; exit 7").unwrap();
                 let (process, exit) = runtime.create_feature_worker(&env, &check, body, None, proof).await.unwrap();
                 let check_id = process.id.clone();
@@ -270,10 +271,19 @@ except OSError as error:
                     feature_runtime.reconcile_task(&env, &project, &prior).await.unwrap(),
                     TaskObservation::StoppedWithWorkerProof { worker_id: check_id.clone() }
                 );
+                let mut restarted = env.clone();
+                restarted.generation += 1;
+                assert!(feature_runtime.reconcile_check(&restarted, &project, &workspace, restarted.generation).await.is_err());
+                assert_eq!(
+                    feature_runtime.reconcile_check(&restarted, &project, &workspace, env.generation).await.unwrap(),
+                    CheckObservation::Exited { exit_code: 7 }
+                );
+                assert!(runtime.inspect_feature_worker(&check_id).await.unwrap().is_some());
                 for _ in 0..2 {
-                    feature_runtime.acknowledge_check(&env, &project, &workspace).await.unwrap();
+                    feature_runtime.acknowledge_check(&restarted, &project, &workspace, env.generation).await.unwrap();
                 }
                 assert!(runtime.inspect_feature_worker(&check_id).await.unwrap().is_none());
+                assert_eq!(feature_runtime.reconcile_check(&restarted, &project, &workspace, env.generation).await.unwrap(), CheckObservation::Unknown);
             } else {
                 runtime.docker.stop_container(main_id, Some(StopContainerOptions {
                     t: Some(2), ..Default::default()

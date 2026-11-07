@@ -23,8 +23,8 @@ use factory_core::{
     conversations::execution::{ExecutionControl, ExecutionError, QuestionAnswer},
     environments::{DesiredState, Environment, EnvironmentError, VolumePresence},
     features::{
-        FeatureCheckOutput, FeatureExecution, FeatureExecutionRuntime, FeatureRun, TaskAttempt,
-        TaskObservation, TaskWorkspace,
+        CheckObservation, FeatureCheckOutput, FeatureExecution, FeatureExecutionRuntime,
+        FeatureRun, TaskAttempt, TaskObservation, TaskWorkspace,
     },
     projects::{Project, ProjectState},
 };
@@ -81,6 +81,28 @@ pub struct DockerFeatureExecutionRuntime {
 impl DockerFeatureExecutionRuntime {
     pub fn new(runtime: Arc<DockerEnvironmentRuntime>) -> Self {
         Self { runtime }
+    }
+
+    /// Call with the environment launch lock held. Missing containers do not
+    /// establish whether an earlier Docker request reached the daemon.
+    async fn inspect_check(
+        &self,
+        env: &Environment,
+        project: &Project,
+        workspace: &TaskWorkspace,
+        generation: i64,
+    ) -> Result<Option<Value>, ExecutionError> {
+        let identity = WorkerIdentity::new(env, project, workspace, generation, Role::Check)?;
+        let value = self
+            .runtime
+            .inspect_feature_worker(&identity.name)
+            .await
+            .map_err(|_| ExecutionError::CleanupUncertain)?;
+        if let Some(value) = &value {
+            verify_identity(env, &identity, value)?;
+            inspect_id(value).map_err(|_| ExecutionError::CleanupUncertain)?;
+        }
+        Ok(value)
     }
 
     async fn start(
@@ -184,23 +206,19 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
         env: &Environment,
         project: &Project,
         workspace: &TaskWorkspace,
+        generation: i64,
     ) -> Result<(), ExecutionError> {
         tokio::time::timeout(self.runtime.timeout, async {
             validate_record(env, self.runtime.metadata.installation_id()).map_err(preflight)?;
             let _gate = launch_lock(env).await.map_err(preflight)?;
-            let identity =
-                WorkerIdentity::new(env, project, workspace, env.generation, Role::Check)?;
             let Some(value) = self
-                .runtime
-                .inspect_feature_worker(&identity.name)
-                .await
-                .map_err(|_| ExecutionError::CleanupUncertain)?
+                .inspect_check(env, project, workspace, generation)
+                .await?
             else {
                 // Only the caller's already durable acknowledgement makes
                 // cleanup idempotent. Recovery never treats this as proof.
                 return Ok(());
             };
-            verify_identity(env, &identity, &value)?;
             if value["State"]["Status"] != "exited" || value["State"]["Running"] != false {
                 return Err(ExecutionError::CleanupUncertain);
             }
@@ -209,6 +227,37 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
                 .remove_feature_worker(id)
                 .await
                 .map_err(|_| ExecutionError::CleanupUncertain)
+        })
+        .await
+        .map_err(|_| ExecutionError::CleanupUncertain)?
+    }
+
+    async fn reconcile_check(
+        &self,
+        env: &Environment,
+        project: &Project,
+        workspace: &TaskWorkspace,
+        generation: i64,
+    ) -> Result<CheckObservation, ExecutionError> {
+        tokio::time::timeout(self.runtime.timeout, async {
+            validate_record(env, self.runtime.metadata.installation_id()).map_err(preflight)?;
+            let _gate = launch_lock(env).await.map_err(preflight)?;
+            let Some(value) = self
+                .inspect_check(env, project, workspace, generation)
+                .await?
+            else {
+                return Ok(CheckObservation::Unknown);
+            };
+            let state = &value["State"];
+            match (state["Status"].as_str(), state["Running"].as_bool()) {
+                (Some("running"), Some(true)) => Ok(CheckObservation::Running),
+                (Some("exited"), Some(false)) => state["ExitCode"]
+                    .as_i64()
+                    .filter(|code| (0..=255).contains(code))
+                    .map(|exit_code| CheckObservation::Exited { exit_code })
+                    .ok_or(ExecutionError::CleanupUncertain),
+                _ => Ok(CheckObservation::Unknown),
+            }
         })
         .await
         .map_err(|_| ExecutionError::CleanupUncertain)?
