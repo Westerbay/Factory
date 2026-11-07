@@ -40,10 +40,17 @@ export function canPublish(
     matchesReviewedDiff(feature, diff) &&
     !hasActiveAttempts(feature) &&
     !hasUncertainAttempts(feature) &&
-    delivery?.status !== "published" &&
-    delivery?.status !== "publishedStale" &&
-    (!(delivery?.status === "claimed" || delivery?.status === "uncertain") ||
-      delivery.snapshotId === review.snapshotId)
+    (!delivery || delivery.status === "failed")
+  )
+}
+
+/** Reconcile the durable request even if the current local diff has moved. */
+export function canReconcileDraft(feature: Feature): boolean {
+  const delivery = feature.delivery
+  return Boolean(
+    delivery?.requestId &&
+    delivery.snapshotId &&
+    (delivery.status === "claimed" || delivery.status === "uncertain")
   )
 }
 

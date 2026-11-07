@@ -18,7 +18,7 @@ import { useLocale } from "../../lib/i18n"
 import { ArtifactPreview } from "../artifacts/artifact-preview"
 import { useArtifactPreviewLabels } from "../conversations/artifact-labels"
 import { MessageMarkdown } from "../conversations/message-markdown"
-import { canPublish, matchesReviewedDiff } from "./state"
+import { canPublish, canReconcileDraft, matchesReviewedDiff } from "./state"
 import "./feature-panels.css"
 
 type Feature = components["schemas"]["FeatureView"]
@@ -37,7 +37,7 @@ export type FeaturePanelsProps = {
   compact?: boolean
   onApprove: (revision: Revision) => void
   onReopen: (revision: Revision) => void
-  onResume: (attemptId: string) => void
+  onResume: (attemptId?: string) => void
   onReview: (snapshotId: string) => void
   onDraft: (snapshotId: string) => void
   onReloadDiff: () => void
@@ -147,6 +147,8 @@ export function FeaturePanels({
   const architecture = feature.architecture
   const review = feature.review
   const delivery = feature.delivery
+  const publishedStale = delivery?.status === "publishedStale"
+  const published = delivery?.status === "published" || publishedStale
   const gate = viewStage === "scope" ? scope : architecture
   const diagram =
     architecture?.diagrams[selectedDiagram] ?? architecture?.diagrams[0]
@@ -162,21 +164,27 @@ export function FeaturePanels({
   )
   const blocked =
     !unsettled &&
+    !published &&
+    delivery?.status !== "claimed" &&
+    delivery?.status !== "uncertain" &&
     (feature.attempts.some((item) =>
       ["failed", "interrupted"].includes(item.status)
     ) ||
       Boolean(review && !review.ready) ||
-      delivery?.status === "publishedStale")
+      stage === "result")
   const staleDiff = Boolean(
     review && diff && !matchesReviewedDiff(feature, diff)
   )
-  const diffLabel = staleDiff ? m.feature_current_diff() : m.feature_diff()
+  const diffLabel = publishedStale
+    ? m.feature_published_diff()
+    : staleDiff
+      ? m.feature_current_diff()
+      : m.feature_diff()
+  const identity = publishedStale ? (diffError ? undefined : diff) : review
   const publishable =
     current && !busy && !diffLoading && !diffError && canPublish(feature, diff)
   const url = draftLink(delivery?.draftUrl)
-  const uncertainDelivery =
-    delivery?.snapshotId === review?.snapshotId &&
-    (delivery?.status === "uncertain" || delivery?.status === "claimed")
+  const reconcile = canReconcileDraft(feature)
 
   const reopening = blocked &&
     (current || viewStage === "execution") &&
@@ -393,30 +401,34 @@ export function FeaturePanels({
             ) : (
               <>
                 <div className="feature-result-verdict">
-                  {review.ready && !staleDiff ? (
+                  {review.ready && !staleDiff && !publishedStale ? (
                     <Check size={18} aria-hidden="true" />
                   ) : (
                     <Circle size={14} aria-hidden="true" />
                   )}
                   <h3>
-                    {review.ready && !staleDiff
-                      ? m.feature_review_ready()
-                      : m.feature_review_pending()}
+                    {publishedStale
+                      ? m.feature_delivery_stale()
+                      : review.ready && !staleDiff
+                        ? m.feature_review_ready()
+                        : m.feature_review_pending()}
                   </h3>
                 </div>
-                <div
-                  className="feature-result-identity"
-                  aria-label={m.feature_diff()}
-                >
-                  <GitBranch size={14} aria-hidden="true" />
-                  <code title={review.baseOid}>
-                    {review.baseOid.slice(0, 8)}
-                  </code>
-                  <ArrowRight size={13} aria-hidden="true" />
-                  <code title={review.headOid}>
-                    {review.headOid.slice(0, 8)}
-                  </code>
-                </div>
+                {identity && (
+                  <div
+                    className="feature-result-identity"
+                    aria-label={diffLabel}
+                  >
+                    <GitBranch size={14} aria-hidden="true" />
+                    <code title={identity.baseOid}>
+                      {identity.baseOid.slice(0, 8)}
+                    </code>
+                    <ArrowRight size={13} aria-hidden="true" />
+                    <code title={identity.headOid}>
+                      {identity.headOid.slice(0, 8)}
+                    </code>
+                  </div>
+                )}
                 <section className="feature-result-section">
                   <h4>
                     {m.feature_findings()} <span>{review.findings.length}</span>
@@ -470,7 +482,7 @@ export function FeaturePanels({
                     </ul>
                   )}
                 </section>
-                {review.canExtend && (
+                {review.canExtend && !published && !reconcile && (
                   <Button
                     disabled={busy || unsettled || staleDiff}
                     onClick={() => onReview(review.snapshotId)}
@@ -491,7 +503,11 @@ export function FeaturePanels({
                   )}
                   {diffError && (
                     <div className="feature-panel-alert" role="status">
-                      <p>{m.feature_diff_unavailable()}</p>
+                      <p>
+                        {publishedStale
+                          ? m.feature_published_diff_unavailable()
+                          : m.feature_diff_unavailable()}
+                      </p>
                       <Button
                         variant="ghost"
                         disabled={busy || diffLoading}
@@ -501,10 +517,15 @@ export function FeaturePanels({
                       </Button>
                     </div>
                   )}
-                  {staleDiff && (
+                  {staleDiff && !published && (
                     <div className="feature-panel-alert" role="status">
-                      <p>{m.feature_diff_stale()}</p>
-                      {review.ready &&
+                      <p>
+                        {reconcile
+                          ? m.feature_reconcile_stale_diff()
+                          : m.feature_diff_stale()}
+                      </p>
+                      {!reconcile &&
+                        review.ready &&
                         (stage === "result" || stage === "review") && (
                           <Button
                             disabled={busy || unsettled}
@@ -568,47 +589,56 @@ export function FeaturePanels({
             {reopening}
           </>
         )}
+        {current && feature.canContinue && (
+          <Button disabled={busy} onClick={() => onResume()}>
+            <RotateCcw size={14} aria-hidden="true" />
+            {m.feature_resume_step()}
+          </Button>
+        )}
       </div>
 
-      {(viewStage === "scope" || viewStage === "architecture") && (
-        <footer className="feature-panel-footer">
-          <Button variant="ghost" onClick={onDiscuss}>
-            <MessageSquare size={14} aria-hidden="true" />
-            {m.feature_discuss()}
-          </Button>
-          {current && gate && !gate.approvedAt && (
-            <>
-              <p>
-                {gate.canApprove
-                  ? m.feature_gate_revision_note()
-                  : m.feature_gate_blocked()}
-              </p>
-              <Button
-                variant="primary"
-                disabled={busy || !gate.canApprove}
-                onClick={() => onApprove(gate)}
-              >
-                {viewStage === "scope"
-                  ? m.feature_approve_scope()
-                  : m.feature_approve_architecture()}
-                <ArrowRight size={14} aria-hidden="true" />
-              </Button>
-            </>
-          )}
-        </footer>
-      )}
-      {isResultStage(viewStage) &&
-        review &&
-        current &&
-        delivery?.status !== "published" && (
+      {(viewStage === "scope" || viewStage === "architecture") &&
+        (stage === "scope" || stage === "architecture") && (
           <footer className="feature-panel-footer">
-            <p>{m.feature_draft_scope()}</p>
+            <Button variant="ghost" onClick={onDiscuss}>
+              <MessageSquare size={14} aria-hidden="true" />
+              {m.feature_discuss()}
+            </Button>
+            {current && gate && !gate.approvedAt && (
+              <>
+                <p>
+                  {gate.canApprove
+                    ? m.feature_gate_revision_note()
+                    : m.feature_gate_blocked()}
+                </p>
+                <Button
+                  variant="primary"
+                  disabled={busy || !gate.canApprove}
+                  onClick={() => onApprove(gate)}
+                >
+                  {viewStage === "scope"
+                    ? m.feature_approve_scope()
+                    : m.feature_approve_architecture()}
+                  <ArrowRight size={14} aria-hidden="true" />
+                </Button>
+              </>
+            )}
+          </footer>
+        )}
+      {isResultStage(viewStage) &&
+        (review || reconcile) &&
+        current &&
+        !published && (
+          <footer className="feature-panel-footer">
+            {!reconcile && <p>{m.feature_draft_scope()}</p>}
             <Button
               variant="primary"
-              disabled={!publishable}
-              onClick={() => onDraft(review.snapshotId)}
+              disabled={reconcile ? busy : !publishable}
+              onClick={() =>
+                onDraft(reconcile ? delivery!.snapshotId : review!.snapshotId)
+              }
             >
-              {uncertainDelivery
+              {reconcile
                 ? m.feature_reconcile_draft()
                 : m.feature_publish_draft()}
               <ArrowRight size={14} aria-hidden="true" />

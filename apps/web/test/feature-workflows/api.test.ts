@@ -9,6 +9,7 @@ const projectId = "8bc4b4c1-f8cd-4322-973b-1126b9c93876"
 const operationId = "e3507c3a-40d5-4af7-a54e-a9d468289116"
 const revisionId = "d9b35396-1fbf-4d1d-841c-d4a8d334523a"
 const feature: api.Feature = {
+  canContinue: false,
   feature: {
     id: featureId,
     conversationId,
@@ -129,6 +130,32 @@ describe("feature API", () => {
       body,
       signal,
     })
+  })
+
+  it("continues an idle workflow without supplying an attempt to retry", async () => {
+    const post = vi.spyOn(apiClient, "POST").mockResolvedValueOnce(ok(feature))
+    const signal = new AbortController().signal
+    const body: api.FeatureResumeBody = { operationId }
+    expect(await api.resume(featureId, body, "csrf", signal)).toEqual(feature)
+    expect(post).toHaveBeenCalledWith("/api/features/{id}/resume", {
+      params: {
+        path: { id: featureId },
+        header: { "X-CSRF-Token": "csrf" },
+      },
+      body: { operationId },
+      signal,
+    })
+  })
+
+  it("preserves explicit continuation authority and rejects a missing flag", async () => {
+    vi.spyOn(apiClient, "GET")
+      .mockResolvedValueOnce(ok({ ...feature, canContinue: true }))
+      .mockResolvedValueOnce(ok(feature))
+      .mockResolvedValueOnce(ok({ ...feature, canContinue: undefined }))
+    const signal = new AbortController().signal
+    expect((await api.get(featureId, signal)).canContinue).toBe(true)
+    expect((await api.get(featureId, signal)).canContinue).toBe(false)
+    await expect(api.get(featureId, signal)).rejects.toThrow()
   })
 
   it("preserves bounded feature errors but never forwards arbitrary response text", async () => {

@@ -41,6 +41,10 @@
 .artifact-preview-actions .ui-icon-button {
   min-width: 2rem;
 }
+.artifact-preview-native-size {
+  min-width: 3rem;
+  padding-inline: 0.375rem;
+}
 .artifact-preview-actions [aria-pressed="true"] {
   background: var(--surface-hover);
   color: var(--text);
@@ -114,7 +118,8 @@
   height: min(70dvh, 47rem);
 }
 @media (max-width: 600px) {
-  .artifact-preview-actions .ui-icon-button {
+  .artifact-preview-actions .ui-icon-button,
+  .artifact-preview-actions .artifact-preview-native-size {
     min-width: 2.75rem;
     min-height: 2.75rem;
   }

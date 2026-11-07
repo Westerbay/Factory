@@ -60,16 +60,34 @@ function Source({ source, title }: { source: string; title: string }) {
   )
 }
 
+/** Numeric zoom is the SVG's natural scale; null fits the available viewport. */
+export function diagramScale(
+  image: Pick<DiagramImage, "width" | "height">,
+  viewport: { width: number; height: number },
+  zoom: number | null
+): number {
+  return (
+    zoom ??
+    Math.min(
+      1,
+      Math.max(1, viewport.width - 32) / image.width,
+      Math.max(1, viewport.height - 32) / image.height
+    )
+  )
+}
+
 function DiagramCanvas({
   image,
   title,
   labels,
   zoom,
+  onFit,
 }: {
   image: DiagramImage
   title: string
   labels: ArtifactPreviewLabels
   zoom: number | null
+  onFit: (scale: number) => void
 }) {
   const viewport = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ width: 0, height: 0 })
@@ -89,12 +107,11 @@ function DiagramCanvas({
     return () => observer.disconnect()
   }, [])
 
-  const fit = Math.min(
-    1,
-    Math.max(1, size.width - 32) / image.width,
-    Math.max(1, size.height - 32) / image.height
-  )
-  const scale = fit * (zoom ?? 1)
+  const fit = diagramScale(image, size, null)
+  useEffect(() => {
+    if (size.width > 0 && size.height > 0) onFit(fit)
+  }, [fit, onFit, size.width, size.height])
+  const scale = diagramScale(image, size, zoom)
 
   return (
     <div
@@ -123,6 +140,8 @@ function DiagramPreview({ title, source, labels, compact }: PreviewProps) {
   const [showSource, setShowSource] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [zoom, setZoom] = useState<number | null>(null)
+  const [inlineFit, setInlineFit] = useState(1)
+  const [expandedFit, setExpandedFit] = useState(1)
   const opener = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
@@ -147,10 +166,13 @@ function DiagramPreview({ title, source, labels, compact }: PreviewProps) {
   const current = render?.theme === theme ? render : null
   const image = current?.image
   const failed = current !== null && !image
+  const fit = expanded ? expandedFit : inlineFit
+  const minimumZoom = Math.min(0.25, fit)
+  const currentZoom = zoom ?? fit
 
   function changeZoom(delta: number) {
     setZoom((currentZoom) =>
-      Math.max(0.25, Math.min(3, (currentZoom ?? 1) + delta))
+      Math.max(minimumZoom, Math.min(3, (currentZoom ?? fit) + delta))
     )
   }
 
@@ -159,7 +181,7 @@ function DiagramPreview({ title, source, labels, compact }: PreviewProps) {
       <div className="artifact-preview-actions">
         <IconButton
           label={labels.zoomOut}
-          disabled={!image || (zoom !== null && zoom <= 0.25)}
+          disabled={!image || currentZoom <= minimumZoom}
           onClick={() => changeZoom(-0.25)}
         >
           <Minus size={14} aria-hidden />
@@ -169,11 +191,20 @@ function DiagramPreview({ title, source, labels, compact }: PreviewProps) {
         </span>
         <IconButton
           label={labels.zoomIn}
-          disabled={!image || (zoom !== null && zoom >= 3)}
+          disabled={!image || currentZoom >= 3}
           onClick={() => changeZoom(0.25)}
         >
           <Plus size={14} aria-hidden />
         </IconButton>
+        <Button
+          variant="ghost"
+          className="artifact-preview-native-size"
+          disabled={!image}
+          aria-pressed={zoom === 1}
+          onClick={() => setZoom(1)}
+        >
+          100%
+        </Button>
         <IconButton
           label={labels.fit}
           disabled={!image}
@@ -212,6 +243,7 @@ function DiagramPreview({ title, source, labels, compact }: PreviewProps) {
           title={title}
           labels={labels}
           zoom={zoom}
+          onFit={setInlineFit}
         />
       )}
       {!current && (
@@ -259,6 +291,7 @@ function DiagramPreview({ title, source, labels, compact }: PreviewProps) {
             title={title}
             labels={labels}
             zoom={zoom}
+            onFit={setExpandedFit}
           />
         )}
       </Modal>

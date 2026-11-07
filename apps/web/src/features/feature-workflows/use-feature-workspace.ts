@@ -86,7 +86,12 @@ export function useFeatureWorkspace({
     refetchIntervalInBackground: false,
   })
   const diff = useQuery({
-    queryKey: [...diffKey, detail.data?.review?.snapshotId ?? ""],
+    queryKey: [
+      ...diffKey,
+      detail.data?.review?.snapshotId ?? "",
+      detail.data?.delivery?.status ?? "",
+      detail.data?.delivery?.requestId ?? "",
+    ],
     queryFn: ({ signal }) => api.diff(featureId!, signal),
     enabled: enabled && Boolean(featureId && detail.data?.review),
     retry: 1,
@@ -223,10 +228,12 @@ export function useFeatureWorkspace({
             signal
           )
       ),
-    resume: (attemptId: string) =>
+    resume: (attemptId?: string) =>
       featureId &&
-      command(`resume:${featureId}:${attemptId}`, (operationId, signal) =>
-        api.resume(featureId, { operationId, attemptId }, csrf, signal)
+      command(
+        `resume:${featureId}:${attemptId ?? "step"}`,
+        (operationId, signal) =>
+          api.resume(featureId, { operationId, attemptId }, csrf, signal)
       ),
     review: (snapshotId: string) =>
       featureId &&

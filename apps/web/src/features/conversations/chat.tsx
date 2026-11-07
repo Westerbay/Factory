@@ -60,6 +60,7 @@ export type ChatLayout = {
 export type WorkflowConversation = {
   conversation: api.Conversation
   modelLabel: string
+  canSend: boolean
   start: (
     operationId: string,
     input: string,
@@ -430,6 +431,7 @@ export function Chat({
       verifiedHistory !== selected ||
       !input.trim() ||
       (!workflow && !selectedModel) ||
+      (workflow && !workflow.canSend) ||
       activeRun ||
       uncertain ||
       !available
@@ -673,6 +675,7 @@ export function Chat({
     !selected ||
     !historyReady ||
     (!workflow && !selectedModel) ||
+    Boolean(workflow && !workflow.canSend) ||
     !input.trim() ||
     busy ||
     !available ||
@@ -1030,31 +1033,35 @@ export function Chat({
               {outcome}
             </p>
           )}
-          <ChatComposer
-            input={input}
-            model={model}
-            models={models}
-            effort={effort}
-            disabled={!selected || !historyReady || !available || busy}
-            sendDisabled={submitDisabled}
-            running={Boolean(activeRun)}
-            stopDisabled={busy || !available}
-            onInput={setInput}
-            onModel={setModel}
-            onEffort={(value) =>
-              setEfforts((current) => ({ ...current, [model]: value }))
-            }
-            onSend={send}
-            onStop={stop}
-            workflow={
-              workflow
-                ? {
-                    modelLabel: workflow.modelLabel,
-                    access: m.feature_access(),
-                  }
-                : undefined
-            }
-          />
+          {workflow && !workflow.canSend ? (
+            <p className="chat-notice">{m.feature_discussion_read_only()}</p>
+          ) : (
+            <ChatComposer
+              input={input}
+              model={model}
+              models={models}
+              effort={effort}
+              disabled={!selected || !historyReady || !available || busy}
+              sendDisabled={submitDisabled}
+              running={Boolean(activeRun)}
+              stopDisabled={busy || !available}
+              onInput={setInput}
+              onModel={setModel}
+              onEffort={(value) =>
+                setEfforts((current) => ({ ...current, [model]: value }))
+              }
+              onSend={send}
+              onStop={stop}
+              workflow={
+                workflow
+                  ? {
+                      modelLabel: workflow.modelLabel,
+                      access: m.feature_access(),
+                    }
+                  : undefined
+              }
+            />
+          )}
         </div>
       </section>
     ),

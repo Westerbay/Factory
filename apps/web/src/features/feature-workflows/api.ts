@@ -111,6 +111,7 @@ const deliverySchema = z.object({
 })
 const featureSchema = z.object({
   feature: summarySchema,
+  canContinue: z.boolean(),
   scope: scopeSchema.nullish(),
   architecture: architectureSchema.nullish(),
   attempts: z.array(attemptSchema),

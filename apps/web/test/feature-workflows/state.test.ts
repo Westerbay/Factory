@@ -7,6 +7,7 @@ import type {
 } from "../../src/features/feature-workflows/api"
 import {
   canPublish,
+  canReconcileDraft,
   createOperationRegistry,
   hasActiveAttempts,
   hasUncertainAttempts,
@@ -22,6 +23,7 @@ const diff: FeatureDiff = {
   changedPaths: ["src/view.tsx"],
 }
 const feature: Feature = {
+  canContinue: false,
   feature: {
     id: "d8863923-1c56-4c20-a8b2-8acfe2fccb177",
     projectId: "f3912a9a-051d-415c-94b5-e6c32b3606b6",
@@ -121,13 +123,17 @@ describe("reviewed publication guard", () => {
     expect(canPublish(completed, diff)).toBe(true)
   })
 
-  it("permits reconciliation only for the current snapshot and never offers a second published draft", () => {
+  it("separates fresh publication from pending or completed delivery receipts", () => {
     const receipt = {
       requestId: "62f21847-4f2c-4314-be5b-747e3a8ba882",
       snapshotId,
       status: "uncertain" as const,
     }
-    expect(canPublish({ ...feature, delivery: receipt }, diff)).toBe(true)
+    for (const status of ["claimed", "uncertain"] as const) {
+      expect(
+        canPublish({ ...feature, delivery: { ...receipt, status } }, diff)
+      ).toBe(false)
+    }
     expect(
       canPublish(
         {
@@ -153,6 +159,45 @@ describe("reviewed publication guard", () => {
         { ...feature, feature: { ...feature.feature, stage: "review" } },
         diff
       )
+    ).toBe(false)
+  })
+
+  it("reconciles a durable pending request even when the local diff or review changed", () => {
+    const receipt = {
+      requestId: "62f21847-4f2c-4314-be5b-747e3a8ba882",
+      snapshotId,
+      status: "claimed" as const,
+    }
+    for (const status of ["claimed", "uncertain"] as const) {
+      const pending = { ...feature, delivery: { ...receipt, status } }
+      expect(canReconcileDraft(pending)).toBe(true)
+      for (const key of ["baseOid", "headOid", "patchDigest"] as const) {
+        expect(canPublish(pending, { ...diff, [key]: "changed" })).toBe(false)
+        expect(canReconcileDraft(pending)).toBe(true)
+      }
+      expect(
+        canReconcileDraft({
+          ...pending,
+          feature: { ...feature.feature, stage: "review" },
+          review: null,
+          attempts: [{ ...attempt, status: "uncertain" }],
+        })
+      ).toBe(true)
+    }
+    expect(canReconcileDraft(feature)).toBe(false)
+    for (const status of ["failed", "published", "publishedStale"] as const) {
+      expect(
+        canReconcileDraft({ ...feature, delivery: { ...receipt, status } })
+      ).toBe(false)
+    }
+    expect(
+      canReconcileDraft({ ...feature, delivery: { ...receipt, requestId: "" } })
+    ).toBe(false)
+    expect(
+      canReconcileDraft({
+        ...feature,
+        delivery: { ...receipt, snapshotId: "" },
+      })
     ).toBe(false)
   })
 })

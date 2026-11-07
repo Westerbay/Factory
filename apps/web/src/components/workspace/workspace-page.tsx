@@ -667,6 +667,9 @@ export function WorkspacePage() {
                 projectId: selectedFeature.feature.projectId,
                 createdAt: selectedFeature.feature.createdAt,
               },
+              canSend: ["scope", "architecture"].includes(
+                selectedFeature.feature.stage
+              ),
               modelLabel: (() => {
                 const attempt = selectedFeature.attempts
                   .slice()
