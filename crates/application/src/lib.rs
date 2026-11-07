@@ -8,3 +8,5 @@ pub mod terminals;
 pub mod conversations;
 
 pub mod projects;
+
+pub mod features;

@@ -234,13 +234,31 @@ impl TaskAttempt {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AttemptUpdate {
-    LaunchSettled { process_receipt: Option<String> },
-    ProviderThread { id: String },
-    ObservedModel { model: String },
-    Activity { summary: String },
-    Result { text: String },
-    Validated { checkpoint: Option<String> },
-    Failed { reason: String },
+    LaunchSettled {
+        process_receipt: Option<String>,
+    },
+    ProviderThread {
+        id: String,
+    },
+    ObservedModel {
+        model: String,
+    },
+    Activity {
+        summary: String,
+    },
+    Result {
+        text: String,
+    },
+    Validated {
+        checkpoint: Option<String>,
+    },
+    Failed {
+        reason: String,
+    },
+    /// Internal only: a trusted Git comparison established the last integrated head.
+    IntegrationConflict {
+        retry_base: String,
+    },
     Interrupted,
     Uncertain,
 }

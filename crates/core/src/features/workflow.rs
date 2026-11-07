@@ -747,6 +747,20 @@ impl TaskAttempt {
                 self.activity = Some(reason);
                 self.status = AttemptStatus::Failed;
             }
+            AttemptUpdate::IntegrationConflict { retry_base } => {
+                require(
+                    self.status == AttemptStatus::Running
+                        && self.launch_settled
+                        && self.claim.workspace.access == WorkspaceAccess::Write
+                        && valid_oid(&retry_base)
+                        && retry_base != self.claim.workspace.base_oid,
+                    FeatureError::Conflict,
+                )?;
+                self.checkpoint = Some(retry_base);
+                self.activity =
+                    Some("Integration conflicted. Resume from the verified branch head.".into());
+                self.status = AttemptStatus::Failed;
+            }
             AttemptUpdate::Interrupted => {
                 require(
                     self.launch_settled && self.status != AttemptStatus::Uncertain,

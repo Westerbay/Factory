@@ -440,3 +440,32 @@ fn delivery_requires_review_evidence_for_exact_base_head_and_patch() {
     .unwrap();
     assert_eq!(state.feature.stage, FeatureStage::Draft);
 }
+
+#[test]
+fn an_integration_conflict_pins_the_retry_to_the_verified_branch_head() {
+    let mut state = feature();
+    let task = task(TaskRole::Implementation, Some("src/"));
+    let revision = approve_both(&mut state, vec![task.clone()]);
+    let original = claim(&state, task, Some(revision), None);
+    let failed = launch(&mut state, original.clone());
+    let head = "b".repeat(40);
+    update(
+        &mut state,
+        failed,
+        AttemptUpdate::IntegrationConflict {
+            retry_base: head.clone(),
+        },
+    )
+    .unwrap();
+    assert_eq!(state.attempts[0].status, AttemptStatus::Failed);
+
+    let mut retry = original;
+    retry.workspace.attempt_id = Uuid::new_v4();
+    retry.retry_of = Some(failed);
+    assert_eq!(
+        apply(&mut state, FeatureCommand::ClaimAttempt(retry.clone())),
+        Err(FeatureError::Conflict)
+    );
+    retry.workspace.base_oid = head;
+    apply(&mut state, FeatureCommand::ClaimAttempt(retry)).unwrap();
+}

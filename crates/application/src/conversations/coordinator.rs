@@ -3,7 +3,7 @@ use super::{
     model_probes::{ModelProbeResult, ModelProbes},
     provider_sessions,
 };
-use crate::agent_connections::AgentConnectionService;
+use crate::{agent_connections::AgentConnectionService, features::discussion::ScopedDiscussion};
 use factory_core::{
     agent_connections::ConnectionStatus,
     conversations::{
@@ -16,6 +16,7 @@ use factory_core::{
         },
     },
     environments::{Environment, EnvironmentActor},
+    features::{FeatureError, FeatureStore},
 };
 use std::{
     collections::HashMap,
@@ -69,6 +70,7 @@ struct Launch {
     effort: Option<String>,
     input: String,
     provider_id: &'static str,
+    scoped: Option<ScopedDiscussion>,
 }
 
 #[derive(Default)]
@@ -99,6 +101,7 @@ pub struct ConversationRuntime {
     account_gates: AccountGates,
     model_probes: ModelProbes,
     inflight: Mutex<HashMap<Uuid, Uuid>>,
+    features: Option<Arc<dyn FeatureStore>>,
 }
 
 /// A real provider's account and execution capabilities are registered together.
@@ -137,6 +140,16 @@ impl ConversationRuntime {
         host: Arc<dyn ExecutionHost>,
         codec: Arc<dyn ConversationCodec>,
     ) -> Result<Arc<Self>, ConversationError> {
+        Self::with_providers_and_features(service, providers, host, codec, None)
+    }
+
+    pub fn with_providers_and_features(
+        service: Arc<ConversationService>,
+        providers: Vec<ExecutionProvider>,
+        host: Arc<dyn ExecutionHost>,
+        codec: Arc<dyn ConversationCodec>,
+        features: Option<Arc<dyn FeatureStore>>,
+    ) -> Result<Arc<Self>, ConversationError> {
         if providers.is_empty()
             || providers.len() > 16
             || !providers.iter().any(|provider| provider.id == "codex")
@@ -163,6 +176,7 @@ impl ConversationRuntime {
             account_gates: AccountGates::default(),
             model_probes: ModelProbes::default(),
             inflight: Mutex::new(HashMap::new()),
+            features,
         }))
     }
     pub async fn models(
@@ -272,6 +286,15 @@ impl ConversationRuntime {
         effort: Option<String>,
         input: String,
     ) -> Result<Run, ConversationError> {
+        if let Some(features) = &self.features
+            && features
+                .get_by_conversation(actor, id)
+                .await
+                .map_err(feature_error)?
+                .is_some()
+        {
+            return Err(ConversationError::Conflict);
+        }
         let selection =
             encode_selection(&model, effort.as_deref()).map_err(|_| ConversationError::Invalid)?;
         if let Some(run) = self
@@ -341,11 +364,141 @@ impl ConversationRuntime {
                     effort,
                     input: prompt,
                     provider_id,
+                    scoped: None,
                 })
                 .await;
         }));
         Ok(run)
     }
+    /// A feature claim has already reserved the selected account. The caller
+    /// cannot choose the model or checkout through the free-chat API.
+    pub(crate) async fn begin_scoped(
+        self: &Arc<Self>,
+        scoped: ScopedDiscussion,
+        input: String,
+    ) -> Result<Run, ConversationError> {
+        let actor = scoped.actor();
+        let id = scoped.conversation();
+        let operation = scoped.operation();
+        let provider_id = self
+            .providers
+            .iter()
+            .find(|p| p.id == scoped.provider())
+            .ok_or(ConversationError::Invalid)?
+            .id;
+        let effort = scoped.effort();
+        let model = format!("factory:{provider_id}:{}", scoped.model());
+        let selection =
+            encode_selection(&model, effort.as_deref()).map_err(|_| ConversationError::Invalid)?;
+        match self
+            .service
+            .find_turn(actor, id, operation, selection.clone(), input.clone())
+            .await
+        {
+            Ok(Some(run)) => return Ok(run),
+            Ok(None) => {}
+            Err(error) => {
+                scoped.abort_preflight().await;
+                return Err(error);
+            }
+        }
+        if !scoped.can_launch() && !scoped.failed_before_launch() {
+            return Err(ConversationError::Conflict);
+        }
+        let (env, mut run, fresh) = match self
+            .service
+            .begin_turn(actor, id, operation, selection, input)
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                scoped.abort_preflight().await;
+                return Err(error);
+            }
+        };
+        if !fresh {
+            return Ok(run);
+        }
+        if !scoped.can_launch() || !scoped.same_environment(&env) {
+            scoped.abort_preflight().await;
+            self.service.settle_run_launch(run.id, &env).await?;
+            self.service
+                .finish_turn(actor, &env, run.id, RunStatus::Failed)
+                .await?;
+            run.status = RunStatus::Failed;
+            return Ok(run);
+        }
+        self.inflight.lock().await.insert(run.id, actor.user_id);
+        let owner = self.clone();
+        let current = run.clone();
+        self.host.spawn(Box::pin(async move {
+            owner
+                .launch(Launch {
+                    actor,
+                    env,
+                    run: current,
+                    thread: None,
+                    previous: None,
+                    model,
+                    effort,
+                    input: String::new(),
+                    provider_id,
+                    scoped: Some(scoped),
+                })
+                .await;
+        }));
+        Ok(run)
+    }
+
+    pub(crate) fn owns_feature_store(&self, store: &Arc<dyn FeatureStore>) -> bool {
+        self.features
+            .as_ref()
+            .is_some_and(|owned| Arc::ptr_eq(owned, store))
+    }
+
+    pub(crate) async fn lock_feature_account(
+        &self,
+        actor: EnvironmentActor,
+    ) -> Result<tokio::sync::OwnedMutexGuard<()>, ConversationError> {
+        Ok(self
+            .account_gates
+            .for_user(actor.user_id)?
+            .lock_owned()
+            .await)
+    }
+
+    pub(crate) async fn require_connected(
+        &self,
+        actor: EnvironmentActor,
+        id: &str,
+    ) -> Result<(), ConversationError> {
+        let provider = self
+            .providers
+            .iter()
+            .find(|p| p.id == id)
+            .ok_or(ConversationError::Invalid)?;
+        if provider
+            .accounts
+            .read(actor)
+            .await
+            .map_err(|_| ConversationError::Unavailable)?
+            .status
+            == ConnectionStatus::Connected
+        {
+            Ok(())
+        } else {
+            Err(ConversationError::Conflict)
+        }
+    }
+
+    pub(crate) fn spawn(&self, task: Task) {
+        self.host.spawn(task);
+    }
+
+    pub(crate) fn ticker(&self) -> Box<dyn ExecutionTicker> {
+        self.host.ticker()
+    }
+
     async fn launch(self: Arc<Self>, launch: Launch) {
         let Launch {
             actor,
@@ -357,6 +510,7 @@ impl ConversationRuntime {
             effort,
             input,
             provider_id,
+            mut scoped,
         } = launch;
         let Some(provider) = self
             .providers
@@ -372,6 +526,9 @@ impl ConversationRuntime {
                 project
             }
             _ => {
+                if let Some(scoped) = &scoped {
+                    scoped.abort_preflight().await;
+                }
                 if self.service.settle_run_launch(run.id, &env).await.is_ok() {
                     let _ = self
                         .service
@@ -382,18 +539,22 @@ impl ConversationRuntime {
                 return;
             }
         };
-        let session = match provider
-            .runtime
-            .open_project(
-                &env,
-                project.as_ref(),
-                thread.as_deref(),
-                &model,
-                effort.as_deref(),
-                &input,
-            )
-            .await
-        {
+        let opened = if let Some(scoped) = &scoped {
+            scoped.open().await
+        } else {
+            provider
+                .runtime
+                .open_project(
+                    &env,
+                    project.as_ref(),
+                    thread.as_deref(),
+                    &model,
+                    effort.as_deref(),
+                    &input,
+                )
+                .await
+        };
+        let session = match opened {
             Ok(s) => s,
             Err(error) => {
                 let safe_preflight = matches!(
@@ -421,7 +582,11 @@ impl ConversationRuntime {
         };
         if self.service.settle_run_launch(run.id, &env).await.is_err() {
             // Leave the durable reservation fenced; never begin a turn.
-            drop(session);
+            let mut session = session;
+            let _ = session.control.interrupt().await;
+            if let Some(scoped) = &mut scoped {
+                let _ = scoped.finish(RunStatus::Uncertain).await;
+            }
             self.inflight.lock().await.remove(&run.id);
             return;
         }
@@ -441,8 +606,16 @@ impl ConversationRuntime {
             let next = match check.next(output.as_mut()).await {
                 Some(value) => value,
                 None => {
-                    if self.service.current_environment(actor).await.is_err() {
+                    let current = self.service.current_environment(actor).await;
+                    if current.as_ref().is_err()
+                        || scoped.as_ref().is_some_and(|s| {
+                            !current.as_ref().is_ok_and(|env| s.same_environment(env))
+                        })
+                    {
                         let _ = active.control.lock().await.interrupt().await;
+                        if let Some(scoped) = &mut scoped {
+                            let _ = scoped.finish(RunStatus::Uncertain).await;
+                        }
                         break;
                     }
                     continue;
@@ -461,6 +634,23 @@ impl ConversationRuntime {
             );
             let mut text = None;
             let result = match event {
+                ExecutionEvent::ThreadReady { provider_thread } if scoped.is_some() => {
+                    let discussion = scoped.as_ref().expect("checked scoped discussion");
+                    match discussion.thread(provider_thread).await {
+                        Ok(()) => active
+                            .control
+                            .lock()
+                            .await
+                            .begin_turn()
+                            .await
+                            .map_err(|_| ConversationError::Unavailable),
+                        Err(error) => Err(error),
+                    }
+                }
+                ExecutionEvent::ModelObserved { model } => match &scoped {
+                    Some(discussion) => discussion.model_observed(model).await,
+                    None => Ok(()),
+                },
                 ExecutionEvent::ThreadReady { provider_thread } => match provider_sessions::merge(
                     previous.as_deref(),
                     provider_id,
@@ -482,18 +672,33 @@ impl ConversationRuntime {
                     },
                     Err(e) => Err(e),
                 },
-                ExecutionEvent::Delta { text: t, .. } => {
-                    text = Some(t);
+                ExecutionEvent::Delta {
+                    provider_item,
+                    text: delta,
+                } => {
+                    text = match &mut scoped {
+                        Some(discussion) => discussion.delta(provider_item, delta),
+                        None => Some(delta),
+                    };
                     Ok(())
                 }
                 ExecutionEvent::Message {
                     provider_item,
-                    text: t,
-                } => self
-                    .service
-                    .append_assistant(actor, &env, run.id, &provider_item, &t)
-                    .await
-                    .map(|_| ()),
+                    text: message,
+                } => {
+                    let visible = match &mut scoped {
+                        Some(discussion) => discussion.message(&provider_item, message),
+                        None => Some(message),
+                    };
+                    if let Some(visible) = visible {
+                        self.service
+                            .append_assistant(actor, &env, run.id, &provider_item, &visible)
+                            .await
+                            .map(|_| ())
+                    } else {
+                        Ok(())
+                    }
+                }
                 ExecutionEvent::Questions {
                     request_id,
                     questions,
@@ -537,29 +742,32 @@ impl ConversationRuntime {
                         None => Err(ConversationError::Conflict),
                     }
                 }
-                ExecutionEvent::Completed => {
-                    self.service
-                        .finish_turn(actor, &env, run.id, RunStatus::Completed)
-                        .await
-                }
-                ExecutionEvent::Failed => {
-                    self.service
-                        .finish_turn(actor, &env, run.id, RunStatus::Failed)
-                        .await
-                }
-                ExecutionEvent::Interrupted => {
-                    self.service
-                        .finish_turn(actor, &env, run.id, RunStatus::Interrupted)
-                        .await
-                }
-                ExecutionEvent::Uncertain => {
-                    self.service
-                        .finish_turn(actor, &env, run.id, RunStatus::Uncertain)
-                        .await
+                terminal @ (ExecutionEvent::Completed
+                | ExecutionEvent::Failed
+                | ExecutionEvent::Interrupted
+                | ExecutionEvent::Uncertain) => {
+                    let status = match terminal {
+                        ExecutionEvent::Completed => RunStatus::Completed,
+                        ExecutionEvent::Failed => RunStatus::Failed,
+                        ExecutionEvent::Interrupted => RunStatus::Interrupted,
+                        ExecutionEvent::Uncertain => RunStatus::Uncertain,
+                        _ => unreachable!("non-terminal events are handled above"),
+                    };
+                    let scoped_result = match &mut scoped {
+                        Some(scoped) => scoped.finish(status).await,
+                        None => Ok(()),
+                    };
+                    match scoped_result {
+                        Ok(()) => self.service.finish_turn(actor, &env, run.id, status).await,
+                        Err(error) => Err(error),
+                    }
                 }
             };
             if result.is_err() {
                 let _ = active.control.lock().await.interrupt().await;
+                if let Some(scoped) = &mut scoped {
+                    let _ = scoped.finish(RunStatus::Uncertain).await;
+                }
                 let _ = self
                     .service
                     .finish_turn(actor, &env, run.id, RunStatus::Uncertain)
@@ -743,6 +951,16 @@ impl ConversationRuntime {
             return Err(ConversationError::Unavailable);
         }
         Ok(())
+    }
+}
+
+fn feature_error(error: FeatureError) -> ConversationError {
+    match error {
+        FeatureError::Unauthorized => ConversationError::Unauthorized,
+        FeatureError::NotFound => ConversationError::NotFound,
+        FeatureError::Invalid => ConversationError::Invalid,
+        FeatureError::Unavailable => ConversationError::Unavailable,
+        _ => ConversationError::Conflict,
     }
 }
 
