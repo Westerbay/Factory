@@ -613,10 +613,49 @@ def verify_feature_group(group, project_id, operation):
             raise Problem('conflict') from error
 
 
+@contextlib.contextmanager
+def project_workspace_lock(factory, project_id, mode):
+    locks = directory(factory, 'project-locks', create=True)
+    try:
+        lock = os.open(project_id, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+                       0o600, dir_fd=locks)
+        try:
+            info = os.fstat(lock)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+                raise Problem('conflict')
+            fcntl.flock(lock, mode | fcntl.LOCK_NB)
+            yield
+        finally:
+            os.close(lock)
+    finally:
+        os.close(locks)
+
+
+def require_project_not_deleting(factory, project_id):
+    try:
+        deletions = directory(factory, 'deletions', private=True)
+    except FileNotFoundError:
+        return
+    try:
+        try:
+            record = directory(deletions, project_id, private=True)
+        except FileNotFoundError:
+            return
+        os.close(record)
+        raise Problem('conflict')
+    finally:
+        os.close(deletions)
+
+
 def delete(factory, documents, project_id, operation, name):
+    project_id = parse_uuid(project_id)
+    with project_workspace_lock(factory, project_id, fcntl.LOCK_EX):
+        return delete_project_workspace(factory, documents, project_id, operation, name)
+
+
+def delete_project_workspace(factory, documents, project_id, operation, name):
     # Isolate the exact marked directory before recursive deletion. A receipt lives
     # independently of the DB so a retry cannot delete a newly created namesake.
-    project_id = parse_uuid(project_id)
     operation = parse_uuid(operation)
     name = project_name(name)
     expected = marker(project_id, operation)
@@ -774,7 +813,8 @@ def delete(factory, documents, project_id, operation, name):
 
 
 FEATURE_FIELDS = {
-    'feature_initialize': set(),
+    'feature_stage_initialization': {'candidate'},
+    'feature_confirm_initialization': {'candidate', 'expected_branch'},
     'feature_prepare': {'attempt', 'base_oid', 'writable'},
     'feature_checkpoint': {'attempt', 'base_oid', 'writable', 'scope'},
     'feature_integrate': {'attempt', 'base_oid', 'writable', 'scope', 'expected_head'},
@@ -783,7 +823,7 @@ FEATURE_FIELDS = {
     'feature_refresh': {'base_oid', 'head_oid', 'patch_digest'},
     'feature_push': {'base_oid', 'head_oid', 'patch_digest'},
 }
-FEATURE_ID_FIELDS = {'op', 'project', 'operation', 'directory', 'repository', 'feature'}
+FEATURE_ID_FIELDS = {'op', 'project', 'operation', 'directory', 'repository', 'repository_id', 'feature'}
 FEATURE_REQUEST_LIMIT = 192 * 1024
 FEATURE_RESPONSE_LIMIT = 1024 * 1024
 FEATURE_PATCH_LIMIT = 128 * 1024
@@ -791,7 +831,7 @@ FEATURE_PATH_LIMIT = 32 * 1024
 PRE_PUSH = b"""#!/bin/sh
 IFS=' ' read -r local_ref local_oid remote_ref remote_oid || exit 1
 [ "$local_oid" = "$FACTORY_PUSH_OID" ] && [ "$remote_ref" = "$FACTORY_PUSH_REF" ] || exit 1
-case "$remote_oid" in ''|*[!0]*) exit 1;; esac
+[ "$remote_oid" = "$FACTORY_PUSH_OLD_OID" ] || exit 1
 if IFS= read -r extra; then exit 1; fi
 """
 
@@ -818,7 +858,7 @@ def feature_path(value, directory_scope=False):
 
 
 def git_command(arguments, *, descriptors=(), repository_fd=None, extra_env=None, output_limit=8192,
-                timeout=30, check=True, input_data=None):
+                timeout=30, check=True, input_data=None, output_error='unavailable'):
     """Run only controller-selected Git commands with bounded, private output."""
     env = {
         'PATH': '/usr/bin:/bin',
@@ -859,7 +899,7 @@ def git_command(arguments, *, descriptors=(), repository_fd=None, extra_env=None
                         break
                     output.extend(chunk)
                     if len(output) > output_limit:
-                        raise Problem('unavailable')
+                        raise Problem(output_error)
             status = process.wait(timeout=max(0, deadline - time.monotonic()))
         except (Problem, OSError, subprocess.TimeoutExpired) as error:
             try:
@@ -926,6 +966,30 @@ def current_remote(remote, branch):
     return {'base_oid': values.get(refs[0]), 'head_oid': values.get(refs[1])}
 
 
+def managed_feature_head(record):
+    try:
+        receipt = read_json_file(record, 'managed-head', private=True)
+    except FileNotFoundError:
+        return None
+    if not isinstance(receipt, dict) or set(receipt) != {'oid'}:
+        raise Problem('conflict')
+    return oid(receipt['oid'])
+
+
+def record_managed_feature_head(record, head):
+    staged = '.managed-head-' + str(uuid.uuid4())
+    create_file(record, staged, json.dumps({'oid': head}).encode())
+    os.replace(staged, 'managed-head', src_dir_fd=record, dst_dir_fd=record)
+    os.fsync(record)
+
+
+def observed_feature_remote(record, remote, branch):
+    refs = current_remote(remote, branch)
+    managed = managed_feature_head(record)
+    refs['managed_head_oid'] = managed if managed == refs['head_oid'] else None
+    return refs
+
+
 def record_branch(record, remote, feature, initialize):
     head = 'refs/heads/factory/features/' + feature
     try:
@@ -972,6 +1036,80 @@ def initialize_repository(repo, remote, branch):
     updates = (f"start\nupdate refs/factory/base {fetched} {current_base or absent}\n"
                f"update {branch['head_ref']} {fetched} {absent}\nprepare\ncommit\n").encode()
     git_command(['update-ref', '--stdin'], repository_fd=repo, input_data=updates)
+
+
+def initialized_branch(repo, remote, feature, initialize=False):
+    branch = record_branch(repo, remote, feature, initialize)
+    if initialize:
+        initialize_repository(repo, remote, branch)
+    base = get_ref(repo, 'refs/factory/base')
+    if base is None:
+        raise Problem('conflict')
+    return {**branch, 'base_oid': base}
+
+
+def verified_branch(repo, feature, repository_id):
+    try:
+        receipt = read_json_file(repo, 'factory-verified', private=True)
+    except FileNotFoundError as error:
+        raise Problem('conflict') from error
+    if receipt != {'repository_id': repository_id}:
+        raise Problem('conflict')
+    branch = initialized_branch(repo, None, feature)
+    head = get_ref(repo, branch['head_ref'])
+    if head is None or not is_ancestor(repo, branch['base_oid'], head):
+        raise Problem('conflict')
+    return branch
+
+
+def stage_initialization(record, feature, remote, repository_id, candidate_id):
+    try:
+        old = directory(record, 'candidate', private=True)
+    except FileNotFoundError:
+        pass
+    else:
+        try:
+            previous = read_json_file(old, 'factory-candidate', private=True)
+            if (not isinstance(previous, dict) or set(previous) != {'candidate', 'repository_id'}
+                    or previous['repository_id'] != repository_id
+                    or parse_uuid(previous['candidate']) == candidate_id
+                    or not shutil.rmtree.avoids_symlink_attacks):
+                raise Problem('conflict')
+        finally:
+            os.close(old)
+        # A crash during removal must not leave a partially erased candidate
+        # in the path needed for a later, independently verified fetch.
+        discarded = '.discarded-' + previous['candidate']
+        rename_atomic(record, 'candidate', record, discarded)
+        os.fsync(record)
+        shutil.rmtree(discarded, dir_fd=record)
+    receipt = {'candidate': candidate_id, 'repository_id': repository_id}
+    candidate = feature_record(record, 'candidate', 'factory-candidate', receipt, True)
+    try:
+        return initialized_branch(candidate, remote, feature, initialize=True)
+    finally:
+        os.close(candidate)
+
+
+def confirm_initialization(record, feature, repository_id, candidate_id, expected):
+    receipt = {'candidate': candidate_id, 'repository_id': repository_id}
+    candidate = feature_record(record, 'candidate', 'factory-candidate', receipt, False)
+    try:
+        branch = initialized_branch(candidate, None, feature)
+        if branch != expected or get_ref(candidate, branch['head_ref']) != branch['base_oid']:
+            raise Problem('conflict')
+        proof = {'repository_id': repository_id}
+        try:
+            create_file(candidate, 'factory-verified', json.dumps(proof).encode())
+        except FileExistsError:
+            if read_json_file(candidate, 'factory-verified', private=True) != proof:
+                raise Problem('conflict')
+        os.fsync(candidate)
+        rename_atomic(record, 'candidate', record, 'integration.git')
+        os.fsync(record)
+        return branch
+    finally:
+        os.close(candidate)
 
 
 def feature_record(parent, name, receipt, expected, create):
@@ -1062,15 +1200,22 @@ def checked_checkout(slot, ready):
 
 def changed_feature_paths(repo, base, head, scope=None):
     output = git_command(['diff', '--raw', '--no-renames', '--no-ext-diff', '-z', base, head, '--'],
-                         repository_fd=repo, output_limit=FEATURE_PATH_LIMIT)[1]
+                         repository_fd=repo, output_limit=FEATURE_PATH_LIMIT,
+                         output_error='diff_unrenderable')[1]
     if not output:
         return []
-    fields = output.decode('utf-8').split('\0')
+    try:
+        fields = output.decode('utf-8').split('\0')
+    except UnicodeError as error:
+        raise Problem('diff_unrenderable') from error
     if fields.pop() != '' or len(fields) % 2:
         raise Problem('unavailable')
     paths = []
     for details, path in zip(fields[::2], fields[1::2]):
-        path = feature_path(path)
+        try:
+            path = feature_path(path)
+        except Problem as error:
+            raise Problem('diff_unrenderable') from error
         if scope is not None:
             modes = details.removeprefix(':').split(' ', 2)[:2]
             if '160000' in modes or not any(item == path or item.endswith('/') and path.startswith(item)
@@ -1146,6 +1291,9 @@ def integrate_checkpoint(repo, branch, attempt, base, expected, scope):
         tree = oid(output.decode('ascii').strip())
         changed_feature_paths(repo, head, tree, scope)
         result = feature_commit(repo, tree, (head, checkpoint), 'Integrate Factory task ' + attempt)
+    # A validated task is useful only if the next task and review can read
+    # the complete cumulative diff. Keep the old head when this cannot fit.
+    snapshot_between(repo, branch['base_oid'], result)
     git_command(['update-ref', branch['head_ref'], result, head], repository_fd=repo)
     return result
 
@@ -1161,9 +1309,17 @@ def feature_snapshot(repo, branch):
 def snapshot_between(repo, base, head):
     patch = git_command(['diff', '--binary', '--full-index', '--no-color', '--no-renames',
                          '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/',
-                         base, head, '--'], repository_fd=repo, output_limit=FEATURE_PATCH_LIMIT)[1]
-    return {'git': {'base_oid': base, 'head_oid': head, 'patch_digest': hashlib.sha256(patch).hexdigest()},
-            'patch': patch.decode('utf-8'), 'changed_paths': changed_feature_paths(repo, base, head)}
+                         base, head, '--'], repository_fd=repo, output_limit=FEATURE_PATCH_LIMIT,
+                        output_error='diff_unrenderable')[1]
+    try:
+        decoded = patch.decode('utf-8')
+    except UnicodeError as error:
+        raise Problem('diff_unrenderable') from error
+    diff = {'git': {'base_oid': base, 'head_oid': head, 'patch_digest': hashlib.sha256(patch).hexdigest()},
+            'patch': decoded, 'changed_paths': changed_feature_paths(repo, base, head)}
+    if len(json.dumps({'ok': True, 'result': diff}).encode()) > FEATURE_RESPONSE_LIMIT:
+        raise Problem('diff_unrenderable')
+    return diff
 
 
 def is_ancestor(repo, earlier, later):
@@ -1173,7 +1329,7 @@ def is_ancestor(repo, earlier, later):
     return status == 0
 
 
-def refresh_feature_base(repo, remote, branch, expected):
+def refresh_feature_base(record, repo, remote, branch, expected):
     current = feature_snapshot(repo, branch)
     if current['git'] != expected:
         raise Problem('conflict')
@@ -1181,7 +1337,10 @@ def refresh_feature_base(repo, remote, branch, expected):
     old_base, old_head = expected['base_oid'], expected['head_oid']
     if before['base_oid'] == old_base:
         return current
-    if before['head_oid'] is not None or before['base_oid'] is None:
+    if before['base_oid'] is None:
+        raise Problem('conflict')
+    if before['head_oid'] is not None and (before['head_oid'] != managed_feature_head(record)
+                                          or not is_ancestor(repo, before['head_oid'], old_head)):
         raise Problem('conflict')
     git_command(['fetch', '--no-tags', '--no-recurse-submodules', '--', remote, branch['base_ref']],
                 repository_fd=repo, timeout=240)
@@ -1215,34 +1374,44 @@ def publish_feature(record, repo, remote, branch, expected):
     if before['base_oid'] != expected['base_oid']:
         raise Problem('conflict')
     head, ref = expected['head_oid'], branch['head_ref']
-    if before['head_oid'] == head:
-        return 'pushed'
-    if before['head_oid'] is not None:
-        raise Problem('conflict')
+    previous = before['head_oid']
+    if previous is not None:
+        if previous != managed_feature_head(record):
+            raise Problem('conflict')
+        if previous == head:
+            return 'pushed'
+        if not is_ancestor(repo, previous, head):
+            raise Problem('conflict')
     hooks = directory(record, 'push-hooks', create=True, private=True)
     try:
+        hook_name = 'pre-push-' + str(uuid.uuid4())
+        create_file(hooks, hook_name, PRE_PUSH)
+        hook = regular(hooks, hook_name, 0o077)
         try:
-            create_file(hooks, 'pre-push', PRE_PUSH)
-        except FileExistsError:
-            pass
-        hook = regular(hooks, 'pre-push', 0o077)
-        try:
-            if os.read(hook, len(PRE_PUSH) + 1) != PRE_PUSH:
-                raise Problem('conflict')
             os.fchmod(hook, 0o500)
         finally:
             os.close(hook)
-        status, _ = git_command(['-c', 'core.hooksPath=' + fd_path(hooks),
-                                 'push', '--no-follow-tags', '--', remote, head + ':' + ref],
-                                repository_fd=repo, descriptors=(hooks,), timeout=120, check=False,
-                                extra_env={'FACTORY_PUSH_OID': head, 'FACTORY_PUSH_REF': ref})
+        os.replace(hook_name, 'pre-push', src_dir_fd=hooks, dst_dir_fd=hooks)
+        os.fsync(hooks)
+        status, output = git_command(['-c', 'core.hooksPath=' + fd_path(hooks),
+                                      'push', '--porcelain', '--no-follow-tags', '--', remote, head + ':' + ref],
+                                     repository_fd=repo, descriptors=(hooks,), timeout=120, check=False,
+                                     extra_env={'FACTORY_PUSH_OID': head, 'FACTORY_PUSH_REF': ref,
+                                                'FACTORY_PUSH_OLD_OID': previous or '0' * len(head)})
     finally:
         os.close(hooks)
+    flag = ' ' if previous is not None else '*'
+    evidence = f'{flag}\t{head}:{ref}\t'.encode()
+    confirmed = status == 0 and any(line.startswith(evidence) for line in output.splitlines())
+    if confirmed:
+        record_managed_feature_head(record, head)
     after = current_remote(remote, branch)
-    if after['base_oid'] != expected['base_oid'] or after['head_oid'] not in (None, head):
+    if after['base_oid'] != expected['base_oid'] or after['head_oid'] not in (previous, head):
         raise Problem('conflict')
-    if after['head_oid'] == head:
+    if confirmed and after['head_oid'] == head:
         return 'pushed'
+    if after['head_oid'] == head:
+        raise Problem('uncertain')
     raise Problem('unavailable' if status != 0 else 'uncertain')
 
 
@@ -1254,22 +1423,28 @@ def execute_feature(request, root):
     operation = parse_uuid(request['operation'])
     feature = parse_uuid(request['feature'])
     remote = repository(request['repository'])
-    initializing = op == 'feature_initialize'
+    repository_id = request['repository_id']
+    if type(repository_id) is not int or repository_id <= 0:
+        raise Problem('invalid')
+    staging = op == 'feature_stage_initialization'
+    confirming = op == 'feature_confirm_initialization'
     with contextlib.ExitStack() as stack:
         def opened(parent, name, create=False, private=True):
             fd = directory(parent, name, create=create, private=private)
             stack.callback(os.close, fd)
             return fd
 
+        factory = opened(root, '.factory', staging)
+        stack.enter_context(project_workspace_lock(factory, project, fcntl.LOCK_SH))
+        require_project_not_deleting(factory, project)
         documents = opened(root, 'Documents', private=False)
         if inspect_project(documents, project, operation, request['directory']) != 'ready':
             raise Problem('conflict')
-        factory = opened(root, '.factory', initializing)
-        features = opened(factory, 'features', initializing)
-        group = opened(features, project, initializing)
+        features = opened(factory, 'features', staging)
+        group = opened(features, project, staging)
         expected = {'version': 1, 'project': project, 'operation': operation, 'feature': feature,
                     'repository': request['repository']}
-        record = feature_record(group, feature, 'feature', expected, initializing)
+        record = feature_record(group, feature, 'feature', expected, staging)
         stack.callback(os.close, record)
         lock = os.open('lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
                        0o600, dir_fd=record)
@@ -1278,22 +1453,27 @@ def execute_feature(request, root):
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
             raise Problem('conflict')
         fcntl.flock(lock, fcntl.LOCK_EX)
-        branch = record_branch(record, remote, feature, initializing)
-        repo = opened(record, 'integration.git', initializing)
-        if initializing:
-            initialize_repository(repo, remote, branch)
-        base = get_ref(repo, 'refs/factory/base')
-        if base is None:
+        try:
+            repo = opened(record, 'integration.git')
+        except FileNotFoundError:
+            if staging:
+                return stage_initialization(record, feature, remote, repository_id, parse_uuid(request['candidate']))
+            if confirming:
+                return confirm_initialization(record, feature, repository_id, parse_uuid(request['candidate']),
+                                              request['expected_branch'])
             raise Problem('conflict')
-        branch['base_oid'] = base
-        if initializing:
+        branch = verified_branch(repo, feature, repository_id)
+        if staging or confirming:
+            parse_uuid(request['candidate'])
+            if confirming and request['expected_branch'] != branch:
+                raise Problem('conflict')
             return branch
         if op == 'feature_snapshot':
             return feature_snapshot(repo, branch)
         if op == 'feature_remote':
-            return current_remote(remote, branch)
+            return observed_feature_remote(record, remote, branch)
         if op == 'feature_refresh':
-            return refresh_feature_base(repo, remote, branch,
+            return refresh_feature_base(record, repo, remote, branch,
                                         {key: request[key] for key in ('base_oid', 'head_oid', 'patch_digest')})
         if op == 'feature_push':
             return publish_feature(record, repo, remote, branch,

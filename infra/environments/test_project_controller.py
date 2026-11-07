@@ -3,6 +3,7 @@
 import importlib.util
 import base64
 import contextlib
+from concurrent.futures import ThreadPoolExecutor
 import fcntl
 import io
 import json
@@ -11,6 +12,7 @@ from pathlib import Path
 import stat
 import subprocess
 import tempfile
+import threading
 import unittest
 import uuid
 from unittest.mock import patch
@@ -55,8 +57,14 @@ class ProjectControllerTests(unittest.TestCase):
 
     def feature(self, origin, feature, op, **fields):
         with patch.object(controller, 'repository', return_value=str(origin)):
-            return self.execute('feature_' + op, project=self.project, operation=self.operation,
-                                directory='repo', repository='owner/repo', feature=feature, **fields)
+            common = dict(project=self.project, operation=self.operation, directory='repo',
+                          repository='owner/repo', repository_id=123, feature=feature)
+            if op == 'initialize':
+                candidate = str(uuid.uuid4())
+                branch = self.execute('feature_stage_initialization', **common, candidate=candidate)
+                return self.execute('feature_confirm_initialization', **common, candidate=candidate,
+                                    expected_branch=branch)
+            return self.execute('feature_' + op, **common, **fields)
 
     def feature_checkout(self, feature, attempt):
         return self.home / '.factory/features' / self.project / feature / 'attempts' / attempt / 'checkout'
@@ -609,7 +617,8 @@ class ProjectControllerTests(unittest.TestCase):
         self.assertEqual(snapshot['git']['patch_digest'], controller.hashlib.sha256(snapshot['patch'].encode()).hexdigest())
         self.assertEqual(member_file.read_text(), 'uncommitted member change\n')
         self.assertEqual((origin / 'file.txt').read_text(), 'sample\n')
-        self.assertEqual(self.feature(origin, feature, 'remote'), {'base_oid': base, 'head_oid': None})
+        self.assertEqual(self.feature(origin, feature, 'remote'),
+                         {'base_oid': base, 'head_oid': None, 'managed_head_oid': None})
 
         review = str(uuid.uuid4())
         self.feature(origin, feature, 'prepare', attempt=review, base_oid=head, writable=False)
@@ -656,6 +665,144 @@ class ProjectControllerTests(unittest.TestCase):
         self.assertEqual(result['changed_paths'], [])
         self.assertFalse((self.home / 'Documents/repo/upstream.txt').exists())
 
+    def test_rejected_feature_candidate_never_becomes_usable_after_the_original_origin_returns(self):
+        origin = self.origin()
+        self.clone(origin)
+        original_head = subprocess.check_output(['git', '-C', str(origin), 'rev-parse', 'HEAD'], text=True).strip()
+        saved_origin = origin.with_name('original')
+        origin.rename(saved_origin)
+        replacement = self.origin()
+        (replacement / 'file.txt').write_text('replacement repository\n')
+        subprocess.run(['git', '-C', str(replacement), 'commit', '-qam', 'replacement'], check=True)
+
+        feature = str(uuid.uuid4())
+        rejected_id = str(uuid.uuid4())
+        rejected = self.feature(replacement, feature, 'stage_initialization', candidate=rejected_id)
+        self.assertNotEqual(rejected['base_oid'], original_head)
+        with self.assertRaises(controller.Problem):
+            self.feature(replacement, feature, 'snapshot')
+        with self.assertRaises(controller.Problem):
+            self.feature(replacement, feature, 'prepare', attempt=str(uuid.uuid4()),
+                         base_oid=rejected['base_oid'], writable=False)
+
+        replacement.rename(replacement.with_name('rejected-origin'))
+        saved_origin.rename(origin)
+        candidate = str(uuid.uuid4())
+        branch = self.feature(origin, feature, 'stage_initialization', candidate=candidate)
+        self.assertEqual(branch['base_oid'], original_head)
+        with self.assertRaises(controller.Problem):
+            self.feature(origin, feature, 'confirm_initialization', candidate=rejected_id, expected_branch=rejected)
+        self.feature(origin, feature, 'confirm_initialization', candidate=candidate, expected_branch=branch)
+        attempt = str(uuid.uuid4())
+        self.feature(origin, feature, 'prepare', attempt=attempt, base_oid=original_head, writable=False)
+        self.assertEqual((self.feature_checkout(feature, attempt) / 'file.txt').read_text(), 'sample\n')
+
+    def test_initialization_and_deletion_are_fenced_in_both_orders(self):
+        origin = self.origin()
+        self.clone(origin)
+        feature = str(uuid.uuid4())
+        entered, proceed = threading.Event(), threading.Event()
+        inspect = controller.inspect_project
+        request = dict(project=self.project, operation=self.operation, directory='repo')
+        group = self.home / '.factory/features' / self.project
+
+        def pause_initialization(*args):
+            result = inspect(*args)
+            entered.set()
+            self.assertTrue(proceed.wait(5))
+            return result
+
+        with patch.object(controller, 'inspect_project', side_effect=pause_initialization):
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                stage = executor.submit(self.feature, origin, feature, 'stage_initialization',
+                                        candidate=str(uuid.uuid4()))
+                try:
+                    self.assertTrue(entered.wait(5))
+                    with self.assertRaises(BlockingIOError):
+                        self.execute('delete', **request)
+                finally:
+                    proceed.set()
+                stage.result(timeout=5)
+        self.assertTrue(group.is_dir())
+
+        entered.clear()
+        proceed.clear()
+        verify = controller.verify_feature_group
+
+        def pause_deletion(*args):
+            result = verify(*args)
+            entered.set()
+            self.assertTrue(proceed.wait(5))
+            return result
+
+        with patch.object(controller, 'verify_feature_group', side_effect=pause_deletion):
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                deletion = executor.submit(self.execute, 'delete', **request)
+                try:
+                    self.assertTrue(entered.wait(5))
+                    with self.assertRaises(BlockingIOError):
+                        self.feature(origin, feature, 'stage_initialization', candidate=str(uuid.uuid4()))
+                finally:
+                    proceed.set()
+                self.assertEqual(deletion.result(timeout=5), 'deleted')
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'stage_initialization', candidate=str(uuid.uuid4()))
+        self.assertEqual(caught.exception.code, 'conflict')
+        self.assertFalse(group.exists())
+
+    def test_delete_receipt_blocks_new_candidates_after_interrupted_quarantine(self):
+        origin = self.origin()
+        self.clone(origin)
+        feature = str(uuid.uuid4())
+        self.feature(origin, feature, 'initialize')
+        rename = controller.rename_atomic
+
+        def interrupt_checkout(source_dir, source, destination_dir, destination, flags=1):
+            if destination == 'checkout':
+                raise OSError('interrupted before removing the project marker')
+            return rename(source_dir, source, destination_dir, destination, flags)
+
+        request = dict(project=self.project, operation=self.operation, directory='repo')
+        with patch.object(controller, 'rename_atomic', side_effect=interrupt_checkout):
+            with self.assertRaises(OSError):
+                self.execute('delete', **request)
+        self.assertEqual(self.inspect(), 'ready')
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, str(uuid.uuid4()), 'stage_initialization', candidate=str(uuid.uuid4()))
+        self.assertEqual(caught.exception.code, 'conflict')
+        self.assertEqual(self.execute('delete', **request), 'deleted')
+
+    def test_integration_keeps_previous_result_when_cumulative_diff_cannot_be_displayed(self):
+        origin = self.origin()
+        self.clone(origin)
+        for limit, size, first_path, second_path, content in (
+            ('FEATURE_PATCH_LIMIT', 1000, 'first.txt', 'second.txt', 'x' * 650 + '\n'),
+            ('FEATURE_PATH_LIMIT', 160, 'first-' + 'x' * 85, 'second-' + 'x' * 85, 'short\n'),
+        ):
+            with self.subTest(limit=limit):
+                # Each edit fits on its own, but the integrated result would
+                # block every subsequent snapshot read.
+                feature = str(uuid.uuid4())
+                base = self.feature(origin, feature, 'initialize')['base_oid']
+                current = base
+                with patch.object(controller, limit, size):
+                    for path in (first_path, second_path):
+                        fields = {'attempt': str(uuid.uuid4()), 'base_oid': base, 'writable': True}
+                        self.feature(origin, feature, 'prepare', **fields)
+                        (self.feature_checkout(feature, fields['attempt']) / path).write_text(content)
+                        self.feature(origin, feature, 'checkpoint', scope=[path], **fields)
+                        if path == first_path:
+                            current = self.feature(origin, feature, 'integrate', expected_head=current,
+                                                   scope=[path], **fields)
+                        else:
+                            with self.assertRaises(controller.Problem) as caught:
+                                self.feature(origin, feature, 'integrate', expected_head=current,
+                                             scope=[path], **fields)
+                            self.assertEqual(caught.exception.code, 'diff_unrenderable')
+                    snapshot = self.feature(origin, feature, 'snapshot')
+                    self.assertEqual(snapshot['git']['head_oid'], current)
+                    self.assertEqual(snapshot['changed_paths'], [first_path])
+
     def ready_feature_snapshot(self, origin, feature):
         branch = self.feature(origin, feature, 'initialize')
         base = branch['base_oid']
@@ -697,6 +844,50 @@ class ProjectControllerTests(unittest.TestCase):
         self.assertEqual(inspect(str(origin), branch)['head_oid'], head)
         self.assertEqual(self.feature(origin, feature, 'push', **snapshot), 'pushed')
 
+    def test_feature_recovers_its_proven_remote_head_when_base_moves_after_push(self):
+        origin = self.origin()
+        self.clone(origin)
+        feature = str(uuid.uuid4())
+        branch, result = self.ready_feature_snapshot(origin, feature)
+        approved = result['git']
+        remote_git = ['git', '-C', str(origin)]
+        inspect = controller.current_remote
+        queries = 0
+
+        def advance_after_push(remote, refs):
+            nonlocal queries
+            queries += 1
+            if queries == 2:
+                (origin / 'upstream.txt').write_text('base advanced during publication\n')
+                subprocess.run([*remote_git, 'add', 'upstream.txt'], check=True)
+                subprocess.run([*remote_git, 'commit', '-qm', 'base advance after push'], check=True)
+            return inspect(remote, refs)
+
+        with patch.object(controller, 'current_remote', side_effect=advance_after_push):
+            with self.assertRaises(controller.Problem) as caught:
+                self.feature(origin, feature, 'push', **approved)
+        self.assertEqual(caught.exception.code, 'conflict')
+        observed = self.feature(origin, feature, 'remote')
+        self.assertEqual(observed['head_oid'], approved['head_oid'])
+        self.assertEqual(observed['managed_head_oid'], approved['head_oid'])
+        self.assertNotEqual(observed['base_oid'], approved['base_oid'])
+
+        updated = self.feature(origin, feature, 'refresh', **approved)['git']
+        self.assertEqual(updated['base_oid'], observed['base_oid'])
+        self.assertNotEqual(updated['head_oid'], approved['head_oid'])
+        with self.assertRaises(controller.Problem):
+            self.feature(origin, feature, 'push', **approved)
+        self.assertEqual(self.feature(origin, feature, 'push', **updated), 'pushed')
+        self.assertEqual(self.feature(origin, feature, 'remote'), {
+            'base_oid': updated['base_oid'], 'head_oid': updated['head_oid'],
+            'managed_head_oid': updated['head_oid'],
+        })
+        subprocess.run([*remote_git, 'update-ref', branch['head_ref'], approved['head_oid']], check=True)
+        self.assertIsNone(self.feature(origin, feature, 'remote')['managed_head_oid'])
+        with self.assertRaises(controller.Problem):
+            self.feature(origin, feature, 'push', **updated)
+        self.assertEqual(inspect(str(origin), branch)['head_oid'], approved['head_oid'])
+
     def test_feature_refreshes_only_owned_refs_and_requires_review_of_the_new_snapshot(self):
         origin = self.origin()
         self.clone(origin)
@@ -719,7 +910,8 @@ class ProjectControllerTests(unittest.TestCase):
         self.assertIn('+ready for review', refreshed['patch'])
         self.assertFalse((self.home / 'Documents/repo/upstream.txt').exists())
         self.assertEqual(self.feature(origin, feature, 'initialize'), {**branch, 'base_oid': new_base})
-        self.assertEqual(self.feature(origin, feature, 'remote'), {'base_oid': new_base, 'head_oid': None})
+        self.assertEqual(self.feature(origin, feature, 'remote'),
+                         {'base_oid': new_base, 'head_oid': None, 'managed_head_oid': None})
         with self.assertRaises(controller.Problem) as caught:
             self.feature(origin, feature, 'push', **result['git'])
         self.assertEqual(caught.exception.code, 'conflict')

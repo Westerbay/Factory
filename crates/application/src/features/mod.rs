@@ -184,13 +184,17 @@ impl FeatureCoordinator {
         feature_id: Uuid,
     ) -> Result<FeatureBranch, FeatureError> {
         self.repository_verifier.verify(actor, env, project).await?;
+        let candidate = Uuid::new_v4();
         let branch = self
             .workspaces
-            .initialize(env, project, feature_id)
+            .prepare_initialization(env, project, feature_id, candidate)
             .await
             .map_err(workspace_error)?;
         self.repository_verifier.verify(actor, env, project).await?;
-        Ok(branch)
+        self.workspaces
+            .confirm_initialization(env, project, feature_id, candidate, &branch)
+            .await
+            .map_err(workspace_error)
     }
 
     pub(super) async fn context(
@@ -264,7 +268,9 @@ fn conversation_error(error: ConversationError) -> FeatureError {
 
 fn workspace_error(error: WorkspaceError) -> FeatureError {
     match error {
-        WorkspaceError::Invalid | WorkspaceError::ScopeViolation => FeatureError::Invalid,
+        WorkspaceError::Invalid
+        | WorkspaceError::ScopeViolation
+        | WorkspaceError::DiffUnrenderable => FeatureError::Invalid,
         WorkspaceError::Conflict => FeatureError::Conflict,
         WorkspaceError::Unavailable => FeatureError::Unavailable,
         WorkspaceError::Uncertain => FeatureError::ExecutionUncertain,

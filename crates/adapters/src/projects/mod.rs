@@ -33,6 +33,8 @@ pub enum ProjectRuntimeError {
     Conflict,
     #[error("Task changes exceed the approved scope")]
     ScopeViolation,
+    #[error("The combined diff cannot be displayed")]
+    DiffUnrenderable,
     #[error("Project operation is unavailable")]
     Unavailable,
     #[error("Project operation may still be running")]
@@ -374,6 +376,7 @@ fn parse_response(bytes: &[u8]) -> Result<Value, ProjectRuntimeError> {
         Some("invalid") => ProjectRuntimeError::Invalid,
         Some("conflict") => ProjectRuntimeError::Conflict,
         Some("scope_violation") => ProjectRuntimeError::ScopeViolation,
+        Some("diff_unrenderable") => ProjectRuntimeError::DiffUnrenderable,
         Some("unavailable") => ProjectRuntimeError::Unavailable,
         _ => ProjectRuntimeError::Uncertain,
     })

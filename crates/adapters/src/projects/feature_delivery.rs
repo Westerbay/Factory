@@ -21,6 +21,7 @@ impl FeatureDeliveryRuntime for DockerProjectRuntime {
         Ok(FeatureRemoteRefs {
             base_oid: remote.base_oid,
             head_oid: remote.head_oid,
+            managed_head_oid: remote.managed_head_oid,
         })
     }
 

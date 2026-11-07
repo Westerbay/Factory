@@ -22,6 +22,7 @@ const RESPONSE_LIMIT: usize = 1024 * 1024;
 pub struct FeatureRemote {
     pub base_oid: Option<String>,
     pub head_oid: Option<String>,
+    pub managed_head_oid: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -50,25 +51,46 @@ struct SnapshotIdentity {
 
 #[async_trait]
 impl FeatureWorkspaceRuntime for DockerProjectRuntime {
-    async fn initialize(
+    async fn prepare_initialization(
         &self,
         env: &Environment,
         project: &Project,
         feature_id: Uuid,
+        candidate_id: Uuid,
     ) -> Result<FeatureBranch, WorkspaceError> {
-        let request = feature_request(env, project, feature_id, "feature_initialize")?;
-        let reply: BranchReply = self.run_feature(env, request).await?;
-        if !valid_oid(&reply.base_oid)
-            || !valid_branch(&reply.base_ref)
-            || reply.head_ref != format!("refs/heads/factory/features/{feature_id}")
-        {
-            return Err(WorkspaceError::Uncertain);
+        let mut request =
+            feature_request(env, project, feature_id, "feature_stage_initialization")?;
+        if candidate_id.is_nil() {
+            return Err(WorkspaceError::Invalid);
         }
-        Ok(FeatureBranch {
-            base_ref: reply.base_ref,
-            base_oid: reply.base_oid,
-            head_ref: reply.head_ref,
-        })
+        request["candidate"] = json!(candidate_id);
+        parse_branch(self.run_feature(env, request).await?, feature_id)
+    }
+
+    async fn confirm_initialization(
+        &self,
+        env: &Environment,
+        project: &Project,
+        feature_id: Uuid,
+        candidate_id: Uuid,
+        expected: &FeatureBranch,
+    ) -> Result<FeatureBranch, WorkspaceError> {
+        let mut request =
+            feature_request(env, project, feature_id, "feature_confirm_initialization")?;
+        if candidate_id.is_nil() {
+            return Err(WorkspaceError::Invalid);
+        }
+        request["candidate"] = json!(candidate_id);
+        request["expected_branch"] = json!({
+            "base_ref": expected.base_ref,
+            "base_oid": expected.base_oid,
+            "head_ref": expected.head_ref,
+        });
+        let branch = parse_branch(self.run_feature(env, request).await?, feature_id)?;
+        if &branch != expected {
+            return Err(WorkspaceError::Conflict);
+        }
+        Ok(branch)
     }
 
     async fn prepare_task(
@@ -133,6 +155,10 @@ impl DockerProjectRuntime {
         let reply: FeatureRemote = self.run_feature(env, request).await?;
         if !reply.base_oid.as_deref().is_none_or(valid_oid)
             || !reply.head_oid.as_deref().is_none_or(valid_oid)
+            || reply
+                .managed_head_oid
+                .as_ref()
+                .is_some_and(|oid| reply.head_oid.as_ref() != Some(oid))
         {
             return Err(WorkspaceError::Uncertain);
         }
@@ -191,6 +217,7 @@ fn feature_request(
         "operation": project.operation_id,
         "directory": project.directory,
         "repository": project.cloned_full_name,
+        "repository_id": project.repository_id,
         "feature": feature_id,
     }))
 }
@@ -249,6 +276,20 @@ fn parse_snapshot(reply: SnapshotReply) -> Result<WorkspaceDiff, WorkspaceError>
     })
 }
 
+fn parse_branch(reply: BranchReply, feature_id: Uuid) -> Result<FeatureBranch, WorkspaceError> {
+    if !valid_oid(&reply.base_oid)
+        || !valid_branch(&reply.base_ref)
+        || reply.head_ref != format!("refs/heads/factory/features/{feature_id}")
+    {
+        return Err(WorkspaceError::Uncertain);
+    }
+    Ok(FeatureBranch {
+        base_ref: reply.base_ref,
+        base_oid: reply.base_oid,
+        head_ref: reply.head_ref,
+    })
+}
+
 fn expect_reply(reply: String, expected: &str) -> Result<(), WorkspaceError> {
     if reply == expected {
         Ok(())
@@ -298,6 +339,7 @@ impl From<ProjectRuntimeError> for WorkspaceError {
             ProjectRuntimeError::Invalid => Self::Invalid,
             ProjectRuntimeError::Conflict => Self::Conflict,
             ProjectRuntimeError::ScopeViolation => Self::ScopeViolation,
+            ProjectRuntimeError::DiffUnrenderable => Self::DiffUnrenderable,
             ProjectRuntimeError::Unavailable => Self::Unavailable,
             ProjectRuntimeError::Uncertain => Self::Uncertain,
         }
