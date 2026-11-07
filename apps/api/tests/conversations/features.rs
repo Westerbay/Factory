@@ -1101,15 +1101,44 @@ async fn exercise_feature_workflow(interruption: Option<WorkflowInterruption>) {
         };
         assert_eq!(stranded["feature"]["stage"], expected_stage);
         assert_eq!(stranded["canContinue"], true);
+        let continue_request = || json!({"operationId": Uuid::new_v4()}).to_string();
+        if let Some(id) = interrupted_check_id {
+            let pending = json!([
+                {"command": "check-alpha", "status": "recoveryNeeded", "passed": null}
+            ]);
+            assert_eq!(stranded["review"]["integratedChecks"], pending);
+            let receipt = workers
+                .observed
+                .lock()
+                .unwrap()
+                .check_receipts
+                .remove(&id)
+                .unwrap();
+            let uncertain = f
+                .call("POST", &format!("{path}/resume"), 0, &continue_request())
+                .await;
+            assert_eq!(uncertain.status(), StatusCode::CONFLICT);
+            assert_eq!(
+                body_json(uncertain).await["code"],
+                "feature-execution-uncertain"
+            );
+            let still_pending = body_json(f.call("GET", &path, 0, "").await).await;
+            assert_eq!(still_pending["review"]["integratedChecks"], pending);
+            assert_eq!(still_pending["canContinue"], true);
+            let mut observed = workers.observed.lock().unwrap();
+            assert!(observed.reconciled_checks.is_empty());
+            assert!(observed.check_receipts.insert(id, receipt).is_none());
+        }
         let resumed = f
-            .call(
-                "POST",
-                &format!("{path}/resume"),
-                0,
-                &json!({"operationId": Uuid::new_v4()}).to_string(),
-            )
+            .call("POST", &format!("{path}/resume"), 0, &continue_request())
             .await;
         assert_eq!(resumed.status(), StatusCode::OK);
+        if interrupted_check_id.is_some() {
+            assert_eq!(
+                body_json(resumed).await["review"]["integratedChecks"],
+                json!([{"command": "check-alpha", "status": "finished", "passed": true}])
+            );
+        }
         until(|| store.inner.lock().unwrap().feature.stage == FeatureStage::Result).await;
 
         let state = store.inner.lock().unwrap();
@@ -1159,6 +1188,7 @@ async fn exercise_feature_workflow(interruption: Option<WorkflowInterruption>) {
     let detail = body_json(f.call("GET", &path, 0, "").await).await;
     let diff = body_json(f.call("GET", &format!("{path}/diff"), 0, "").await).await;
     assert_eq!(detail["review"]["ready"], true);
+    assert_eq!(detail["review"]["integratedChecks"], json!([]));
     assert_eq!(detail["review"]["patchDigest"], diff["patchDigest"]);
     assert_eq!(diff["patchDigest"], test_digest(3));
     assert_eq!(

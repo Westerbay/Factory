@@ -554,6 +554,25 @@
         "required": ["role", "summary", "blocking"],
         "type": "object"
       },
+      "FeatureIntegratedCheckStatusView": {
+        "enum": ["preparing", "running", "recoveryNeeded", "finished"],
+        "type": "string"
+      },
+      "FeatureIntegratedCheckView": {
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "passed": {
+            "type": ["boolean", "null"]
+          },
+          "status": {
+            "$ref": "#/components/schemas/FeatureIntegratedCheckStatusView"
+          }
+        },
+        "required": ["command", "status"],
+        "type": "object"
+      },
       "FeatureLocale": {
         "enum": ["en", "fr"],
         "type": "string"
@@ -617,6 +636,12 @@
           "headOid": {
             "type": "string"
           },
+          "integratedChecks": {
+            "items": {
+              "$ref": "#/components/schemas/FeatureIntegratedCheckView"
+            },
+            "type": "array"
+          },
           "patchDigest": {
             "type": "string"
           },
@@ -636,6 +661,7 @@
           "ready",
           "findings",
           "checks",
+          "integratedChecks",
           "canExtend"
         ],
         "type": "object"

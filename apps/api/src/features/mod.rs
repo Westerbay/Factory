@@ -199,10 +199,12 @@ async fn get(
     let id = feature_id(path).map_err(error)?;
     let coordinator = &state.runtime().map_err(error)?.coordinator;
     let result = coordinator.get(actor, id).await.map_err(error)?;
-    let can_continue = coordinator.can_continue(&result);
+    let driver_active = coordinator.is_driving(id);
+    let can_continue = !driver_active && coordinator.can_continue(&result);
     Ok(Json(FeatureView::from_state(
         result,
         can_continue,
+        driver_active,
         |attempt_id| coordinator.is_attempt_locally_active(id, attempt_id),
     )))
 }

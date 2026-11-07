@@ -1061,6 +1061,17 @@ export interface components {
       summary: string
     }
     /** @enum {string} */
+    FeatureIntegratedCheckStatusView:
+      | "preparing"
+      | "running"
+      | "recoveryNeeded"
+      | "finished"
+    FeatureIntegratedCheckView: {
+      command: string
+      passed?: boolean | null
+      status: components["schemas"]["FeatureIntegratedCheckStatusView"]
+    }
+    /** @enum {string} */
     FeatureLocale: "en" | "fr"
     FeaturePageView: {
       items: components["schemas"]["FeatureSummaryView"][]
@@ -1084,6 +1095,7 @@ export interface components {
       checks: components["schemas"]["FeatureCheckView"][]
       findings: components["schemas"]["FeatureFindingView"][]
       headOid: string
+      integratedChecks: components["schemas"]["FeatureIntegratedCheckView"][]
       patchDigest: string
       ready: boolean
       /** Format: uuid */

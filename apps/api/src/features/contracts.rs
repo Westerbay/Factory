@@ -1,6 +1,7 @@
 use factory_core::features::{
     AttemptStatus, DeliveryReceipt, DeliveryStatus, Feature, FeaturePage, FeatureStage,
-    FeatureState, GateContent, ReviewVerdict, RevisionKey, TaskAttempt, TaskRole, WorkspaceDiff,
+    FeatureState, GateContent, IntegratedCheck, IntegratedCheckStatus, ReviewVerdict, RevisionKey,
+    TaskAttempt, TaskRole, WorkspaceDiff,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -295,6 +296,39 @@ pub struct FeatureCheckView {
 
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+pub enum FeatureIntegratedCheckStatusView {
+    Preparing,
+    Running,
+    RecoveryNeeded,
+    Finished,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FeatureIntegratedCheckView {
+    pub command: String,
+    pub status: FeatureIntegratedCheckStatusView,
+    pub passed: Option<bool>,
+}
+
+impl FeatureIntegratedCheckView {
+    fn new(check: &IntegratedCheck, driver_active: bool) -> Self {
+        use FeatureIntegratedCheckStatusView as View;
+        let (status, passed) = match check.status {
+            IntegratedCheckStatus::Preparing => (View::Preparing, None),
+            IntegratedCheckStatus::Launching if driver_active => (View::Running, None),
+            IntegratedCheckStatus::Launching => (View::RecoveryNeeded, None),
+            IntegratedCheckStatus::Finished { passed } => (View::Finished, Some(passed)),
+        };
+        Self {
+            command: check.command.clone(),
+            status,
+            passed,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct FeatureReviewView {
     pub snapshot_id: Uuid,
     pub base_oid: String,
@@ -303,6 +337,7 @@ pub struct FeatureReviewView {
     pub ready: bool,
     pub findings: Vec<FeatureFindingView>,
     pub checks: Vec<FeatureCheckView>,
+    pub integrated_checks: Vec<FeatureIntegratedCheckView>,
     pub can_extend: bool,
 }
 
@@ -384,7 +419,7 @@ pub struct FeatureView {
 
 impl From<FeatureState> for FeatureView {
     fn from(state: FeatureState) -> Self {
-        Self::from_state(state, false, |_| true)
+        Self::from_state(state, false, false, |_| true)
     }
 }
 
@@ -392,6 +427,7 @@ impl FeatureView {
     pub(super) fn from_state(
         mut state: FeatureState,
         can_continue: bool,
+        driver_active: bool,
         is_locally_active: impl Fn(Uuid) -> bool,
     ) -> Self {
         let stage = state.feature.stage;
@@ -480,6 +516,15 @@ impl FeatureView {
                         passed: check.passed,
                     })
                     .collect(),
+                integrated_checks: if review.verdict.is_none() {
+                    review
+                        .integrated_checks
+                        .iter()
+                        .map(|check| FeatureIntegratedCheckView::new(check, driver_active))
+                        .collect()
+                } else {
+                    Vec::new()
+                },
                 can_extend: idle
                     && matches!(stage, FeatureStage::Review | FeatureStage::Execution)
                     && review.verdict.is_some()
