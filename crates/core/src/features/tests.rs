@@ -469,3 +469,56 @@ fn an_integration_conflict_pins_the_retry_to_the_verified_branch_head() {
     retry.workspace.base_oid = head;
     apply(&mut state, FeatureCommand::ClaimAttempt(retry)).unwrap();
 }
+
+#[test]
+fn retained_work_pins_retry_without_validating_or_erasing_the_failure() {
+    let mut state = feature();
+    let task = task(TaskRole::Implementation, Some("src/"));
+    let revision = approve_both(&mut state, vec![task.clone()]);
+    let original = claim(&state, task, Some(revision), None);
+    let attempt_id = launch(&mut state, original.clone());
+    let save = FeatureCommand::SaveRetryBase {
+        attempt_id,
+        base_oid: "c".repeat(40),
+    };
+    assert_eq!(apply(&mut state, save.clone()), Err(FeatureError::Conflict));
+    let reason = "Verification failed";
+    update(
+        &mut state,
+        attempt_id,
+        AttemptUpdate::Failed {
+            reason: reason.into(),
+        },
+    )
+    .unwrap();
+
+    apply(&mut state, save).unwrap();
+    let prior = &state.attempts[0];
+    assert_eq!(prior.status, AttemptStatus::Failed);
+    assert_eq!(prior.activity.as_deref(), Some(reason));
+    assert_eq!(
+        prior.checkpoint.as_deref(),
+        Some("cccccccccccccccccccccccccccccccccccccccc")
+    );
+    assert_eq!(
+        apply(
+            &mut state,
+            FeatureCommand::SaveRetryBase {
+                attempt_id,
+                base_oid: "d".repeat(40),
+            }
+        ),
+        Err(FeatureError::Conflict)
+    );
+
+    let mut retry = original;
+    retry.workspace.attempt_id = Uuid::new_v4();
+    retry.retry_of = Some(attempt_id);
+    assert_eq!(
+        apply(&mut state, FeatureCommand::ClaimAttempt(retry.clone())),
+        Err(FeatureError::Conflict)
+    );
+    retry.workspace.base_oid = "c".repeat(40);
+    apply(&mut state, FeatureCommand::ClaimAttempt(retry)).unwrap();
+    assert_eq!(state.attempts[1].status, AttemptStatus::Starting);
+}

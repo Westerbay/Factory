@@ -67,6 +67,10 @@ impl FeatureState {
                 attempt_id,
                 launch_generation,
             } => self.recover_attempt(attempt_id, launch_generation, generation),
+            FeatureCommand::SaveRetryBase {
+                attempt_id,
+                base_oid,
+            } => self.save_retry_base(attempt_id, generation, base_oid),
             FeatureCommand::BeginReview {
                 snapshot,
                 required_roles,
@@ -443,6 +447,39 @@ impl FeatureState {
         // using the runtime receipt. A stopped container alone is insufficient.
         require(attempt.launch_settled, FeatureError::ExecutionUncertain)?;
         attempt.status = AttemptStatus::Interrupted;
+        Ok(())
+    }
+
+    fn save_retry_base(
+        &mut self,
+        id: Uuid,
+        generation: i64,
+        base_oid: String,
+    ) -> Result<(), FeatureError> {
+        require(valid_oid(&base_oid), FeatureError::Invalid)?;
+        let index = self
+            .attempts
+            .iter()
+            .position(|attempt| attempt.id() == id)
+            .ok_or(FeatureError::Conflict)?;
+        let attempt = &self.attempts[index];
+        require(
+            generation >= attempt.generation
+                && attempt.launch_settled
+                && matches!(
+                    attempt.status,
+                    AttemptStatus::Failed | AttemptStatus::Interrupted
+                )
+                && attempt.claim.workspace.access == WorkspaceAccess::Write
+                && attempt.checkpoint.is_none()
+                && base_oid != attempt.claim.workspace.base_oid
+                && self
+                    .latest_attempt(&attempt.claim)
+                    .is_some_and(|latest| latest.id() == id),
+            FeatureError::Conflict,
+        )?;
+        self.validate_assignment(&attempt.claim)?;
+        self.attempts[index].checkpoint = Some(base_oid);
         Ok(())
     }
 

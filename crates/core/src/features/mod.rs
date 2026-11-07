@@ -341,6 +341,11 @@ pub enum FeatureCommand {
         attempt_id: Uuid,
         launch_generation: i64,
     },
+    /// The workspace controller verified this retained writer checkout's scope.
+    SaveRetryBase {
+        attempt_id: Uuid,
+        base_oid: String,
+    },
     BeginReview {
         snapshot: ReviewSnapshot,
         required_roles: Vec<TaskRole>,

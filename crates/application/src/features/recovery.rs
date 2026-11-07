@@ -10,6 +10,7 @@ use factory_core::{
     environments::EnvironmentActor,
     features::{
         AttemptStatus, FeatureCommand, FeatureError, FeatureState, TaskObservation, TaskRole,
+        WorkspaceAccess, WorkspaceError,
     },
 };
 use std::sync::Arc;
@@ -44,7 +45,8 @@ impl FeatureCoordinator {
             .find(|attempt| attempt.id() == attempt_id)
             .ok_or(FeatureError::NotFound)?
             .clone();
-        if prior.status.holds_reservation() {
+        let reconciled = prior.status.holds_reservation();
+        if reconciled {
             if self.is_attempt_locally_active(id, attempt_id)
                 || self.runtime.reconcile_task(&env, &project, &prior).await
                     != Ok(TaskObservation::Stopped)
@@ -98,6 +100,44 @@ impl FeatureCoordinator {
         ) || !prior.launch_settled
         {
             return Err(FeatureError::Conflict);
+        }
+
+        if prior.claim.workspace.access == WorkspaceAccess::Write && prior.checkpoint.is_none() {
+            if !reconciled
+                && (self.is_attempt_locally_active(id, attempt_id)
+                    || self.runtime.reconcile_task(&env, &project, &prior).await
+                        != Ok(TaskObservation::Stopped))
+            {
+                return Err(FeatureError::ExecutionUncertain);
+            }
+            match self.workspaces.checkpoint(&env, &project, &prior).await {
+                Ok(base_oid) if base_oid != prior.claim.workspace.base_oid => {
+                    state = self
+                        .store
+                        .apply(
+                            actor,
+                            &env,
+                            id,
+                            self.codec.derived_id(attempt_id, "retained-retry-base"),
+                            FeatureCommand::SaveRetryBase {
+                                attempt_id,
+                                base_oid,
+                            },
+                        )
+                        .await?
+                        .state;
+                    prior = state
+                        .attempts
+                        .iter()
+                        .find(|attempt| attempt.id() == attempt_id)
+                        .ok_or(FeatureError::Conflict)?
+                        .clone();
+                }
+                Err(WorkspaceError::Uncertain) => return Err(FeatureError::ExecutionUncertain),
+                // Missing or unsafe retained work stays in its original checkout.
+                // Retry the approved base while leaving the failure intact.
+                _ => {}
+            }
         }
 
         let claim = &prior.claim;
