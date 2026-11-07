@@ -403,6 +403,40 @@ impl FeatureCoordinator {
         outcome
     }
 
+    /// Resume reports unavailable launch proof to the caller before restarting
+    /// the driver. A finished worker can be recorded without running it again.
+    pub(super) async fn reconcile_pending_review_check(
+        &self,
+        actor: EnvironmentActor,
+        env: &Environment,
+        project: &Project,
+        feature: &FeatureState,
+    ) -> Result<bool, FeatureError> {
+        let Some(round) = feature
+            .review()
+            .filter(|_| feature.feature.stage == FeatureStage::Review)
+        else {
+            return Ok(false);
+        };
+        let Some(check) = round
+            .integrated_checks
+            .iter()
+            .find(|check| check.status == IntegratedCheckStatus::Launching)
+        else {
+            return Ok(false);
+        };
+        self.integrated_check(
+            actor,
+            env,
+            project,
+            feature.feature.id,
+            round,
+            &check.command,
+        )
+        .await?;
+        Ok(true)
+    }
+
     async fn verify_integrated(
         &self,
         actor: EnvironmentActor,

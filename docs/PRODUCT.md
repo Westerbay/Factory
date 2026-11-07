@@ -181,16 +181,19 @@ proposal and UML. A new product decision invalidates dependent architecture appr
 Members can explicitly reopen the affected gate to revise the work. Task and delivery
 plans remain internal. Feature attempts show their role, assignment, actual model when
 the provider reports it, activity and status. Resume checks that the prior execution
-stopped and retains the verified work.
+stopped and retains the verified work. If an integrated check blocks the review,
+the result panel identifies the command and whether Factory can confirm its outcome.
 
 The integration is reviewed against one Git snapshot. Relevant specialists join the
 general review. Corrections use separate writers and a fresh review when needed.
 Decisive failed or missing checks and blocking findings prevent publication. Members
 can inspect the result and explicitly request one draft pull request. If its target
 branch changes, Factory prepares the current comparison for another review. When the
-comparison is temporarily unavailable, the member can retry it. An ambiguous
-publication is reconciled before retrying. Findings and checks are displayed only for
-the exact diff they cover.
+comparison is temporarily unavailable, the member can retry it. The member can check
+an ambiguous publication again. When Factory confirms no draft exists and cannot
+attribute the exact remote branch to its own push, it closes the request without
+changing the remote branch. Findings and checks identify the snapshot they cover,
+including a previous result that is still being corrected.
 
 ## Provider conversations
 

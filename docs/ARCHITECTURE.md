@@ -423,10 +423,13 @@ launch with its exact worker before proceeding, and reconstructs a required corr
 that was not yet claimed. The [delivery service](../crates/application/src/features/delivery.rs)
 compares the approved review with current local and remote refs, verifies the stable
 repository identity and reconciles the draft receipt before retrying. If the remote
-base moves after a push, Factory refreshes the comparison and requires review again.
-Only a prior confirmed Factory push permits a later fast-forward of that remote
-feature ref, and the trusted push checks the exact old ref. Ordinary Chat retains
-its own provider execution policy.
+base moves after a push, Factory stages the comparison in a private repository,
+rechecks the stable repository identity, and confirms the exact local and remote
+refs before promoting it for review. Only a prior confirmed Factory push permits
+a later fast-forward of that remote feature ref, and the trusted push checks the
+exact old ref. Explicit reconciliation can settle an unproved exact push when
+guarded reads confirm the same remote refs and no matching draft. Ordinary Chat
+retains its own provider execution policy.
 
 ## PWA and static hosting
 

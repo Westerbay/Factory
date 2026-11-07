@@ -685,13 +685,19 @@ impl FeatureCoordinator {
         if operation_id.is_nil() {
             return Err(FeatureError::Invalid);
         }
-        let (_, _, state) = self.context(actor, feature).await?;
+        let (env, project, mut state) = self.context(actor, feature).await?;
         if !can_drive(&state) {
             return Ok(state);
         }
         let Ok(guard) = self.driver(feature)?.try_lock_owned() else {
             return Ok(state);
         };
+        if self
+            .reconcile_pending_review_check(actor, &env, &project, &state)
+            .await?
+        {
+            state = self.store.get(actor, feature).await?;
+        }
         let owner = self.clone();
         self.conversations.spawn(Box::pin(async move {
             let _drive = guard;
@@ -701,13 +707,16 @@ impl FeatureCoordinator {
     }
 
     pub fn can_continue(&self, state: &FeatureState) -> bool {
-        can_drive(state)
-            && self.drivers.lock().is_ok_and(|drivers| {
-                drivers
-                    .get(&state.feature.id)
-                    .and_then(std::sync::Weak::upgrade)
-                    .is_none_or(|driver| driver.try_lock().is_ok())
-            })
+        can_drive(state) && !self.is_driving(state.feature.id)
+    }
+
+    pub fn is_driving(&self, feature: Uuid) -> bool {
+        self.drivers.lock().map_or(true, |drivers| {
+            drivers
+                .get(&feature)
+                .and_then(std::sync::Weak::upgrade)
+                .is_some_and(|driver| driver.try_lock().is_err())
+        })
     }
 
     pub(super) fn schedule(self: &Arc<Self>, actor: EnvironmentActor, feature: Uuid) {
