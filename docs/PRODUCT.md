@@ -186,8 +186,11 @@ stopped and retains the verified work.
 The integration is reviewed against one Git snapshot. Relevant specialists join the
 general review. Corrections use separate writers and a fresh review when needed.
 Decisive failed or missing checks and blocking findings prevent publication. Members
-can inspect the result and explicitly request one draft pull request. A changed diff
-must be reviewed again. An ambiguous publication is reconciled before retrying.
+can inspect the result and explicitly request one draft pull request. If its target
+branch changes, Factory prepares the current comparison for another review. When the
+comparison is temporarily unavailable, the member can retry it. An ambiguous
+publication is reconciled before retrying. Findings and checks are displayed only for
+the exact diff they cover.
 
 ## Provider conversations
 

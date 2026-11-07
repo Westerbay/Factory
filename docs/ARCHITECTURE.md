@@ -401,7 +401,8 @@ state. The provider [codec](../crates/adapters/src/feature_codec.rs) translates 
 agent replies and computes revision fingerprints outside application policy.
 
 The [project controller](../infra/environments/project-controller.py) uses owned Git
-checkouts and validates a writer's paths before integration. The [feature execution adapter](../crates/adapters/src/environments/feature_execution/mod.rs)
+checkouts and validates a writer's paths and the cumulative diff before moving the
+integration branch. The [feature execution adapter](../crates/adapters/src/environments/feature_execution/mod.rs)
 mounts only the verified attempt checkout, read-only for reviewers. Disposable workers
 have no direct network, GitHub SSH key or member home mount. Provider work uses a fixed
 relay to the selected provider and an access-only credential seed. The selected worker
@@ -410,15 +411,22 @@ must be renewed before retrying. Verification commands have neither provider cre
 nor network. The main environment owns the trusted Git push; the GitHub token stays on
 the server.
 
-Factory verifies the stable GitHub repository identity before and after initializing
-an owned checkout. A project deletion also quarantines and removes its verified feature
-workspaces. Worker checkouts share the member's Docker volume, whose capacity depends
-on the host storage configuration.
+Factory verifies the stable GitHub repository identity before fetching and again
+before promoting a provisional repository into the owned feature checkout. Initial
+workspace creation and project deletion share a project lock. Deletion quarantines
+and removes owned feature workspaces. Worker checkouts share the member's Docker
+volume, whose capacity depends on the host storage configuration.
 
-Reviewers and trusted checks use the same committed snapshot. The [delivery service](../crates/application/src/features/delivery.rs)
+Reviewers and trusted checks use the same committed snapshot. Integrated checks record
+their launch and outcome on that snapshot. A resumed review reconciles an outstanding
+launch with its exact worker before proceeding, and reconstructs a required correction
+that was not yet claimed. The [delivery service](../crates/application/src/features/delivery.rs)
 compares the approved review with current local and remote refs, verifies the stable
-repository identity and reconciles the draft receipt before retrying. Ordinary Chat
-retains its own provider execution policy.
+repository identity and reconciles the draft receipt before retrying. If the remote
+base moves after a push, Factory refreshes the comparison and requires review again.
+Only a prior confirmed Factory push permits a later fast-forward of that remote
+feature ref, and the trusted push checks the exact old ref. Ordinary Chat retains
+its own provider execution policy.
 
 ## PWA and static hosting
 
