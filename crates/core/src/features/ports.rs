@@ -172,3 +172,38 @@ pub trait FeatureWorkspaceRuntime: Send + Sync {
         feature_id: Uuid,
     ) -> Result<WorkspaceDiff, WorkspaceError>;
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FeatureRemoteRefs {
+    pub base_oid: Option<String>,
+    pub head_oid: Option<String>,
+}
+
+/// Trusted Git operations used only by authenticated draft delivery.
+#[async_trait]
+pub trait FeatureDeliveryRuntime: Send + Sync {
+    async fn remote(
+        &self,
+        environment: &Environment,
+        project: &Project,
+        feature_id: Uuid,
+    ) -> Result<FeatureRemoteRefs, WorkspaceError>;
+
+    /// Verify the snapshot and create the destination ref without force.
+    async fn push_reviewed(
+        &self,
+        environment: &Environment,
+        project: &Project,
+        feature_id: Uuid,
+        snapshot: &GitSnapshot,
+    ) -> Result<(), WorkspaceError>;
+
+    /// Integrate a verified base advance locally and produce a new review diff.
+    async fn refresh_base(
+        &self,
+        environment: &Environment,
+        project: &Project,
+        feature_id: Uuid,
+        expected: &GitSnapshot,
+    ) -> Result<WorkspaceDiff, WorkspaceError>;
+}

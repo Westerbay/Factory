@@ -2,6 +2,7 @@
 //!
 //! The caller must authorize the user and current environment generation before
 //! calling this adapter and must retain durable import receipts for uncertain work.
+mod feature_delivery;
 mod features;
 
 pub use features::FeatureRemote;

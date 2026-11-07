@@ -1,10 +1,11 @@
 use super::*;
 use factory_core::identity::{
     AccessibleRepository, AccessibleRepositoryPage, RepositoryAccessError as Error,
-    RepositoryAccessProvider, RepositoryAccessToken, RepositoryOperationGuard,
-    RepositoryOriginVerification,
+    RepositoryAccessProvider, RepositoryAccessToken, RepositoryDraft, RepositoryDraftTarget,
+    RepositoryOperationGuard, RepositoryOriginVerification,
 };
 use serde::Serialize;
+use uuid::Uuid;
 
 const PAGE_SIZE: usize = 100;
 const MAX_PAGE: u32 = 1000;
@@ -118,6 +119,109 @@ struct Repo {
 struct NewKey<'a> {
     title: &'static str,
     key: &'a str,
+}
+
+#[derive(Serialize)]
+struct NewDraft<'a> {
+    title: &'a str,
+    head: &'a str,
+    base: &'a str,
+    body: &'a str,
+    draft: bool,
+}
+
+#[derive(Deserialize)]
+struct PullRequest {
+    number: u64,
+    state: String,
+    draft: bool,
+    body: Option<String>,
+    head: PullBranch,
+    base: PullBranch,
+}
+
+#[derive(Deserialize)]
+struct PullBranch {
+    #[serde(rename = "ref")]
+    reference: String,
+    sha: String,
+    repo: Option<PullRepository>,
+}
+
+#[derive(Deserialize)]
+struct PullRepository {
+    id: i64,
+    full_name: String,
+}
+
+fn operation_marker(operation_id: Uuid) -> String {
+    format!("<!-- factory-feature-delivery:{operation_id} -->")
+}
+
+fn valid_commit_oid(oid: &str) -> bool {
+    matches!(oid.len(), 40 | 64)
+        && oid
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn validate_draft_target(target: &RepositoryDraftTarget<'_>) -> Result<(), Error> {
+    let valid_head = target
+        .head
+        .strip_prefix("factory/features/")
+        .and_then(|value| value.parse::<Uuid>().ok())
+        .is_some_and(|id| !id.is_nil());
+    if target.repository_id <= 0
+        || !valid_repo_name(target.full_name)
+        || !valid_head
+        || target.operation_id.is_nil()
+        || !valid_commit_oid(target.head_oid)
+        || target.base.is_empty()
+        || target.base.len() > 1024
+        || target.base.starts_with('-')
+        || target
+            .base
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == ':')
+    {
+        return Err(Error::InvalidInput);
+    }
+    Ok(())
+}
+
+fn verified_draft(
+    pull: PullRequest,
+    target: &RepositoryDraftTarget<'_>,
+) -> Result<RepositoryDraft, Error> {
+    let marker = operation_marker(target.operation_id);
+    let is_repository = |branch: &PullBranch| {
+        branch.repo.as_ref().is_some_and(|repo| {
+            repo.id == target.repository_id && repo.full_name == target.full_name
+        })
+    };
+    if pull.number == 0
+        || !pull.draft
+        || pull.state != "open"
+        || pull.head.reference != target.head
+        || pull.base.reference != target.base
+        || !is_repository(&pull.head)
+        || !is_repository(&pull.base)
+        || pull.head.sha != target.head_oid
+        || !valid_commit_oid(&pull.base.sha)
+        || !pull
+            .body
+            .as_deref()
+            .is_some_and(|body| body.lines().any(|line| line == marker))
+    {
+        return Err(Error::Conflict);
+    }
+    Ok(RepositoryDraft {
+        url: format!(
+            "https://github.com/{}/pull/{}",
+            target.full_name, pull.number
+        ),
+        base_oid: pull.base.sha,
+    })
 }
 
 fn check_status(status: StatusCode, headers: &header::HeaderMap) -> Result<(), Error> {
@@ -448,6 +552,98 @@ impl RepositoryAccessProvider for GitHubRepositoryProvider {
             Ok(response) => Err(status_error(response).await),
             Err(_) => Err(Error::Unavailable),
         }
+    }
+
+    async fn find_draft(
+        &self,
+        token: &RepositoryAccessToken,
+        target: &RepositoryDraftTarget<'_>,
+        guard: &dyn RepositoryOperationGuard,
+    ) -> Result<Option<RepositoryDraft>, Error> {
+        validate_draft_target(target)?;
+        let (owner, _) = target
+            .full_name
+            .split_once('/')
+            .ok_or(Error::InvalidInput)?;
+        let head = format!("{owner}:{}", target.head);
+        let path = format!("/repos/{}/pulls", target.full_name);
+        guard.check().await?;
+        let response = self
+            .inner
+            .http
+            .get(self.endpoint(&path)?)
+            .query(&[("head", head.as_str()), ("state", "all"), ("per_page", "2")])
+            .bearer_auth(token.secret())
+            .header(header::ACCEPT, "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .send()
+            .await
+            .map_err(|_| Error::Unavailable)?;
+        if response.status() != StatusCode::OK {
+            return Err(status_error(response).await);
+        }
+        // Do not treat a partial listing as proof of absence or uniqueness.
+        if response.headers().contains_key(header::LINK) {
+            return Err(Error::Conflict);
+        }
+        let body = bounded_body(response, BODY_LIMIT)
+            .await
+            .map_err(|_| Error::Unavailable)?;
+        let mut pulls: Vec<PullRequest> =
+            serde_json::from_slice(&body).map_err(|_| Error::Unavailable)?;
+        match pulls.len() {
+            0 => Ok(None),
+            1 => verified_draft(pulls.remove(0), target).map(Some),
+            _ => Err(Error::Conflict),
+        }
+    }
+
+    async fn create_draft(
+        &self,
+        token: &RepositoryAccessToken,
+        target: &RepositoryDraftTarget<'_>,
+        title: &str,
+        guard: &dyn RepositoryOperationGuard,
+    ) -> Result<RepositoryDraft, Error> {
+        validate_draft_target(target)?;
+        if title.trim().is_empty() || title.len() > 256 || title.chars().any(char::is_control) {
+            return Err(Error::InvalidInput);
+        }
+        let path = format!("/repos/{}/pulls", target.full_name);
+        let body = format!(
+            "This draft contains the feature reviewed in Factory.\n\n{}",
+            operation_marker(target.operation_id)
+        );
+        guard.check().await?;
+        let response = self
+            .inner
+            .http
+            .post(self.endpoint(&path)?)
+            .bearer_auth(token.secret())
+            .header(header::ACCEPT, "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .json(&NewDraft {
+                title,
+                head: target.head,
+                base: target.base,
+                body: &body,
+                draft: true,
+            })
+            .send()
+            .await
+            .map_err(|_| Error::Unavailable)?;
+        match response.status() {
+            StatusCode::CREATED => {}
+            StatusCode::CONFLICT | StatusCode::UNPROCESSABLE_ENTITY => return Err(Error::Conflict),
+            StatusCode::NOT_FOUND => return Err(Error::ProviderForbidden),
+            _ => return Err(status_error(response).await),
+        }
+        let body = bounded_body(response, BODY_LIMIT)
+            .await
+            .map_err(|_| Error::Unavailable)?;
+        let pull = serde_json::from_slice(&body).map_err(|_| Error::Unavailable)?;
+        // A rejected response after 201 may still correspond to an actual write.
+        verified_draft(pull, target).map_err(|_| Error::Unavailable)
     }
 }
 

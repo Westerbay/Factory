@@ -1,11 +1,12 @@
 use super::*;
 use axum::{
     Router,
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
 };
+use std::collections::HashMap;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
@@ -36,6 +37,10 @@ struct Fixture {
     origin_status: u16,
     origin_id: Option<u64>,
     origin_name: Option<String>,
+    draft: Mutex<Option<serde_json::Value>>,
+    draft_posts: AtomicUsize,
+    draft_forbidden: bool,
+    hold_draft_response: bool,
 }
 
 async fn token(State(state): State<Arc<Fixture>>) -> impl IntoResponse {
@@ -114,6 +119,62 @@ async fn add_key(
         StatusCode::CREATED
     }
 }
+
+async fn drafts(
+    State(state): State<Arc<Fixture>>,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    assert_eq!(query["state"], "all");
+    assert!(query["head"].starts_with("user:factory/features/"));
+    axum::Json(
+        state
+            .draft
+            .lock()
+            .unwrap()
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>(),
+    )
+}
+
+async fn add_draft(
+    State(state): State<Arc<Fixture>>,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> impl IntoResponse {
+    state.draft_posts.fetch_add(1, Ordering::SeqCst);
+    assert_eq!(body["draft"], true);
+    assert_eq!(body["base"], "main");
+    assert!(
+        body["head"]
+            .as_str()
+            .unwrap()
+            .starts_with("factory/features/")
+    );
+    if state.draft_forbidden {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let draft = serde_json::json!({
+        "number": 17,
+        "state": "open",
+        "draft": true,
+        "body": body["body"],
+        "head": {
+            "ref": body["head"],
+            "sha": "b".repeat(40),
+            "repo": {"id":3,"full_name":"user/example"}
+        },
+        "base": {
+            "ref": body["base"],
+            "sha": "a".repeat(40),
+            "repo": {"id":3,"full_name":"user/example"}
+        }
+    });
+    *state.draft.lock().unwrap() = Some(draft.clone());
+    if state.hold_draft_response {
+        std::future::pending::<()>().await;
+    }
+    (StatusCode::CREATED, axum::Json(draft)).into_response()
+}
 struct Server(tokio::task::JoinHandle<()>);
 impl Drop for Server {
     fn drop(&mut self) {
@@ -130,6 +191,7 @@ async fn fixture(state: Fixture) -> (GitHubRepositoryProvider, Arc<Fixture>, Ser
         .route("/user/emails", get(emails))
         .route("/user/repos", get(repos))
         .route("/repos/{owner}/{repo}", get(repo_at_origin))
+        .route("/repos/user/example/pulls", get(drafts).post(add_draft))
         .route("/user/keys", get(keys).post(add_key))
         .with_state(state.clone());
     let server = Server(tokio::spawn(async move {
@@ -147,6 +209,89 @@ async fn fixture(state: Fixture) -> (GitHubRepositoryProvider, Arc<Fixture>, Ser
         .set_token_uri(TokenUrl::new(format!("http://{address}/token")).unwrap());
     provider.inner.profile = Url::parse(&format!("http://{address}/user")).unwrap();
     (provider, state, server)
+}
+
+#[tokio::test]
+async fn lost_draft_response_is_reconciled_only_for_the_reviewed_identity() {
+    let (mut provider, state, _server) = fixture(Fixture {
+        hold_draft_response: true,
+        ..Default::default()
+    })
+    .await;
+    let token = RepositoryAccessToken::new("fixture-token".into()).unwrap();
+    let target = RepositoryDraftTarget {
+        repository_id: 3,
+        full_name: "user/example",
+        base: "main",
+        head: &format!("factory/features/{}", Uuid::new_v4()),
+        head_oid: &"b".repeat(40),
+        operation_id: Uuid::new_v4(),
+    };
+    assert_eq!(provider.find_draft(&token, &target, &Guard).await, Ok(None));
+    provider.inner.http = http_client(Duration::from_millis(400)).unwrap();
+    assert_eq!(
+        provider
+            .create_draft(&token, &target, "Reviewed", &Guard)
+            .await,
+        Err(Error::Unavailable)
+    );
+    provider.inner.http = http_client(REQUEST_TIMEOUT).unwrap();
+    let draft = provider
+        .find_draft(&token, &target, &Guard)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(draft.url, "https://github.com/user/example/pull/17");
+    assert_eq!(draft.base_oid, "a".repeat(40));
+    assert_eq!(state.draft_posts.load(Ordering::SeqCst), 1);
+
+    let unrelated = RepositoryDraftTarget {
+        operation_id: Uuid::new_v4(),
+        ..target
+    };
+    assert_eq!(
+        provider.find_draft(&token, &unrelated, &Guard).await,
+        Err(Error::Conflict)
+    );
+    state.draft.lock().unwrap().as_mut().unwrap()["base"]["sha"] = "d".repeat(40).into();
+    let moved = provider
+        .find_draft(&token, &target, &Guard)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(moved.base_oid, "d".repeat(40));
+
+    state.draft.lock().unwrap().as_mut().unwrap()["head"]["sha"] = "c".repeat(40).into();
+    assert_eq!(
+        provider.find_draft(&token, &target, &Guard).await,
+        Err(Error::Conflict)
+    );
+    assert_eq!(state.draft_posts.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn draft_permission_denial_does_not_create_a_receipt() {
+    let (provider, state, _server) = fixture(Fixture {
+        draft_forbidden: true,
+        ..Default::default()
+    })
+    .await;
+    let token = RepositoryAccessToken::new("fixture-token".into()).unwrap();
+    let target = RepositoryDraftTarget {
+        repository_id: 3,
+        full_name: "user/example",
+        base: "main",
+        head: &format!("factory/features/{}", Uuid::new_v4()),
+        head_oid: &"b".repeat(40),
+        operation_id: Uuid::new_v4(),
+    };
+    assert_eq!(
+        provider
+            .create_draft(&token, &target, "Reviewed", &Guard)
+            .await,
+        Err(Error::ProviderForbidden)
+    );
+    assert!(state.draft.lock().unwrap().is_none());
 }
 
 #[tokio::test]

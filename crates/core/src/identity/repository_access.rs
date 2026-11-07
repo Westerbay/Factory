@@ -105,6 +105,22 @@ pub struct AccessibleRepositoryPage {
     pub next_page: Option<u32>,
 }
 
+/// Verified project identity and the branch names of a claimed feature draft.
+pub struct RepositoryDraftTarget<'a> {
+    pub repository_id: i64,
+    pub full_name: &'a str,
+    pub base: &'a str,
+    pub head: &'a str,
+    pub head_oid: &'a str,
+    pub operation_id: Uuid,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RepositoryDraft {
+    pub url: String,
+    pub base_oid: String,
+}
+
 #[async_trait]
 pub trait RepositoryAccessStore: Send + Sync {
     /// Capture the capability version before provider calls during sign-in.
@@ -206,6 +222,24 @@ pub trait RepositoryAccessProvider: Send + Sync {
         public_key: &str,
         guard: &dyn RepositoryOperationGuard,
     ) -> Result<(), RepositoryAccessError>;
+    /// A successful absence requires checking the exact head across all PR states.
+    async fn find_draft(
+        &self,
+        _token: &RepositoryAccessToken,
+        _target: &RepositoryDraftTarget<'_>,
+        _guard: &dyn RepositoryOperationGuard,
+    ) -> Result<Option<RepositoryDraft>, RepositoryAccessError> {
+        Err(RepositoryAccessError::Unavailable)
+    }
+    async fn create_draft(
+        &self,
+        _token: &RepositoryAccessToken,
+        _target: &RepositoryDraftTarget<'_>,
+        _title: &str,
+        _guard: &dyn RepositoryOperationGuard,
+    ) -> Result<RepositoryDraft, RepositoryAccessError> {
+        Err(RepositoryAccessError::Unavailable)
+    }
 }
 
 /// Revalidate a bound authorization immediately before each provider request.

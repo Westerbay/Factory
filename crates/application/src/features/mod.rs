@@ -1,9 +1,12 @@
 pub mod bundle;
 mod coordinator;
+mod delivery;
 pub(crate) mod discussion;
 mod profiles;
 mod recovery;
 mod review;
+
+pub use delivery::FeatureDeliveryService;
 
 use crate::conversations::coordinator::ConversationRuntime;
 use factory_core::{
