@@ -2,6 +2,10 @@
 //!
 //! The caller must authorize the user and current environment generation before
 //! calling this adapter and must retain durable import receipts for uncertain work.
+mod features;
+
+pub use features::FeatureRemote;
+
 use crate::environments::{
     DockerEnvironmentRuntime,
     process::{FixedProcess, ProcessStartError},
@@ -26,6 +30,8 @@ pub enum ProjectRuntimeError {
     Invalid,
     #[error("Project destination or key conflicts with existing files")]
     Conflict,
+    #[error("Task changes exceed the approved scope")]
+    ScopeViolation,
     #[error("Project operation is unavailable")]
     Unavailable,
     #[error("Project operation may still be running")]
@@ -244,8 +250,19 @@ impl DockerProjectRuntime {
         request: Value,
         timeout: Duration,
     ) -> Result<Value, ProjectRuntimeError> {
+        self.run_bounded(env, request, timeout, LIMIT, LIMIT).await
+    }
+
+    async fn run_bounded(
+        &self,
+        env: &Environment,
+        request: Value,
+        timeout: Duration,
+        request_limit: usize,
+        response_limit: usize,
+    ) -> Result<Value, ProjectRuntimeError> {
         let payload = serde_json::to_vec(&request).map_err(|_| ProjectRuntimeError::Invalid)?;
-        if payload.len() > LIMIT {
+        if payload.len() > request_limit {
             return Err(ProjectRuntimeError::Invalid);
         }
         let mut process = self
@@ -271,7 +288,7 @@ impl DockerProjectRuntime {
             while let Some(chunk) = process.output.next().await {
                 let chunk = chunk.map_err(|_| ProjectRuntimeError::Uncertain)?;
                 let bytes = chunk.as_ref();
-                if output.len().saturating_add(bytes.len()) > LIMIT {
+                if output.len().saturating_add(bytes.len()) > response_limit {
                     return Err(ProjectRuntimeError::Uncertain);
                 }
                 output.extend_from_slice(bytes);
@@ -355,6 +372,7 @@ fn parse_response(bytes: &[u8]) -> Result<Value, ProjectRuntimeError> {
     Err(match response["error"].as_str() {
         Some("invalid") => ProjectRuntimeError::Invalid,
         Some("conflict") => ProjectRuntimeError::Conflict,
+        Some("scope_violation") => ProjectRuntimeError::ScopeViolation,
         Some("unavailable") => ProjectRuntimeError::Unavailable,
         _ => ProjectRuntimeError::Uncertain,
     })

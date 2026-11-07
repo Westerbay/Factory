@@ -53,6 +53,14 @@ class ProjectControllerTests(unittest.TestCase):
     def inspect(self):
         return self.execute('inspect', project=self.project, operation=self.operation, directory='repo')
 
+    def feature(self, origin, feature, op, **fields):
+        with patch.object(controller, 'repository', return_value=str(origin)):
+            return self.execute('feature_' + op, project=self.project, operation=self.operation,
+                                directory='repo', repository='owner/repo', feature=feature, **fields)
+
+    def feature_checkout(self, feature, attempt):
+        return self.home / '.factory/features' / self.project / feature / 'attempts' / attempt / 'checkout'
+
     def snapshot(self):
         result = {}
         for directory, names, files in os.walk(self.home, followlinks=False):
@@ -497,6 +505,119 @@ class ProjectControllerTests(unittest.TestCase):
         self.assertIn('http_access deny forbidden', acl)
         self.assertIn('http_access deny host_addresses', acl)
         self.assertIn('http_access deny all', acl)
+
+    def test_feature_workspaces_capture_and_integrate_only_approved_changes(self):
+        origin = self.origin()
+        self.clone(origin)
+        member_file = self.home / 'Documents/repo/file.txt'
+        member_file.write_text('uncommitted member change\n')
+        feature = str(uuid.uuid4())
+        branch = self.feature(origin, feature, 'initialize')
+        base = branch['base_oid']
+        self.assertEqual(self.feature(origin, feature, 'initialize'), branch)
+
+        def prepare():
+            attempt = str(uuid.uuid4())
+            fields = {'attempt': attempt, 'base_oid': base, 'writable': True}
+            self.feature(origin, feature, 'prepare', **fields)
+            return self.feature_checkout(feature, attempt), fields
+
+        first, first_request = prepare()
+        second, second_request = prepare()
+        (first / 'file.txt').write_text('approved edit\n')
+        (first / 'outside.txt').write_text('out of scope\n')
+        (second / 'other.txt').write_text('parallel edit\n')
+        self.assertEqual((second / 'file.txt').read_text(), 'sample\n')
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'checkpoint', scope=['file.txt'], **first_request)
+        self.assertEqual(caught.exception.code, 'scope_violation')
+        (first / 'outside.txt').unlink()
+        subprocess.run(['git', '-C', str(first), 'config', 'core.hooksPath', '/invalid'], check=True)
+        monitor_ran = self.home / 'worker-monitor-ran'
+        monitor = self.home / 'worker-monitor'
+        monitor.write_text(f"#!/bin/sh\n/usr/bin/touch '{monitor_ran}'\n")
+        monitor.chmod(0o700)
+        subprocess.run(['git', '-C', str(first), 'config', 'core.fsmonitor', str(monitor)], check=True)
+
+        first_checkpoint = self.feature(origin, feature, 'checkpoint', scope=['file.txt'], **first_request)
+        self.assertFalse(monitor_ran.exists())
+        self.assertEqual(
+            self.feature(origin, feature, 'checkpoint', scope=['file.txt'], **first_request), first_checkpoint,
+        )
+        self.feature(origin, feature, 'checkpoint', scope=['other.txt'], **second_request)
+        self.assertEqual(self.feature(origin, feature, 'integrate', expected_head=base,
+                                      scope=['file.txt'], **first_request), first_checkpoint)
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'integrate', expected_head=base, scope=['other.txt'], **second_request)
+        self.assertEqual(caught.exception.code, 'conflict')
+        head = self.feature(origin, feature, 'integrate', expected_head=first_checkpoint,
+                            scope=['other.txt'], **second_request)
+        snapshot = self.feature(origin, feature, 'snapshot')
+        self.assertEqual(snapshot['git']['head_oid'], head)
+        self.assertEqual(snapshot['git']['base_oid'], base)
+        self.assertEqual(snapshot['changed_paths'], ['file.txt', 'other.txt'])
+        self.assertIn('+approved edit', snapshot['patch'])
+        self.assertIn('+parallel edit', snapshot['patch'])
+        self.assertEqual(snapshot['git']['patch_digest'], controller.hashlib.sha256(snapshot['patch'].encode()).hexdigest())
+        self.assertEqual(member_file.read_text(), 'uncommitted member change\n')
+        self.assertEqual((origin / 'file.txt').read_text(), 'sample\n')
+        self.assertEqual(self.feature(origin, feature, 'remote'), {'base_oid': base, 'head_oid': None})
+
+        review = str(uuid.uuid4())
+        self.feature(origin, feature, 'prepare', attempt=review, base_oid=head, writable=False)
+        self.assertEqual((self.feature_checkout(feature, review) / 'other.txt').read_text(), 'parallel edit\n')
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'checkpoint', attempt=review, base_oid=head,
+                         writable=True, scope=['other.txt'])
+        self.assertEqual(caught.exception.code, 'conflict')
+
+        retry = str(uuid.uuid4())
+        self.feature(origin, feature, 'prepare', attempt=retry, base_oid=first_checkpoint, writable=True)
+        self.assertEqual((self.feature_checkout(feature, retry) / 'file.txt').read_text(), 'approved edit\n')
+
+        foreign = str(uuid.uuid4())
+        unowned = self.feature_checkout(feature, foreign)
+        unowned.mkdir(mode=0o700, parents=True)
+        (unowned / 'keep').write_text('not owned by this operation')
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'prepare', attempt=foreign, base_oid=head, writable=True)
+        self.assertEqual(caught.exception.code, 'conflict')
+        self.assertEqual((unowned / 'keep').read_text(), 'not owned by this operation')
+
+    def test_feature_push_refuses_a_competing_branch_and_reconciles_an_exact_push(self):
+        origin = self.origin()
+        self.clone(origin)
+        feature = str(uuid.uuid4())
+        branch = self.feature(origin, feature, 'initialize')
+        base, ref = branch['base_oid'], branch['head_ref']
+        fields = {'attempt': str(uuid.uuid4()), 'base_oid': base, 'writable': True}
+        self.feature(origin, feature, 'prepare', **fields)
+        checkout = self.feature_checkout(feature, fields['attempt'])
+        (checkout / 'file.txt').write_text('ready for review\n')
+        self.feature(origin, feature, 'checkpoint', scope=['file.txt'], **fields)
+        head = self.feature(origin, feature, 'integrate', expected_head=base, scope=['file.txt'], **fields)
+        snapshot = self.feature(origin, feature, 'snapshot')['git']
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'push', **{**snapshot, 'head_oid': base})
+        self.assertEqual(caught.exception.code, 'conflict')
+
+        remote_git = ['git', '-C', str(origin)]
+        subprocess.run([*remote_git, 'update-ref', ref, base], check=True)
+        inspect = controller.current_remote
+        # Simulate another publisher creating the ref between the preflight
+        # and Git push. The ordinary push hook must also reject a fast-forward.
+        with patch.object(controller, 'current_remote', side_effect=[
+            {'base_oid': base, 'head_oid': None}, inspect(str(origin), branch),
+        ]):
+            with self.assertRaises(controller.Problem) as caught:
+                self.feature(origin, feature, 'push', **snapshot)
+        self.assertEqual(caught.exception.code, 'conflict')
+        self.assertEqual(inspect(str(origin), branch)['head_oid'], base)
+
+        subprocess.run([*remote_git, 'update-ref', '-d', ref, base], check=True)
+        self.assertEqual(self.feature(origin, feature, 'push', **snapshot), 'pushed')
+        self.assertEqual(inspect(str(origin), branch)['head_oid'], head)
+        self.assertEqual(self.feature(origin, feature, 'push', **snapshot), 'pushed')
 
     def test_unsafe_home_and_forged_stage_are_rejected(self):
         foreign = self.home / 'foreign'

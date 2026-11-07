@@ -4,19 +4,24 @@
 All paths are resolved relative to opened, non-symlink directory descriptors.
 The caller owns authorization, environment fencing and durable operation receipts.
 """
-import ctypes
 import base64
+import contextlib
+import ctypes
 import errno
 import fcntl
 import hashlib
 import json
 import os
 import re
+import selectors
 import shutil
+import signal
 import stat
 import struct
 import subprocess
 import sys
+import tempfile
+import time
 import uuid
 
 HOME = '/home/factory'
@@ -751,10 +756,486 @@ def delete(factory, documents, project_id, operation, name):
         os.close(deletions)
 
 
+FEATURE_FIELDS = {
+    'feature_initialize': set(),
+    'feature_prepare': {'attempt', 'base_oid', 'writable'},
+    'feature_checkpoint': {'attempt', 'base_oid', 'writable', 'scope'},
+    'feature_integrate': {'attempt', 'base_oid', 'writable', 'scope', 'expected_head'},
+    'feature_snapshot': set(),
+    'feature_remote': set(),
+    'feature_push': {'base_oid', 'head_oid', 'patch_digest'},
+}
+FEATURE_ID_FIELDS = {'op', 'project', 'operation', 'directory', 'repository', 'feature'}
+FEATURE_REQUEST_LIMIT = 192 * 1024
+FEATURE_RESPONSE_LIMIT = 1024 * 1024
+FEATURE_PATCH_LIMIT = 128 * 1024
+FEATURE_PATH_LIMIT = 32 * 1024
+PRE_PUSH = b"""#!/bin/sh
+IFS=' ' read -r local_ref local_oid remote_ref remote_oid || exit 1
+[ "$local_oid" = "$FACTORY_PUSH_OID" ] && [ "$remote_ref" = "$FACTORY_PUSH_REF" ] || exit 1
+case "$remote_oid" in ''|*[!0]*) exit 1;; esac
+if IFS= read -r extra; then exit 1; fi
+"""
+
+
+def fd_path(fd):
+    return '/proc/self/fd/' + str(fd)
+
+
+def oid(value):
+    if not isinstance(value, str) or not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', value):
+        raise Problem('invalid')
+    return value
+
+
+def feature_path(value, directory_scope=False):
+    if not isinstance(value, str) or not value.strip() or len(value.encode()) > 1024:
+        raise Problem('invalid')
+    path = value.removesuffix('/') if directory_scope else value
+    if '\\' in path or ':' in path or any(ord(c) < 32 or 127 <= ord(c) < 160 for c in path):
+        raise Problem('invalid')
+    if any(part in ('', '.', '..') or part.lower() == '.git' for part in path.split('/')):
+        raise Problem('invalid')
+    return value
+
+
+def git_command(arguments, *, descriptors=(), repository_fd=None, extra_env=None, output_limit=8192,
+                timeout=30, check=True):
+    """Run only controller-selected Git commands with bounded, private output."""
+    env = {
+        'PATH': '/usr/bin:/bin',
+        'HOME': '/nonexistent',
+        'GIT_CONFIG_NOSYSTEM': '1',
+        'GIT_CONFIG_GLOBAL': '/dev/null',
+        'GIT_ATTR_NOSYSTEM': '1',
+        'GIT_TERMINAL_PROMPT': '0',
+        'GIT_SSH_COMMAND': '/usr/bin/ssh -F /etc/factory/github-ssh-config',
+    }
+    env.update(extra_env or {})
+    argv = ['/usr/bin/git', '--no-pager', '-c', 'core.hooksPath=/dev/null',
+            '-c', 'init.templateDir=/dev/null', '-c', 'maintenance.auto=false',
+            '-c', 'gc.auto=0', '-c', 'protocol.ext.allow=never',
+            '-c', 'core.quotePath=true']
+    if repository_fd is not None:
+        argv.extend(['--git-dir', fd_path(repository_fd)])
+        descriptors = (*descriptors, repository_fd)
+    with subprocess.Popen(
+        [*argv, *arguments], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, pass_fds=tuple(set(descriptors)), cwd='/', env=env,
+        start_new_session=True,
+    ) as process:
+        output = bytearray()
+        deadline = time.monotonic() + timeout
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                while True:
+                    if not selector.select(max(0, deadline - time.monotonic())):
+                        raise Problem('uncertain')
+                    chunk = os.read(process.stdout.fileno(), min(65536, output_limit + 1 - len(output)))
+                    if not chunk:
+                        break
+                    output.extend(chunk)
+                    if len(output) > output_limit:
+                        raise Problem('unavailable')
+            status = process.wait(timeout=max(0, deadline - time.monotonic()))
+        except (Problem, OSError, subprocess.TimeoutExpired) as error:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            if isinstance(error, subprocess.TimeoutExpired):
+                raise Problem('uncertain') from error
+            raise
+    if check and status != 0:
+        raise Problem('unavailable')
+    return status, bytes(output)
+
+
+def git_text(arguments, **kwargs):
+    return git_command(arguments, **kwargs)[1].decode('utf-8').strip()
+
+
+def get_ref(repo, ref):
+    status, data = git_command(['rev-parse', '--verify', '--quiet', ref + '^{commit}'],
+                               repository_fd=repo, check=False)
+    if status == 1:
+        return None
+    if status != 0:
+        raise Problem('unavailable')
+    return oid(data.decode('ascii').strip())
+
+
+def head_ref(value):
+    if not isinstance(value, str) or not value.startswith('refs/heads/') or len(value.encode()) > 1024:
+        raise Problem('conflict')
+    git_command(['check-ref-format', value])
+    return value
+
+
+def remote_default(remote):
+    lines = git_text(['ls-remote', '--symref', '--', remote, 'HEAD'], timeout=60).splitlines()
+    symbolic, head = None, None
+    for line in lines:
+        value, ref = line.split('\t')
+        if ref != 'HEAD':
+            raise Problem('conflict')
+        if value.startswith('ref: '):
+            if symbolic is not None:
+                raise Problem('conflict')
+            symbolic = head_ref(value.removeprefix('ref: '))
+        else:
+            if head is not None:
+                raise Problem('conflict')
+            head = oid(value)
+    if symbolic is None or head is None:
+        raise Problem('conflict')
+    return symbolic, head
+
+
+def current_remote(remote, branch):
+    refs = (branch['base_ref'], branch['head_ref'])
+    values = {}
+    for line in git_text(['ls-remote', '--refs', '--', remote, *refs], timeout=60).splitlines():
+        value, ref = line.split('\t')
+        if ref not in refs or ref in values:
+            raise Problem('conflict')
+        values[ref] = oid(value)
+    return {'base_oid': values.get(refs[0]), 'head_oid': values.get(refs[1])}
+
+
+def record_branch(record, remote, feature, initialize):
+    head = 'refs/heads/factory/features/' + feature
+    try:
+        branch = read_json_file(record, 'branch', private=True)
+    except FileNotFoundError:
+        if not initialize:
+            raise Problem('conflict')
+        base_ref, base_oid = remote_default(remote)
+        branch = {'base_ref': base_ref, 'base_oid': base_oid, 'head_ref': head}
+        create_file(record, 'branch', json.dumps(branch).encode())
+        os.fsync(record)
+    if (not isinstance(branch, dict) or set(branch) != {'base_ref', 'base_oid', 'head_ref'}
+            or branch['head_ref'] != head):
+        raise Problem('conflict')
+    head_ref(branch['base_ref'])
+    oid(branch['base_oid'])
+    return branch
+
+
+def initialize_repository(repo, remote, branch):
+    try:
+        head = regular(repo, 'HEAD')
+    except FileNotFoundError:
+        git_command(['init', '--bare', fd_path(repo)], descriptors=(repo,))
+    else:
+        os.close(head)
+    if get_ref(repo, branch['head_ref']) is not None:
+        if get_ref(repo, 'refs/factory/base') != branch['base_oid']:
+            raise Problem('conflict')
+        return
+    git_command(['fetch', '--no-tags', '--no-recurse-submodules', '--', remote,
+                 branch['base_ref'] + ':refs/factory/base'], repository_fd=repo, timeout=240)
+    if get_ref(repo, 'refs/factory/base') != branch['base_oid']:
+        raise Problem('conflict')
+    git_command(['symbolic-ref', 'HEAD', branch['head_ref']], repository_fd=repo)
+    git_command(['update-ref', branch['head_ref'], branch['base_oid'], '0' * len(branch['base_oid'])],
+                repository_fd=repo)
+
+
+def feature_record(parent, name, receipt, expected, create):
+    """Publish an owned record atomically, without adopting an unmarked directory."""
+    try:
+        result = directory(parent, name, private=True)
+    except FileNotFoundError:
+        if not create:
+            raise Problem('conflict')
+        staged = '.pending-' + str(uuid.uuid4())
+        os.mkdir(staged, 0o700, dir_fd=parent)
+        entry = directory(parent, staged, private=True)
+        try:
+            create_file(entry, receipt, json.dumps(expected).encode())
+            os.fsync(entry)
+            try:
+                rename_atomic(parent, staged, parent, name)
+            except FileExistsError:
+                os.unlink(receipt, dir_fd=entry)
+                os.rmdir(staged, dir_fd=parent)
+            os.fsync(parent)
+        finally:
+            os.close(entry)
+        result = directory(parent, name, private=True)
+    try:
+        if read_json_file(result, receipt, private=True) != expected:
+            raise Problem('conflict')
+        return result
+    except FileNotFoundError as error:
+        os.close(result)
+        raise Problem('conflict') from error
+    except BaseException:
+        os.close(result)
+        raise
+
+
+def record_attempt(stack, record, request, prepare):
+    attempt = parse_uuid(request['attempt'])
+    base = oid(request['base_oid'])
+    writable = request['writable']
+    if not isinstance(writable, bool):
+        raise Problem('invalid')
+    attempts = directory(record, 'attempts', create=prepare, private=True)
+    stack.callback(os.close, attempts)
+    expected = {'version': 1, 'attempt': attempt, 'base': base, 'writable': writable}
+    slot = feature_record(attempts, attempt, 'attempt', expected, prepare)
+    stack.callback(os.close, slot)
+    return slot, attempt, base
+
+
+def prepare_feature_task(repo, slot, base):
+    try:
+        ready = read_json_file(slot, 'ready', private=True)
+    except FileNotFoundError:
+        if get_ref(repo, base) != base:
+            raise Problem('conflict')
+        if not shutil.rmtree.avoids_symlink_attacks:
+            raise Problem('unavailable')
+        try:
+            shutil.rmtree('checkout', dir_fd=slot)
+        except FileNotFoundError:
+            pass
+        checkout = directory(slot, 'checkout', create=True)
+        try:
+            git_command(['init', fd_path(checkout)], descriptors=(checkout,))
+            git_command(['-C', fd_path(checkout), 'fetch', '--no-tags', '--no-recurse-submodules',
+                         '--', fd_path(repo), base], descriptors=(repo, checkout), timeout=240)
+            git_command(['-C', fd_path(checkout), 'checkout', '--detach', base],
+                        descriptors=(checkout,), timeout=120)
+            info = os.fstat(checkout)
+            create_file(slot, 'ready', json.dumps({'device': info.st_dev, 'inode': info.st_ino}).encode())
+            os.fsync(slot)
+        finally:
+            os.close(checkout)
+    else:
+        checkout = checked_checkout(slot, ready)
+        os.close(checkout)
+
+
+def checked_checkout(slot, ready):
+    checkout = directory(slot, 'checkout')
+    info = os.fstat(checkout)
+    if ready != {'device': info.st_dev, 'inode': info.st_ino}:
+        os.close(checkout)
+        raise Problem('conflict')
+    return checkout
+
+
+def changed_feature_paths(repo, base, head, scope=None):
+    output = git_command(['diff', '--raw', '--no-renames', '--no-ext-diff', '-z', base, head, '--'],
+                         repository_fd=repo, output_limit=FEATURE_PATH_LIMIT)[1]
+    if not output:
+        return []
+    fields = output.decode('utf-8').split('\0')
+    if fields.pop() != '' or len(fields) % 2:
+        raise Problem('unavailable')
+    paths = []
+    for details, path in zip(fields[::2], fields[1::2]):
+        path = feature_path(path)
+        if scope is not None:
+            modes = details.removeprefix(':').split(' ', 2)[:2]
+            if '160000' in modes or not any(item == path or item.endswith('/') and path.startswith(item)
+                                             for item in scope):
+                raise Problem('scope_violation')
+        paths.append(path)
+    return paths
+
+
+def record_checkpoint(repo, slot, attempt, base, scope):
+    checkout = checked_checkout(slot, read_json_file(slot, 'ready', private=True))
+    try:
+        # A nested repository can change git-add semantics. The controller reads
+        # only the worker's files, with an index and config outside its mount.
+        root = fd_path(checkout)
+        for parent, directories, files in os.walk(root, followlinks=False):
+            if parent == root:
+                if '.git' in directories:
+                    directories.remove('.git')
+                continue
+            if any(name.lower() == '.git' for name in (*directories, *files)):
+                raise Problem('scope_violation')
+        with tempfile.TemporaryDirectory(prefix='factory-feature-index-') as stage:
+            env = {'GIT_INDEX_FILE': os.path.join(stage, 'index')}
+            opts = ['--work-tree', root, '-c', 'core.bare=false', '-c', 'core.fsmonitor=false']
+            kwargs = {'repository_fd': repo, 'descriptors': (checkout,), 'extra_env': env, 'timeout': 120}
+            git_command([*opts, 'read-tree', base], **kwargs)
+            git_command([*opts, 'add', '-A', '--', '.'], **kwargs)
+            tree = oid(git_text([*opts, 'write-tree'], **kwargs))
+    finally:
+        os.close(checkout)
+    paths = changed_feature_paths(repo, base, tree, scope)
+    checkpoint_ref = 'refs/factory/attempts/' + attempt
+    existing = get_ref(repo, checkpoint_ref)
+    if existing is not None:
+        if git_text(['rev-parse', existing + '^{tree}'], repository_fd=repo) != tree:
+            raise Problem('conflict')
+        return existing
+    commit = base if not paths else feature_commit(repo, tree, (base,), 'Factory task ' + attempt)
+    git_command(['update-ref', checkpoint_ref, commit, '0' * len(commit)], repository_fd=repo)
+    return commit
+
+
+def feature_commit(repo, tree, parents, message):
+    timestamp = git_text(['show', '-s', '--format=%ct', parents[0]], repository_fd=repo)
+    date = '@' + str(max(1, int(timestamp)) + 1) + ' +0000'
+    env = {'GIT_AUTHOR_NAME': 'Factory', 'GIT_AUTHOR_EMAIL': 'factory@users.noreply.github.com',
+           'GIT_COMMITTER_NAME': 'Factory', 'GIT_COMMITTER_EMAIL': 'factory@users.noreply.github.com',
+           'GIT_AUTHOR_DATE': date, 'GIT_COMMITTER_DATE': date}
+    parents = [item for parent in parents for item in ('-p', parent)]
+    return oid(git_text(['commit-tree', tree, *parents, '-m', message], repository_fd=repo, extra_env=env))
+
+
+def integrate_checkpoint(repo, branch, attempt, base, expected, scope):
+    checkpoint = get_ref(repo, 'refs/factory/attempts/' + attempt)
+    head = get_ref(repo, branch['head_ref'])
+    if checkpoint is None or head is None:
+        raise Problem('conflict')
+    status, _ = git_command(['merge-base', '--is-ancestor', checkpoint, head],
+                            repository_fd=repo, check=False)
+    if status == 0:
+        return head
+    if status != 1 or head != expected:
+        raise Problem('conflict')
+    changed_feature_paths(repo, base, checkpoint, scope)
+    if head == base:
+        result = checkpoint
+    else:
+        status, output = git_command(['merge-tree', '--write-tree', '--no-messages', head, checkpoint],
+                                     repository_fd=repo, check=False)
+        if status != 0:
+            raise Problem('conflict' if status == 1 else 'unavailable')
+        tree = oid(output.decode('ascii').strip())
+        changed_feature_paths(repo, head, tree, scope)
+        result = feature_commit(repo, tree, (head, checkpoint), 'Integrate Factory task ' + attempt)
+    git_command(['update-ref', branch['head_ref'], result, head], repository_fd=repo)
+    return result
+
+
+def feature_snapshot(repo, branch):
+    base = branch['base_oid']
+    head = get_ref(repo, branch['head_ref'])
+    if head is None or get_ref(repo, 'refs/factory/base') != base:
+        raise Problem('conflict')
+    patch = git_command(['diff', '--binary', '--full-index', '--no-color', '--no-renames',
+                         '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/',
+                         base, head, '--'], repository_fd=repo, output_limit=FEATURE_PATCH_LIMIT)[1]
+    return {'git': {'base_oid': base, 'head_oid': head, 'patch_digest': hashlib.sha256(patch).hexdigest()},
+            'patch': patch.decode('utf-8'), 'changed_paths': changed_feature_paths(repo, base, head)}
+
+
+def publish_feature(record, repo, remote, branch, expected):
+    if feature_snapshot(repo, branch)['git'] != expected:
+        raise Problem('conflict')
+    before = current_remote(remote, branch)
+    if before['base_oid'] != expected['base_oid']:
+        raise Problem('conflict')
+    head, ref = expected['head_oid'], branch['head_ref']
+    if before['head_oid'] == head:
+        return 'pushed'
+    if before['head_oid'] is not None:
+        raise Problem('conflict')
+    hooks = directory(record, 'push-hooks', create=True, private=True)
+    try:
+        try:
+            create_file(hooks, 'pre-push', PRE_PUSH)
+        except FileExistsError:
+            pass
+        hook = regular(hooks, 'pre-push', 0o077)
+        try:
+            if os.read(hook, len(PRE_PUSH) + 1) != PRE_PUSH:
+                raise Problem('conflict')
+            os.fchmod(hook, 0o500)
+        finally:
+            os.close(hook)
+        status, _ = git_command(['-c', 'core.hooksPath=' + fd_path(hooks),
+                                 'push', '--no-follow-tags', '--', remote, head + ':' + ref],
+                                repository_fd=repo, descriptors=(hooks,), timeout=120, check=False,
+                                extra_env={'FACTORY_PUSH_OID': head, 'FACTORY_PUSH_REF': ref})
+    finally:
+        os.close(hooks)
+    after = current_remote(remote, branch)
+    if after['base_oid'] != expected['base_oid'] or after['head_oid'] not in (None, head):
+        raise Problem('conflict')
+    if after['head_oid'] == head:
+        return 'pushed'
+    raise Problem('unavailable' if status != 0 else 'uncertain')
+
+
+def execute_feature(request, root):
+    op = request['op']
+    if set(request) != FEATURE_ID_FIELDS | FEATURE_FIELDS[op]:
+        raise Problem('invalid')
+    project = parse_uuid(request['project'])
+    operation = parse_uuid(request['operation'])
+    feature = parse_uuid(request['feature'])
+    remote = repository(request['repository'])
+    initializing = op == 'feature_initialize'
+    with contextlib.ExitStack() as stack:
+        def opened(parent, name, create=False, private=True):
+            fd = directory(parent, name, create=create, private=private)
+            stack.callback(os.close, fd)
+            return fd
+
+        documents = opened(root, 'Documents', private=False)
+        if inspect_project(documents, project, operation, request['directory']) != 'ready':
+            raise Problem('conflict')
+        factory = opened(root, '.factory', initializing)
+        features = opened(factory, 'features', initializing)
+        group = opened(features, project, initializing)
+        expected = {'version': 1, 'project': project, 'operation': operation, 'feature': feature,
+                    'repository': request['repository']}
+        record = feature_record(group, feature, 'feature', expected, initializing)
+        stack.callback(os.close, record)
+        lock = os.open('lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+                       0o600, dir_fd=record)
+        stack.callback(os.close, lock)
+        info = os.fstat(lock)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+            raise Problem('conflict')
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        branch = record_branch(record, remote, feature, initializing)
+        repo = opened(record, 'integration.git', initializing)
+        if initializing:
+            initialize_repository(repo, remote, branch)
+            return branch
+        if op == 'feature_snapshot':
+            return feature_snapshot(repo, branch)
+        if op == 'feature_remote':
+            return current_remote(remote, branch)
+        if op == 'feature_push':
+            return publish_feature(record, repo, remote, branch,
+                                   {key: request[key] for key in ('base_oid', 'head_oid', 'patch_digest')})
+        slot, attempt, base = record_attempt(stack, record, request, op == 'feature_prepare')
+        if op == 'feature_prepare':
+            prepare_feature_task(repo, slot, base)
+            return 'ready'
+        scope = request['scope']
+        if not request['writable'] or not isinstance(scope, list) or not 1 <= len(scope) <= 128:
+            raise Problem('invalid')
+        scope = [feature_path(path, directory_scope=True) for path in scope]
+        if op == 'feature_checkpoint':
+            return record_checkpoint(repo, slot, attempt, base, scope)
+        return integrate_checkpoint(repo, branch, attempt, base, oid(request['expected_head']), scope)
+
+
 def execute(request, home=HOME):
     if not isinstance(request, dict) or not isinstance(request.get('op'), str):
         raise Problem('invalid')
     op = request['op']
+    if op in FEATURE_FIELDS:
+        root = os.open(home, DIRECTORY_FLAGS)
+        try:
+            return execute_feature(request, root)
+        finally:
+            os.close(root)
     fields = {'key': {'op'}, 'setup_status': {'op'}, 'mark': {'op', 'expected'}, 'rotate': {'op', 'expected'}, 'identity': {'op', 'name', 'email'},
               'delete': {'op', 'project', 'operation', 'directory'}, 'clean_stage': {'op', 'project', 'operation'}, 'destination_status': {'op', 'directory'}, 'inspect': {'op', 'project', 'operation', 'directory'}, 'clone': {'op', 'project', 'operation', 'repository', 'directory'}}
     if op not in fields or set(request) != fields[op]:
@@ -802,11 +1283,18 @@ def execute(request, home=HOME):
 
 
 def main():
+    response_limit = MAX_RESPONSE
     try:
-        data = sys.stdin.buffer.read(MAX_REQUEST + 1)
-        if len(data) > MAX_REQUEST:
+        data = sys.stdin.buffer.read(FEATURE_REQUEST_LIMIT + 1)
+        if len(data) > FEATURE_REQUEST_LIMIT:
             raise Problem('invalid')
-        result = execute(json.loads(data))
+        request = json.loads(data)
+        if (isinstance(request, dict) and isinstance(request.get('op'), str)
+                and request['op'] in FEATURE_FIELDS):
+            response_limit = FEATURE_RESPONSE_LIMIT
+        elif len(data) > MAX_REQUEST:
+            raise Problem('invalid')
+        result = execute(request)
         response = {'ok': True, 'result': result}
     except Problem as error:
         response = {'ok': False, 'error': error.code}
@@ -819,7 +1307,7 @@ def main():
     except (subprocess.SubprocessError, AttributeError):
         response = {'ok': False, 'error': 'unavailable'}
     encoded = json.dumps(response).encode()
-    if len(encoded) <= MAX_RESPONSE:
+    if len(encoded) <= response_limit:
         sys.stdout.buffer.write(encoded + b'\n')
     else:
         sys.stdout.buffer.write(b'{"ok":false,"error":"unavailable"}\n')
