@@ -763,6 +763,7 @@ FEATURE_FIELDS = {
     'feature_integrate': {'attempt', 'base_oid', 'writable', 'scope', 'expected_head'},
     'feature_snapshot': set(),
     'feature_remote': set(),
+    'feature_refresh': {'base_oid', 'head_oid', 'patch_digest'},
     'feature_push': {'base_oid', 'head_oid', 'patch_digest'},
 }
 FEATURE_ID_FIELDS = {'op', 'project', 'operation', 'directory', 'repository', 'feature'}
@@ -800,7 +801,7 @@ def feature_path(value, directory_scope=False):
 
 
 def git_command(arguments, *, descriptors=(), repository_fd=None, extra_env=None, output_limit=8192,
-                timeout=30, check=True):
+                timeout=30, check=True, input_data=None):
     """Run only controller-selected Git commands with bounded, private output."""
     env = {
         'PATH': '/usr/bin:/bin',
@@ -820,13 +821,17 @@ def git_command(arguments, *, descriptors=(), repository_fd=None, extra_env=None
         argv.extend(['--git-dir', fd_path(repository_fd)])
         descriptors = (*descriptors, repository_fd)
     with subprocess.Popen(
-        [*argv, *arguments], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        [*argv, *arguments], stdin=subprocess.PIPE if input_data is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL, pass_fds=tuple(set(descriptors)), cwd='/', env=env,
         start_new_session=True,
     ) as process:
         output = bytearray()
         deadline = time.monotonic() + timeout
         try:
+            if input_data is not None:
+                process.stdin.write(input_data)
+                process.stdin.close()
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ)
                 while True:
@@ -931,7 +936,7 @@ def initialize_repository(repo, remote, branch):
     else:
         os.close(head)
     if get_ref(repo, branch['head_ref']) is not None:
-        if get_ref(repo, 'refs/factory/base') != branch['base_oid']:
+        if get_ref(repo, 'refs/factory/base') is None:
             raise Problem('conflict')
         return
     git_command(['fetch', '--no-tags', '--no-recurse-submodules', '--', remote,
@@ -1122,13 +1127,59 @@ def integrate_checkpoint(repo, branch, attempt, base, expected, scope):
 def feature_snapshot(repo, branch):
     base = branch['base_oid']
     head = get_ref(repo, branch['head_ref'])
-    if head is None or get_ref(repo, 'refs/factory/base') != base:
+    if head is None or not is_ancestor(repo, base, head):
         raise Problem('conflict')
+    return snapshot_between(repo, base, head)
+
+
+def snapshot_between(repo, base, head):
     patch = git_command(['diff', '--binary', '--full-index', '--no-color', '--no-renames',
                          '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/',
                          base, head, '--'], repository_fd=repo, output_limit=FEATURE_PATCH_LIMIT)[1]
     return {'git': {'base_oid': base, 'head_oid': head, 'patch_digest': hashlib.sha256(patch).hexdigest()},
             'patch': patch.decode('utf-8'), 'changed_paths': changed_feature_paths(repo, base, head)}
+
+
+def is_ancestor(repo, earlier, later):
+    status, _ = git_command(['merge-base', '--is-ancestor', earlier, later], repository_fd=repo, check=False)
+    if status not in (0, 1):
+        raise Problem('unavailable')
+    return status == 0
+
+
+def refresh_feature_base(repo, remote, branch, expected):
+    current = feature_snapshot(repo, branch)
+    if current['git'] != expected:
+        raise Problem('conflict')
+    before = current_remote(remote, branch)
+    old_base, old_head = expected['base_oid'], expected['head_oid']
+    if before['base_oid'] == old_base:
+        return current
+    if before['head_oid'] is not None or before['base_oid'] is None:
+        raise Problem('conflict')
+    git_command(['fetch', '--no-tags', '--no-recurse-submodules', '--', remote, branch['base_ref']],
+                repository_fd=repo, timeout=240)
+    new_base = get_ref(repo, 'FETCH_HEAD')
+    if new_base != before['base_oid'] or not is_ancestor(repo, old_base, new_base):
+        raise Problem('conflict')
+    if old_head == old_base:
+        new_head = new_base
+    else:
+        status, output = git_command(['merge-tree', '--write-tree', '--no-messages', old_head, new_base],
+                                     repository_fd=repo, check=False)
+        if status != 0:
+            raise Problem('conflict' if status == 1 else 'unavailable')
+        tree = oid(output.decode('ascii').strip())
+        new_head = feature_commit(repo, tree, (old_head, new_base), 'Refresh Factory feature base')
+    updated = snapshot_between(repo, new_base, new_head)
+    if current_remote(remote, branch) != before:
+        raise Problem('conflict')
+    # Controller readers share the feature lock. Git also compares both old
+    # refs under its transaction before changing either.
+    updates = (f"start\nupdate {branch['head_ref']} {new_head} {old_head}\n"
+               f"update refs/factory/base {new_base} {old_base}\nprepare\ncommit\n").encode()
+    git_command(['update-ref', '--stdin'], repository_fd=repo, input_data=updates)
+    return updated
 
 
 def publish_feature(record, repo, remote, branch, expected):
@@ -1205,11 +1256,19 @@ def execute_feature(request, root):
         repo = opened(record, 'integration.git', initializing)
         if initializing:
             initialize_repository(repo, remote, branch)
+        base = get_ref(repo, 'refs/factory/base')
+        if base is None:
+            raise Problem('conflict')
+        branch['base_oid'] = base
+        if initializing:
             return branch
         if op == 'feature_snapshot':
             return feature_snapshot(repo, branch)
         if op == 'feature_remote':
             return current_remote(remote, branch)
+        if op == 'feature_refresh':
+            return refresh_feature_base(repo, remote, branch,
+                                        {key: request[key] for key in ('base_oid', 'head_oid', 'patch_digest')})
         if op == 'feature_push':
             return publish_feature(record, repo, remote, branch,
                                    {key: request[key] for key in ('base_oid', 'head_oid', 'patch_digest')})

@@ -584,19 +584,25 @@ class ProjectControllerTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'conflict')
         self.assertEqual((unowned / 'keep').read_text(), 'not owned by this operation')
 
-    def test_feature_push_refuses_a_competing_branch_and_reconciles_an_exact_push(self):
-        origin = self.origin()
-        self.clone(origin)
-        feature = str(uuid.uuid4())
+    def ready_feature_snapshot(self, origin, feature):
         branch = self.feature(origin, feature, 'initialize')
-        base, ref = branch['base_oid'], branch['head_ref']
+        base = branch['base_oid']
         fields = {'attempt': str(uuid.uuid4()), 'base_oid': base, 'writable': True}
         self.feature(origin, feature, 'prepare', **fields)
         checkout = self.feature_checkout(feature, fields['attempt'])
         (checkout / 'file.txt').write_text('ready for review\n')
         self.feature(origin, feature, 'checkpoint', scope=['file.txt'], **fields)
-        head = self.feature(origin, feature, 'integrate', expected_head=base, scope=['file.txt'], **fields)
-        snapshot = self.feature(origin, feature, 'snapshot')['git']
+        self.feature(origin, feature, 'integrate', expected_head=base, scope=['file.txt'], **fields)
+        return branch, self.feature(origin, feature, 'snapshot')
+
+    def test_feature_push_refuses_a_competing_branch_and_reconciles_an_exact_push(self):
+        origin = self.origin()
+        self.clone(origin)
+        feature = str(uuid.uuid4())
+        branch, result = self.ready_feature_snapshot(origin, feature)
+        base, ref = branch['base_oid'], branch['head_ref']
+        snapshot = result['git']
+        head = snapshot['head_oid']
         with self.assertRaises(controller.Problem) as caught:
             self.feature(origin, feature, 'push', **{**snapshot, 'head_oid': base})
         self.assertEqual(caught.exception.code, 'conflict')
@@ -618,6 +624,45 @@ class ProjectControllerTests(unittest.TestCase):
         self.assertEqual(self.feature(origin, feature, 'push', **snapshot), 'pushed')
         self.assertEqual(inspect(str(origin), branch)['head_oid'], head)
         self.assertEqual(self.feature(origin, feature, 'push', **snapshot), 'pushed')
+
+    def test_feature_refreshes_only_owned_refs_and_requires_review_of_the_new_snapshot(self):
+        origin = self.origin()
+        self.clone(origin)
+        feature = str(uuid.uuid4())
+        branch, result = self.ready_feature_snapshot(origin, feature)
+        remote_git = ['git', '-C', str(origin)]
+        (origin / 'upstream.txt').write_text('upstream work\n')
+        subprocess.run([*remote_git, 'add', 'upstream.txt'], check=True)
+        subprocess.run([*remote_git, 'commit', '-qm', 'upstream advance'], check=True)
+        new_base = subprocess.check_output([*remote_git, 'rev-parse', 'HEAD'], text=True).strip()
+
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'push', **result['git'])
+        self.assertEqual(caught.exception.code, 'conflict')
+        refreshed = self.feature(origin, feature, 'refresh', **result['git'])
+        self.assertEqual(refreshed, self.feature(origin, feature, 'snapshot'))
+        self.assertEqual(refreshed['git']['base_oid'], new_base)
+        self.assertNotEqual(refreshed['git']['head_oid'], result['git']['head_oid'])
+        self.assertEqual(refreshed['changed_paths'], ['file.txt'])
+        self.assertIn('+ready for review', refreshed['patch'])
+        self.assertFalse((self.home / 'Documents/repo/upstream.txt').exists())
+        self.assertEqual(self.feature(origin, feature, 'initialize'), {**branch, 'base_oid': new_base})
+        self.assertEqual(self.feature(origin, feature, 'remote'), {'base_oid': new_base, 'head_oid': None})
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'push', **result['git'])
+        self.assertEqual(caught.exception.code, 'conflict')
+
+    def test_feature_base_refresh_keeps_the_prior_result_after_a_merge_conflict(self):
+        origin = self.origin()
+        self.clone(origin)
+        feature = str(uuid.uuid4())
+        _, result = self.ready_feature_snapshot(origin, feature)
+        (origin / 'file.txt').write_text('conflicting upstream edit\n')
+        subprocess.run(['git', '-C', str(origin), 'commit', '-qam', 'conflicting advance'], check=True)
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'refresh', **result['git'])
+        self.assertEqual(caught.exception.code, 'conflict')
+        self.assertEqual(self.feature(origin, feature, 'snapshot'), result)
 
     def test_unsafe_home_and_forged_stage_are_rejected(self):
         foreign = self.home / 'foreign'

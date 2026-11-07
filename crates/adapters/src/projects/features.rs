@@ -117,22 +117,7 @@ impl FeatureWorkspaceRuntime for DockerProjectRuntime {
         feature_id: Uuid,
     ) -> Result<WorkspaceDiff, WorkspaceError> {
         let request = feature_request(env, project, feature_id, "feature_snapshot")?;
-        let reply: SnapshotReply = self.run_feature(env, request).await?;
-        if !valid_oid(&reply.git.base_oid)
-            || !valid_oid(&reply.git.head_oid)
-            || reply.git.patch_digest != digest(&reply.patch)
-        {
-            return Err(WorkspaceError::Uncertain);
-        }
-        Ok(WorkspaceDiff {
-            git: GitSnapshot {
-                base_oid: reply.git.base_oid,
-                head_oid: reply.git.head_oid,
-                patch_digest: reply.git.patch_digest,
-            },
-            patch: reply.patch,
-            changed_paths: reply.changed_paths,
-        })
+        parse_snapshot(self.run_feature(env, request).await?)
     }
 }
 
@@ -162,17 +147,20 @@ impl DockerProjectRuntime {
         feature_id: Uuid,
         snapshot: &GitSnapshot,
     ) -> Result<(), WorkspaceError> {
-        if !valid_oid(&snapshot.base_oid)
-            || !valid_oid(&snapshot.head_oid)
-            || !valid_hex(&snapshot.patch_digest, 64)
-        {
-            return Err(WorkspaceError::Invalid);
-        }
-        let mut request = feature_request(env, project, feature_id, "feature_push")?;
-        request["base_oid"] = json!(snapshot.base_oid);
-        request["head_oid"] = json!(snapshot.head_oid);
-        request["patch_digest"] = json!(snapshot.patch_digest);
+        let request = snapshot_request(env, project, feature_id, "feature_push", snapshot)?;
         expect_reply(self.run_feature(env, request).await?, "pushed")
+    }
+
+    /// Refresh only the owned feature refs, preserving the previous result on conflict.
+    pub async fn refresh_feature_base(
+        &self,
+        env: &Environment,
+        project: &Project,
+        feature_id: Uuid,
+        expected: &GitSnapshot,
+    ) -> Result<WorkspaceDiff, WorkspaceError> {
+        let request = snapshot_request(env, project, feature_id, "feature_refresh", expected)?;
+        parse_snapshot(self.run_feature(env, request).await?)
     }
 
     async fn run_feature<T: DeserializeOwned>(
@@ -221,6 +209,44 @@ fn attempt_request(
     request["base_oid"] = json!(workspace.base_oid);
     request["writable"] = json!(workspace.access == WorkspaceAccess::Write);
     Ok(request)
+}
+
+fn snapshot_request(
+    env: &Environment,
+    project: &Project,
+    feature_id: Uuid,
+    op: &str,
+    snapshot: &GitSnapshot,
+) -> Result<Value, WorkspaceError> {
+    if !valid_oid(&snapshot.base_oid)
+        || !valid_oid(&snapshot.head_oid)
+        || !valid_hex(&snapshot.patch_digest, 64)
+    {
+        return Err(WorkspaceError::Invalid);
+    }
+    let mut request = feature_request(env, project, feature_id, op)?;
+    request["base_oid"] = json!(snapshot.base_oid);
+    request["head_oid"] = json!(snapshot.head_oid);
+    request["patch_digest"] = json!(snapshot.patch_digest);
+    Ok(request)
+}
+
+fn parse_snapshot(reply: SnapshotReply) -> Result<WorkspaceDiff, WorkspaceError> {
+    if !valid_oid(&reply.git.base_oid)
+        || !valid_oid(&reply.git.head_oid)
+        || reply.git.patch_digest != digest(&reply.patch)
+    {
+        return Err(WorkspaceError::Uncertain);
+    }
+    Ok(WorkspaceDiff {
+        git: GitSnapshot {
+            base_oid: reply.git.base_oid,
+            head_oid: reply.git.head_oid,
+            patch_digest: reply.git.patch_digest,
+        },
+        patch: reply.patch,
+        changed_paths: reply.changed_paths,
+    })
 }
 
 fn expect_reply(reply: String, expected: &str) -> Result<(), WorkspaceError> {
