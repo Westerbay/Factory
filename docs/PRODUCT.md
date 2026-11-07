@@ -29,7 +29,7 @@ Stop environment, a light/dark theme choice and Sign out, plus User access for a
 The initial theme follows the browser preference and the choice is stored on the device;
 there is no separate system mode. Provider account
 details, additional connections and disconnect actions belong in Settings. GitHub sign-in
-requests repository access as well as identity. Global skills are not available. The interface uses Space Mono and concise
+requests repository access as well as identity. The interface uses Space Mono and concise
 contextual status instead of an environment dashboard or permanent refresh controls.
 
 ## GitHub projects
@@ -170,6 +170,25 @@ A missing or stopped proxy makes Codex status/login unavailable. The local termi
 and local account cancellation/logout remain independent of proxy availability, subject
 to the active-run guard. Members can also deliberately run either CLI in the terminal.
 
+## Features
+
+Overview links to Chat and Features. A member starts a feature in a ready project
+and selects a connected provider. The conversation opens with the assistant's first
+message and uses a side panel for the current decision or result.
+
+The member first approves the current product brief, then the current architecture
+proposal and UML. A new product decision invalidates dependent architecture approval.
+Members can explicitly reopen the affected gate to revise the work. Task and delivery
+plans remain internal. Feature attempts show their role, assignment, actual model when
+the provider reports it, activity and status. Resume checks that the prior execution
+stopped and retains the verified work.
+
+The integration is reviewed against one Git snapshot. Relevant specialists join the
+general review. Corrections use separate writers and a fresh review when needed.
+Decisive failed or missing checks and blocking findings prevent publication. Members
+can inspect the result and explicitly request one draft pull request. A changed diff
+must be reviewed again. An ambiguous publication is reconciled before retrying.
+
 ## Provider conversations
 
 After at least one provider connection, a member can create and select conversations,
@@ -198,7 +217,7 @@ Assistant replies render Markdown during streaming and after completion, includi
 links, lists, tables and code blocks. Raw HTML cannot execute and embedded images do
 not load remote resources automatically. User messages remain plain text.
 
-Both providers run with full access inside the member's container: commands and file changes do
+In free chat, both providers run with full access inside the member's container: commands and file changes do
 not ask for per-action approval, and the agent can read, change or delete any files
 accessible to that container user, including saved provider credentials. Docker's
 user isolation and network controls still apply, but do not protect a member's own home

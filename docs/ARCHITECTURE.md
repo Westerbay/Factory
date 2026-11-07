@@ -390,6 +390,31 @@ also releases a settled uncertain model-probe lease in the supervisor transactio
 a suspended member; it does not change the environment intent or session. A separate
 guarded route can check the same recovery. Recovery does not undo external effects.
 
+## Feature workflows
+
+[Core feature state](../crates/core/src/features/mod.rs) owns revisions, attempt claims,
+review identity and delivery receipts. The [application coordinator](../crates/application/src/features/mod.rs)
+reuses project and conversation ownership and provider discovery. The [feature store](../crates/database/src/features/mod.rs)
+applies transitions transactionally with operation replay and environment generation
+fences. The [feature API](../apps/api/src/features/mod.rs) projects only member-facing
+state. The provider [codec](../crates/adapters/src/feature_codec.rs) translates structured
+agent replies and computes revision fingerprints outside application policy.
+
+The [project controller](../infra/environments/project-controller.py) uses owned Git
+checkouts and validates a writer's paths before integration. The [feature execution adapter](../crates/adapters/src/environments/feature_execution/mod.rs)
+mounts only the verified attempt checkout, read-only for reviewers. Disposable workers
+have no direct network, GitHub SSH key or member home mount. Provider work uses a fixed
+relay to the selected provider and an access-only credential seed. The selected worker
+can access this seed. It does not receive refresh credentials, so an expired connection
+must be renewed before retrying. Verification commands have neither provider credentials
+nor network. The main environment owns the trusted Git push; the GitHub token stays on
+the server.
+
+Reviewers and trusted checks use the same committed snapshot. The [delivery service](../crates/application/src/features/delivery.rs)
+compares the approved review with current local and remote refs, verifies the stable
+repository identity and reconciles the draft receipt before retrying. Ordinary Chat
+retains its own provider execution policy.
+
 ## PWA and static hosting
 
 [The service worker](../apps/web/src/pwa/sw.ts) precaches only public JavaScript, CSS,

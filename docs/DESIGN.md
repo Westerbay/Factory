@@ -196,6 +196,18 @@ Closing is as fast or faster than opening. Dismissal never leaves invisible focu
 traps. Reduced motion removes travel and spinner rotation while retaining textual
 status and feedback.
 
+## Feature workspace
+
+Keep the shared shell and one page header. A feature opens directly in conversation,
+with a stage panel for the brief, UML, agents, or result. On compact screens the
+discussion and stage panel are separate tabs. Use text and icons to distinguish
+running, failed, uncertain and verified attempts. Gate controls describe the current
+revision. Show publication next to the reviewed diff when the result is ready.
+
+UML previews have fit, zoom and source access. Completed assistant code fences can
+offer an explicit preview action. Authored HTML opens in an isolated frame. Keep the
+conversation source readable and maintain focus when closing an expanded preview.
+
 ## Privacy and delivery
 
 Initial admission and protected route changes require verification. An already verified,
