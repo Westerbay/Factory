@@ -32,7 +32,8 @@ use futures_util::StreamExt;
 use policy::{
     ROLE, Role, WorkerIdentity, inspect_id, verify_identity, verify_worker, verify_worker_owner,
 };
-pub(crate) use provider::{ScopedProvider, relay_command};
+use provider::guarded_command;
+pub(crate) use provider::{ScopedProvider, proof_command, relay_command};
 use serde_json::Value;
 use std::{
     collections::HashMap,
@@ -89,6 +90,7 @@ impl DockerFeatureExecutionRuntime {
         tokio::time::timeout(self.runtime.timeout, async {
             let _gate = launch_lock(env).await.map_err(preflight)?;
             self.runtime.feature_preflight(env).await?;
+            let proof = self.runtime.checkout_proof(env, identity).await?;
             let relay = match relay {
                 Some((provider, attempt)) => {
                     Some(self.runtime.feature_relay(env, provider, attempt).await?)
@@ -96,7 +98,7 @@ impl DockerFeatureExecutionRuntime {
                 None => None,
             };
             self.runtime
-                .create_feature_worker(env, identity, body, relay)
+                .create_feature_worker(env, identity, body, relay, &proof)
                 .await
         })
         .await
@@ -273,6 +275,29 @@ async fn collect_check(
     })
 }
 
+fn relay_proof(value: &[u8]) -> Result<&str, ExecutionError> {
+    if value.len() > 54 {
+        return Err(ExecutionError::PreflightUnavailable);
+    }
+    let proof = value
+        .strip_prefix(b"ready ")
+        .ok_or(ExecutionError::PreflightUnavailable)?;
+    parse_proof(std::str::from_utf8(proof).map_err(|_| ExecutionError::PreflightUnavailable)?)
+}
+
+fn parse_proof(value: &str) -> Result<&str, ExecutionError> {
+    let proof = value
+        .strip_suffix('\n')
+        .ok_or(ExecutionError::PreflightUnavailable)?;
+    let (device, inode) = proof
+        .split_once(':')
+        .ok_or(ExecutionError::PreflightUnavailable)?;
+    if device.parse::<u64>().is_err() || inode.parse::<u64>().is_err() {
+        return Err(ExecutionError::PreflightUnavailable);
+    }
+    Ok(proof)
+}
+
 fn preflight(_: EnvironmentError) -> ExecutionError {
     ExecutionError::PreflightUnavailable
 }
@@ -324,10 +349,17 @@ impl DockerEnvironmentRuntime {
         self: &Arc<Self>,
         env: &Environment,
         identity: &WorkerIdentity,
-        body: ContainerCreateBody,
-        relay: Option<DockerProcess>,
+        mut body: ContainerCreateBody,
+        relay: Option<(DockerProcess, String)>,
+        proof: &str,
     ) -> Result<(DockerProcess, WorkerExit), ExecutionError> {
         self.require_mutation_permission().map_err(preflight)?;
+        let command = body.entrypoint.take().ok_or(ExecutionError::Invalid)?;
+        body.entrypoint = Some(guarded_command(
+            proof,
+            relay.as_ref().map(|(_, proof)| proof.as_str()),
+            command,
+        ));
         let expected =
             serde_json::to_value(&body).map_err(|_| ExecutionError::PreflightUnavailable)?;
         let created = self
@@ -372,7 +404,7 @@ impl DockerEnvironmentRuntime {
             WorkerExit {
                 runtime: Arc::clone(self),
                 id,
-                relay,
+                relay: relay.map(|(process, _)| process),
             },
         ))
     }
@@ -400,12 +432,46 @@ impl DockerEnvironmentRuntime {
         Ok(())
     }
 
+    async fn checkout_proof(
+        &self,
+        env: &Environment,
+        identity: &WorkerIdentity,
+    ) -> Result<String, ExecutionError> {
+        let mut process = self
+            .start_process_checked(
+                env,
+                FixedProcess::FeatureProof {
+                    checkout: identity.checkout.clone(),
+                },
+            )
+            .await
+            .map_err(|_| ExecutionError::PreflightUnavailable)?;
+        let proof = match process.output.next().await {
+            Some(Ok(LogOutput::StdOut { message })) if message.len() <= 48 => {
+                String::from_utf8(message.to_vec())
+                    .map_err(|_| ExecutionError::PreflightUnavailable)?
+            }
+            _ => return Err(ExecutionError::PreflightUnavailable),
+        };
+        let id = process.id.clone();
+        drop(process);
+        if self
+            .wait_process_exit(&id, Duration::from_secs(3))
+            .await
+            .map_err(preflight)?
+            != 0
+        {
+            return Err(ExecutionError::PreflightUnavailable);
+        }
+        parse_proof(&proof).map(str::to_owned)
+    }
+
     async fn feature_relay(
         &self,
         env: &Environment,
         provider: ScopedProvider,
         attempt: Uuid,
-    ) -> Result<DockerProcess, ExecutionError> {
+    ) -> Result<(DockerProcess, String), ExecutionError> {
         if !self.egress.available().await.map_err(preflight)? {
             return Err(ExecutionError::PreflightUnavailable);
         }
@@ -416,10 +482,11 @@ impl DockerEnvironmentRuntime {
                 ProcessStartError::PreSubmission(_) => ExecutionError::PreflightUnavailable,
                 ProcessStartError::Submitted(_) => ExecutionError::LaunchUncertain,
             })?;
-        match relay.output.next().await {
-            Some(Ok(LogOutput::StdOut { message })) if message.as_ref() == b"ready\n" => Ok(relay),
-            _ => Err(ExecutionError::PreflightUnavailable),
-        }
+        let proof = match relay.output.next().await {
+            Some(Ok(LogOutput::StdOut { message })) => relay_proof(&message)?.to_owned(),
+            _ => return Err(ExecutionError::PreflightUnavailable),
+        };
+        Ok((relay, proof))
     }
 
     async fn inspect_feature_worker(

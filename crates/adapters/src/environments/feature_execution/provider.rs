@@ -125,6 +125,21 @@ pub(crate) fn relay_command(provider: ScopedProvider, attempt: Uuid) -> Vec<Stri
     args
 }
 
+pub(crate) fn proof_command(checkout: &str) -> Vec<String> {
+    launcher_args("proof", checkout)
+}
+
+pub(super) fn guarded_command(
+    proof: &str,
+    relay_proof: Option<&str>,
+    command: Vec<String>,
+) -> Vec<String> {
+    let mut args = launcher_args("guard", proof);
+    args.push(relay_proof.unwrap_or("-").to_owned());
+    args.extend(command);
+    args
+}
+
 fn launcher_args(action: &str, value: &str) -> Vec<String> {
     ["/usr/bin/python3", "-I", "-c", LAUNCHER, action, value]
         .into_iter()

@@ -1,10 +1,14 @@
 """Behavior tests for the provider relay. No Docker, network or credentials needed."""
 import io
 import json
+import os
+from pathlib import Path
 import socket
+import tempfile
 import unittest
+import uuid
 
-from launcher import PROVIDERS, access_only, connect_target, establish
+from launcher import PROVIDERS, access_only, checkout_proof, connect_target, establish
 
 
 class ConnectTargetTest(unittest.TestCase):
@@ -73,6 +77,31 @@ class WorkerCredentialTest(unittest.TestCase):
             "claudeAiOauth":{"accessToken":"fixture","expiresAt":4102444800000}
         })
         self.assertNotIn("platform.claude.com", PROVIDERS["claude"][2])
+
+
+class CheckoutProofTest(unittest.TestCase):
+    def test_refuses_replaced_or_symlink_checkout(self):
+        with tempfile.TemporaryDirectory() as home:
+            relative = f".factory/features/{uuid.uuid4()}/{uuid.uuid4()}/attempts/{uuid.uuid4()}/checkout"
+            checkout = Path(home) / relative
+            checkout.mkdir(parents=True)
+            info = checkout.stat()
+            receipt = checkout.parent / "ready"
+            receipt.write_text(json.dumps({"device": info.st_dev, "inode": info.st_ino}))
+            receipt.chmod(0o600)
+            directory = os.open(home, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                self.assertEqual(checkout_proof(directory, relative), f"{info.st_dev}:{info.st_ino}")
+                moved = checkout.rename(checkout.parent / "moved")
+                checkout.mkdir()
+                with self.assertRaises(ValueError):
+                    checkout_proof(directory, relative)
+                checkout.rmdir()
+                checkout.symlink_to(moved)
+                with self.assertRaises(OSError):
+                    checkout_proof(directory, relative)
+            finally:
+                os.close(directory)
 
 
 if __name__ == "__main__":

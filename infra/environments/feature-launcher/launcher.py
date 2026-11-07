@@ -244,7 +244,8 @@ def relay_main(attempt, provider):
                 # Short and anchored to the opened directory even if its name is swapped.
                 listener.bind(f"/proc/self/fd/{private}/relay.sock")
                 listener.listen(16)
-                print("ready", flush=True)
+                info = os.fstat(private)
+                print(f"ready {info.st_dev}:{info.st_ino}", flush=True)
                 serve(listener, data, PROVIDERS[provider][2])
             finally:
                 try:
@@ -256,6 +257,62 @@ def relay_main(attempt, provider):
         finally:
             os.close(relays)
     return 0
+
+
+def checkout_proof(home, checkout):
+    parts = checkout.split("/")
+    if len(parts) != 7 or parts[:2] != [".factory", "features"] or parts[4] != "attempts" or parts[6] != "checkout":
+        raise ValueError("invalid checkout")
+    for position in (2, 3, 5):
+        if str(uuid.UUID(parts[position])) != parts[position]:
+            raise ValueError("invalid checkout")
+
+    slot = os.dup(home)
+    try:
+        for name in parts[:-1]:
+            child = owned_directory(slot, name, private=False)
+            os.close(slot)
+            slot = child
+        receipt = os.open(
+            "ready", os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, dir_fd=slot
+        )
+        with os.fdopen(receipt, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+                raise PermissionError("invalid checkout receipt")
+            value = json.loads(stream.read(513))
+        directory = owned_directory(slot, "checkout", private=False)
+        try:
+            info = os.fstat(directory)
+        finally:
+            os.close(directory)
+        if value != {"device": info.st_dev, "inode": info.st_ino}:
+            raise ValueError("checkout was replaced")
+        return f"{info.st_dev}:{info.st_ino}"
+    finally:
+        os.close(slot)
+
+
+def proof_main(checkout):
+    home = os.open("/home/factory", DIRECTORY)
+    try:
+        print(checkout_proof(home, checkout), flush=True)
+    finally:
+        os.close(home)
+    return 0
+
+
+def matches_mount(path, proof):
+    info = os.stat(path, follow_symlinks=False)
+    return stat.S_ISDIR(info.st_mode) and proof == f"{info.st_dev}:{info.st_ino}"
+
+
+def guarded_main(proof, relay_proof, *command):
+    if not matches_mount("/workspace/checkout", proof):
+        return 1
+    if relay_proof != "-" and not matches_mount("/run/factory-relay", relay_proof):
+        return 1
+    os.execv(command[0], command)
 
 
 RELAY = "/run/factory-relay/relay.sock"
@@ -323,6 +380,8 @@ def worker_main(provider, *args):
 if __name__ == "__main__":
     try:
         role, *args = sys.argv[1:]
-        sys.exit({"relay": relay_main, "worker": worker_main}[role](*args))
+        sys.exit({
+            "relay": relay_main, "worker": worker_main, "proof": proof_main, "guard": guarded_main,
+        }[role](*args))
     except (OSError, ValueError, KeyError, TypeError):
         sys.exit(1)

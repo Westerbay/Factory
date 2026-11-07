@@ -127,8 +127,13 @@ printf '%s' '{{"auth_mode":"chatgpt","last_refresh":"2099-11-07T00:00:00Z","toke
 printf '%s' '{{"claudeAiOauth":{{"accessToken":"synthetic-fixture-not-a-real-key","refreshToken":"must-not-copy","expiresAt":4102444800000,"scopes":["user:inference","user:profile"],"subscriptionType":"max","rateLimitTier":"default_claude_max_5x"}}}}' >/home/factory/.claude/.credentials.json
 printf witness >/home/factory/.ssh/witness
 printf tracked >/home/factory/{}/tracked
-"#, identity.checkout, identity.checkout, fixture_jwt = FIXTURE_JWT);
+python3 -c 'import json, os, sys; path=sys.argv[1]; info=os.stat(path); json.dump(dict(device=info.st_dev, inode=info.st_ino), open(os.path.join(os.path.dirname(path), "ready"), "w"))' /home/factory/{}
+"#, identity.checkout, identity.checkout, identity.checkout, fixture_jwt = FIXTURE_JWT);
             assert_eq!(execute(&runtime, main_id, &["/bin/sh", "-ec", &setup]).await.0, 0);
+            let proof_args = proof_command(&identity.checkout);
+            let (proof_code, proof_output) = execute(&runtime, main_id, &proof_args.iter().map(String::as_str).collect::<Vec<_>>()).await;
+            assert_eq!(proof_code, 0);
+            let proof = parse_proof(&proof_output).unwrap();
             let request = FeatureRun { workspace: workspace.clone(), provider: provider.into(), model: model.into(), effort: None, input: "Fixture never begins a provider turn".into() };
             let provider = ScopedProvider::from_request(&request).unwrap();
             let relay = runtime.docker.create_exec(main_id, CreateExecOptions {
@@ -138,11 +143,14 @@ printf tracked >/home/factory/{}/tracked
             let StartExecResults::Attached { input, mut output } = runtime.docker.start_exec(&relay.id, None).await.unwrap() else {
                 panic!("relay fixture must attach");
             };
-            assert!(matches!(tokio::time::timeout(Duration::from_secs(3), output.next()).await.unwrap(),
-                Some(Ok(LogOutput::StdOut { message })) if message.as_ref() == b"ready\n"
-            ));
+            let Some(Ok(LogOutput::StdOut { message })) =
+                tokio::time::timeout(Duration::from_secs(3), output.next()).await.unwrap()
+            else {
+                panic!("relay fixture did not provide mount identity");
+            };
+            let relay_identity = relay_proof(&message).unwrap().to_owned();
             let body = identity.body(&env, match provider { ScopedProvider::Codex => "/workspace", ScopedProvider::Claude => CHECKOUT }, provider.command(&request)).unwrap();
-            let (process, exit) = runtime.create_feature_worker(&env, &identity, body, Some(DockerProcess { id: relay.id, input, output })).await.unwrap();
+            let (process, exit) = runtime.create_feature_worker(&env, &identity, body, Some((DockerProcess { id: relay.id, input, output }, relay_identity)), proof).await.unwrap();
             let process_receipt = process.id.clone();
             let mut session = match provider {
                 ScopedProvider::Codex => crate::codex_execution::scoped_session(process, exit, &request),
@@ -205,8 +213,13 @@ except OSError as error:
                 }
                 assert!(runtime.inspect_feature_worker(&process_receipt).await.unwrap().is_none());
                 let check = WorkerIdentity::new(&env, &project, &workspace, env.generation, Role::Check).unwrap();
+                let body = check_body(&check, &env, "printf should-not-run; exit 7").unwrap();
+                let (process, exit) = runtime.create_feature_worker(&env, &check, body, None, "0:0").await.unwrap();
+                let rejected = collect_check(process, exit).await.unwrap();
+                assert_eq!(rejected.exit_code, 1);
+                assert!(rejected.output.is_empty());
                 let body = check_body(&check, &env, "printf observed; exit 7").unwrap();
-                let (process, exit) = runtime.create_feature_worker(&env, &check, body, None).await.unwrap();
+                let (process, exit) = runtime.create_feature_worker(&env, &check, body, None, proof).await.unwrap();
                 let output = collect_check(process, exit).await.unwrap();
                 assert_eq!(output.exit_code, 7);
                 assert_eq!(output.output, "observed");
