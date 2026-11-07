@@ -329,8 +329,8 @@ fn validate_callback(value: &str) -> Result<(), IdentityError> {
         Some(Host::Ipv6(ip)) => ip.is_loopback(),
         _ => false,
     };
-    if url.scheme() != "http"
-        || !local
+    let secure = url.scheme() == "https" && url.host().is_some();
+    if (!secure && !(url.scheme() == "http" && local))
         || !url.username().is_empty()
         || url.password().is_some()
         || url.path() != "/api/auth/github/callback"

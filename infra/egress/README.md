@@ -1,11 +1,13 @@
 # Container egress
 
-The operator builds the pinned Squid 7.7 image with `scripts/egress/prepare.mjs`.
+Development builds the pinned Squid 7.7 image with `scripts/egress/prepare.mjs`.
+Production uses the image digest recorded in the release bundle.
 The Rust supervisor owns creation and inspection of the shared outbound bridge,
 proxy and per-environment internal bridges. Existing user containers are never
 attached or replaced by this module. All addresses in the operator host interface
-inventory are denied. Preparation refuses to publish a changed image or interface
-inventory while an incompatible proxy exists; the previous `egress.json` and
+inventory are denied. Production omits RFC 1918 interface addresses from that
+inventory because both network rules already reject those ranges. Preparation
+refuses to publish a changed image or interface inventory while an incompatible proxy exists; the previous `egress.json` and
 `prepared.json` remain intact. Preparation never removes a proxy or user container.
 
 ## Explicit proxy maintenance

@@ -95,7 +95,10 @@ are public static resources; loading the interface does not require a remote fon
 ## Persistence and ownership
 
 - [IdentityDatabase and PgIdentityStore](../crates/database/src/identity/mod.rs) own SQLx
-  connection/readiness/close and transactional identity persistence. Initialization uses the shared initial schema on a verified local target.
+  connection/readiness/close and transactional identity persistence. The
+  [API database selector](../apps/api/src/bootstrap.rs) is shared by startup and the
+  administrator CLI. It uses a verified development target or the private production
+  Compose database. Both environments use the shared initial schema.
   Operator-only administrator setup shares identity locking/upsert with login but is
   deliberately excluded from the HTTP `IdentityStore` port.
 - [Bounded database operations](../crates/database/src/connection.rs) own runtime pool

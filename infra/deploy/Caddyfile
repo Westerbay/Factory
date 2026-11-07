@@ -1,0 +1,4 @@
+api.{$FACTORY_DOMAIN} {
+	header Cache-Control "no-store"
+	reverse_proxy api:3001
+}

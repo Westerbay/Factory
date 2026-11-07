@@ -75,14 +75,14 @@ these generated transport types.
 
 ## Sessions and access changes
 
-The server issues opaque HttpOnly, SameSite=Lax session cookies. Local HTTP does not use
-the Secure attribute; this loopback configuration is not a production cookie policy.
+The server issues opaque, host-only HttpOnly and SameSite=Lax session cookies.
+The HTTPS production API also sets the Secure attribute.
 Session credentials are hashed in PostgreSQL. Each protected request checks the current
 session and active user state; fixed expiry, logout or suspension ends admission.
 Unknown verified users are pending. The [operator CLI](../apps/api/src/bin/factory.rs)
 resolves a public GitHub username without OAuth credentials, confirms the selected
 profile, and calls [administrator setup](../crates/database/src/identity/setup.rs) on
-the verified owned database. Setup serializes the one-admin decision, shares the
+the configured database. Setup serializes the one-admin decision, shares the
 identity lock with login, and creates or promotes the selected account atomically.
 It refuses all writes once an administrator exists and never issues a session.
 The existing unique administrator index remains the final concurrency guard.
@@ -120,8 +120,9 @@ silently on return. Routine focus checks do not recreate chat or terminal instan
 
 ## Persistence and local ownership
 
-[IdentityDatabase](../crates/database/src/identity/mod.rs) accepts only a verified target.
-It does not consume an arbitrary database URL or read credential files. Startup and
+[IdentityDatabase](../crates/database/src/identity/mod.rs) uses a verified local target
+for development and the dedicated private PostgreSQL service for production. It does
+not consume an arbitrary database URL or read credential files. Startup and
 readiness inspect state without DDL. The local setup and reset commands apply the single
 [initial schema](../crates/database/schema.sql) to a verified local database. Reset is
 explicit and deletes database records; runtime startup never resets data.
@@ -140,7 +141,8 @@ intent, runtime observations and supervisor ownership. The
 requests; the [reconciler](../crates/application/src/environments/reconcile.rs) performs
 bounded runtime operations outside database transactions. API composition owns its
 lifetime. JavaScript [preparation tooling](../scripts/environments/prepare.mjs) builds
-the common image explicitly; user operations call the Rust
+the common images in development and verifies the images pulled by digest in
+production. User operations call the Rust
 [Bollard adapter](../crates/adapters/src/environments/runtime.rs) directly. Neither API
 startup nor a start request builds or pulls images.
 
@@ -446,8 +448,9 @@ is not evidence that the API or a session is currently available.
 
 A static host must serve SPA navigation fallbacks and fresh entry/worker/manifest
 resources; hashed assets can be immutable. The API remains a separate origin with exact
-credentialed CORS. Production origins, TLS, reverse proxies and deployment are separate
-work; current configuration intentionally accepts only local HTTP.
+credentialed CORS. Production uses sibling HTTPS origins so API session cookies work
+across the web and API hosts. A static host serves the PWA and Caddy terminates TLS
+for the API on the Linux server. See the [deployment runbook](DEPLOYMENT.md).
 
 ## Preserved TypeScript execution reference
 

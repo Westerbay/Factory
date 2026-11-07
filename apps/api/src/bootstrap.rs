@@ -16,6 +16,19 @@ use recovery::{HostRouter, RecoveryHost};
 use std::sync::Arc;
 use tokio::sync::watch;
 
+/// Resolve the same database for API startup and the explicit administrator command.
+pub async fn connect_database(config: &RuntimeConfig) -> Result<IdentityDatabase, &'static str> {
+    let result = if let Some(password) = config.production_database_password() {
+        IdentityDatabase::connect_production(password).await
+    } else {
+        let target = local_target::from_workspace(config.workspace())
+            .await
+            .map_err(|_| "OWNED_DATABASE_REQUIRED")?;
+        IdentityDatabase::connect(&target).await
+    };
+    result.map_err(|_| "IDENTITY_DATABASE_UNAVAILABLE")
+}
+
 async fn identity(config: &RuntimeConfig) -> Result<IdentityRuntime, &'static str> {
     let settings = config.identity().ok_or("IDENTITY_CONFIGURATION_REQUIRED")?;
     let provider = GitHubProvider::new(
@@ -24,14 +37,7 @@ async fn identity(config: &RuntimeConfig) -> Result<IdentityRuntime, &'static st
         format!("{}/api/auth/github/callback", config.api_origin()),
     )
     .map_err(|_| "GITHUB_CONFIGURATION_INVALID")?;
-    let target = local_target::from_workspace(config.workspace())
-        .await
-        .map_err(|_| "OWNED_DATABASE_REQUIRED")?;
-    let database = Arc::new(
-        IdentityDatabase::connect(&target)
-            .await
-            .map_err(|_| "IDENTITY_DATABASE_UNAVAILABLE")?,
-    );
+    let database = Arc::new(connect_database(config).await?);
     let code = match database.ready().await {
         Ok(Readiness::Ready) => None,
         Ok(Readiness::Missing) => Some("IDENTITY_SCHEMA_REQUIRED"),
@@ -60,7 +66,7 @@ pub async fn serve(config: RuntimeConfig) -> Result<(), &'static str> {
             tracing::warn!(
                 event = "api.identity.unavailable",
                 code,
-                guidance = "Check explicit OAuth configuration and owned database; initialize the database, then restart."
+                guidance = "Check OAuth configuration and database readiness, then restart."
             );
             None
         }

@@ -72,7 +72,7 @@ Parsing does not mutate the process environment. Restart the API after editing t
 
 Both origins must use the same local host. Current configuration accepts canonical
 loopback HTTP origins without credentials, trailing slash, paths, query or fragment.
-It intentionally does not support public deployment origins. Do not put secrets in
+The separate [production configuration](DEPLOYMENT.md) uses HTTPS origins. Do not put secrets in
 `VITE_*` variables: their values can be included in the public bundle. Vite also does
 not read `.env` files: this file configures the server only. The default frontend origin
 already matches the example. A custom `VITE_API_BASE_URL` is still an explicit public
@@ -162,9 +162,9 @@ the built preview for installation, offline and update acceptance.
 
 The worker caches public JS/CSS/icons and the public offline page only. API/OAuth
 responses and private pages must not appear in CacheStorage. The entry HTML, manifest
-and worker must be revalidated when configuring a future static host; hashed assets
-may be cached immutably. SPA navigation fallback belongs to that static host and must
-not rewrite requests at the API origin. Deployment is not part of this increment.
+and worker must be revalidated by the static host, which also provides the SPA
+fallback. The API origin serves only API routes.
+See the [production runbook](DEPLOYMENT.md).
 
 ## Checks and generated contracts
 

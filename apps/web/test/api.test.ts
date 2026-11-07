@@ -5,22 +5,29 @@ import { parseApiOrigin } from "../src/lib/api/config"
 
 afterEach(() => vi.unstubAllGlobals())
 
-describe("local API origin", () => {
-  it("accepts local origins but rejects remote, credentialed and non-origin URLs", () => {
+describe("API origin", () => {
+  it("accepts HTTPS and local HTTP but rejects insecure, credentialed and non-origin URLs", () => {
     expect(parseApiOrigin()).toBe("http://localhost:3001")
     expect(parseApiOrigin("http://127.0.0.1:3001/")).toBe(
       "http://127.0.0.1:3001"
     )
+    expect(parseApiOrigin("https://api.example.com")).toBe(
+      "https://api.example.com"
+    )
     for (const value of [
       "",
-      "https://example.com",
+      "http://example.com",
+      "https://name:secret@api.example.com",
+      "https://api.example.com/path",
       "http://localhost.example.com",
       "http://name:secret@localhost:3001",
       "http://localhost:3001/api",
       "http://localhost:3001/?token=a",
       "http://localhost:3001/#hash",
     ]) {
-      expect(() => parseApiOrigin(value)).toThrow("local HTTP origin")
+      expect(() => parseApiOrigin(value)).toThrow(
+        "HTTPS or loopback HTTP origin"
+      )
     }
   })
 })

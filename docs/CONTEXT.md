@@ -2,7 +2,9 @@
 
 Factory is a private web/PWA application with a Rust backend. React/TypeScript compiles
 to static files hosted independently of the API; there is no frontend SSR process or
-Rust static-file server. The current increment runs on loopback only.
+Rust static-file server. Development uses loopback HTTP. The
+[production deployment](DEPLOYMENT.md) uses a static frontend host and a dedicated Linux
+server with Caddy, PostgreSQL and release images from GHCR.
 
 GitHub OAuth identifies users by a stable provider identity. The operator CLI resolves a GitHub
 username and stores the selected account as the first administrator. Other verified users remain pending
@@ -71,11 +73,10 @@ The new environment adapter uses Rust/Bollard directly against that local Docker
 transport. CI exercises environment integration on Ubuntu with Docker Engine, alongside
 local Windows Docker Desktop validation with Linux containers. WSL remains unverified.
 
-This increment does not deploy to a VPS, register an OAuth application or configure real
-credentials. Unit and integration regressions use synthetic principals and owned local
-fixtures. Live GitHub sign-in with two accounts and installed-PWA behavior require
-separate human acceptance; temporary QA scripts and observations remain local and ignored.
-Performance under concurrent agents and production hosting requirements remain unverified.
+Unit and integration regressions use synthetic principals and owned local fixtures.
+Live GitHub sign-in with two accounts, installed-PWA behavior and concurrent agent
+performance require acceptance on the target deployment. Temporary QA scripts and
+observations remain local and ignored.
 
 See [architecture](ARCHITECTURE.md), [product](PRODUCT.md) and [development](DEVELOPMENT.md).
 

@@ -189,7 +189,16 @@ mod tests {
 
     async fn request(method: Method, path: &str, origin: &str) -> axum::response::Response {
         let config = RuntimeConfig::from_values(|_| None).unwrap();
-        router(&config, None)
+        request_with_config(&config, method, path, origin).await
+    }
+
+    async fn request_with_config(
+        config: &RuntimeConfig,
+        method: Method,
+        path: &str,
+        origin: &str,
+    ) -> axum::response::Response {
+        router(config, None)
             .unwrap()
             .oneshot(
                 Request::builder()
@@ -240,6 +249,37 @@ mod tests {
                         .headers()
                         .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN)
                 );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn production_web_origin_gets_credentialed_cors_but_preview_does_not() {
+        let config = RuntimeConfig::from_values(|name| match name {
+            "FACTORY_DEPLOYMENT" => Some("production".into()),
+            "FACTORY_DOMAIN" => Some("example.com".into()),
+            "FACTORY_DB_PASSWORD" => Some("synthetic-password".into()),
+            "FACTORY_GITHUB_CLIENT_ID" => Some("synthetic-client".into()),
+            "FACTORY_GITHUB_CLIENT_SECRET" => Some("synthetic-secret".into()),
+            _ => None,
+        })
+        .unwrap();
+        for (origin, allowed) in [
+            ("https://app.example.com", true),
+            ("https://preview.example.com", false),
+            ("http://app.example.com", false),
+        ] {
+            let response =
+                request_with_config(&config, Method::OPTIONS, "/health/live", origin).await;
+            let headers = response.headers();
+            assert_eq!(
+                headers
+                    .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                    .and_then(|value| value.to_str().ok()),
+                allowed.then_some(origin)
+            );
+            if allowed {
+                assert_eq!(headers[header::ACCESS_CONTROL_ALLOW_CREDENTIALS], "true");
             }
         }
     }
