@@ -551,7 +551,7 @@ impl FeatureState {
                     round.required_roles.contains(&finding.role) && text(&finding.summary, 16_384)
                 })
                 && verdict.checks.len() <= 128
-                && verdict.checks.iter().all(|check| text(&check.label, 1024)),
+                && verdict.checks.iter().all(|check| text(&check.label, 4096)),
             FeatureError::Invalid,
         )?;
         if verdict.ready() {
@@ -789,10 +789,11 @@ impl FeatureTask {
 }
 
 fn validate_task_graph(tasks: &[FeatureTask]) -> Result<(), FeatureError> {
+    let checks: BTreeSet<_> = tasks.iter().flat_map(|task| &task.checks).collect();
     require(
         !tasks.is_empty()
             && tasks.len() <= 64
-            && tasks.iter().any(|task| !task.checks.is_empty())
+            && (1..=128).contains(&checks.len())
             && tasks.iter().all(|task| {
                 matches!(
                     task.role,
