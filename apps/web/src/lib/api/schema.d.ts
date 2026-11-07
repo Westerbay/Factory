@@ -452,6 +452,150 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  "/api/features": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get: operations["listFeatures"]
+    put?: never
+    post: operations["createFeature"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/features/{id}": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get: operations["getFeature"]
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/features/{id}/approve": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post: operations["approveFeature"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/features/{id}/diff": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get: operations["getFeatureDiff"]
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/features/{id}/draft": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post: operations["publishFeatureDraft"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/features/{id}/reopen": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post: operations["reopenFeatureGate"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/features/{id}/resume": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post: operations["resumeFeatureAttempt"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/features/{id}/review": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post: operations["extendFeatureReview"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/features/{id}/runs": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post: operations["discussFeature"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   "/api/projects": {
     parameters: {
       query?: never
@@ -817,6 +961,15 @@ export interface components {
       /** Format: uuid */
       projectId?: string | null
     }
+    CreateFeatureBody: {
+      locale: components["schemas"]["FeatureLocale"]
+      /** Format: uuid */
+      operationId: string
+      /** Format: uuid */
+      projectId: string
+      provider: components["schemas"]["FeatureProvider"]
+      title: string
+    }
     EnvironmentResponse: {
       /** @description Bounded public error code; never includes provider responses or resource names. */
       errorCode?: string | null
@@ -838,6 +991,167 @@ export interface components {
       /** Format: uuid */
       runId: string
       text?: string | null
+    }
+    FeatureArchitectureView: {
+      approvedAt?: string | null
+      canApprove: boolean
+      diagrams: components["schemas"]["FeatureDiagramView"][]
+      digest: string
+      /** Format: uuid */
+      id: string
+      summary: string
+    }
+    /** @enum {string} */
+    FeatureAttemptStatusView:
+      | "starting"
+      | "running"
+      | "validated"
+      | "failed"
+      | "interrupted"
+      | "uncertain"
+    FeatureAttemptView: {
+      activity?: string | null
+      assignedModel: string
+      canResume: boolean
+      checkpoint?: string | null
+      effort?: string | null
+      /** Format: uuid */
+      id: string
+      observedModel?: string | null
+      /** Format: uuid */
+      retryOf?: string | null
+      role: components["schemas"]["FeatureRoleView"]
+      status: components["schemas"]["FeatureAttemptStatusView"]
+      title: string
+    }
+    FeatureCheckView: {
+      label: string
+      passed: boolean
+    }
+    /** @enum {string} */
+    FeatureDeliveryStatusView:
+      | "claimed"
+      | "uncertain"
+      | "failed"
+      | "published"
+      | "publishedStale"
+    FeatureDeliveryView: {
+      draftUrl?: string | null
+      reason?: string | null
+      /** Format: uuid */
+      requestId: string
+      /** Format: uuid */
+      snapshotId: string
+      status: components["schemas"]["FeatureDeliveryStatusView"]
+    }
+    FeatureDiagramView: {
+      source: string
+      title: string
+    }
+    FeatureDiffView: {
+      baseOid: string
+      changedPaths: string[]
+      headOid: string
+      patch: string
+      patchDigest: string
+    }
+    FeatureFindingView: {
+      blocking: boolean
+      role: components["schemas"]["FeatureRoleView"]
+      summary: string
+    }
+    /** @enum {string} */
+    FeatureLocale: "en" | "fr"
+    FeaturePageView: {
+      items: components["schemas"]["FeatureSummaryView"][]
+      /** Format: uuid */
+      nextCursor?: string | null
+    }
+    /** @enum {string} */
+    FeatureProvider: "codex" | "claude"
+    FeatureResumeBody: {
+      /** Format: uuid */
+      attemptId: string
+      /** Format: uuid */
+      operationId: string
+    }
+    FeatureReviewView: {
+      baseOid: string
+      canExtend: boolean
+      checks: components["schemas"]["FeatureCheckView"][]
+      findings: components["schemas"]["FeatureFindingView"][]
+      headOid: string
+      patchDigest: string
+      ready: boolean
+      /** Format: uuid */
+      snapshotId: string
+    }
+    FeatureRevisionBody: {
+      digest: string
+      /** Format: uuid */
+      operationId: string
+      /** Format: uuid */
+      revisionId: string
+    }
+    /** @enum {string} */
+    FeatureRoleView:
+      | "coordinator"
+      | "architecture"
+      | "implementation"
+      | "complexImplementation"
+      | "visual"
+      | "triage"
+      | "generalReview"
+      | "architectureReview"
+      | "webReview"
+      | "securityReview"
+      | "correction"
+    FeatureScopeView: {
+      approvedAt?: string | null
+      brief: string
+      canApprove: boolean
+      digest: string
+      /** Format: uuid */
+      id: string
+    }
+    FeatureSnapshotBody: {
+      /** Format: uuid */
+      operationId: string
+      /** Format: uuid */
+      snapshotId: string
+    }
+    /** @enum {string} */
+    FeatureStageView:
+      | "scope"
+      | "architecture"
+      | "execution"
+      | "review"
+      | "result"
+      | "draft"
+    FeatureSummaryView: {
+      /** Format: uuid */
+      conversationId: string
+      createdAt: string
+      /** Format: uuid */
+      id: string
+      /** Format: uuid */
+      projectId: string
+      provider: string
+      stage: components["schemas"]["FeatureStageView"]
+      title: string
+    }
+    FeatureTurnBody: {
+      input: string
+      /** Format: uuid */
+      operationId: string
+    }
+    FeatureView: {
+      architecture?: components["schemas"]["FeatureArchitectureView"] | null
+      attempts: components["schemas"]["FeatureAttemptView"][]
+      delivery?: components["schemas"]["FeatureDeliveryView"] | null
+      feature: components["schemas"]["FeatureSummaryView"]
+      review?: components["schemas"]["FeatureReviewView"] | null
+      scope?: components["schemas"]["FeatureScopeView"] | null
     }
     HistoryView: {
       conversation: components["schemas"]["ConversationView"]
@@ -3182,6 +3496,814 @@ export interface operations {
         }
       }
       /** @description Environment service unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  listFeatures: {
+    parameters: {
+      query?: {
+        projectId?: string
+        before?: string
+      }
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["FeaturePageView"]
+        }
+      }
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  createFeature: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Exact configured frontend Origin required */
+        Origin: string
+        /** @description Session CSRF token required */
+        "X-CSRF-Token": string
+      }
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateFeatureBody"]
+      }
+    }
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["FeatureView"]
+        }
+      }
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  getFeature: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        id: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["FeatureView"]
+        }
+      }
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  approveFeature: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Exact configured frontend Origin required */
+        Origin: string
+        /** @description Session CSRF token required */
+        "X-CSRF-Token": string
+      }
+      path: {
+        id: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["FeatureRevisionBody"]
+      }
+    }
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["FeatureView"]
+        }
+      }
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  getFeatureDiff: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        id: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["FeatureDiffView"]
+        }
+      }
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  publishFeatureDraft: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Exact configured frontend Origin required */
+        Origin: string
+        /** @description Session CSRF token required */
+        "X-CSRF-Token": string
+      }
+      path: {
+        id: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["FeatureSnapshotBody"]
+      }
+    }
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["FeatureView"]
+        }
+      }
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  reopenFeatureGate: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Exact configured frontend Origin required */
+        Origin: string
+        /** @description Session CSRF token required */
+        "X-CSRF-Token": string
+      }
+      path: {
+        id: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["FeatureRevisionBody"]
+      }
+    }
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["FeatureView"]
+        }
+      }
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  resumeFeatureAttempt: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Exact configured frontend Origin required */
+        Origin: string
+        /** @description Session CSRF token required */
+        "X-CSRF-Token": string
+      }
+      path: {
+        id: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["FeatureResumeBody"]
+      }
+    }
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["FeatureView"]
+        }
+      }
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  extendFeatureReview: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Exact configured frontend Origin required */
+        Origin: string
+        /** @description Session CSRF token required */
+        "X-CSRF-Token": string
+      }
+      path: {
+        id: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["FeatureSnapshotBody"]
+      }
+    }
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["FeatureView"]
+        }
+      }
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  discussFeature: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Exact configured frontend Origin required */
+        Origin: string
+        /** @description Session CSRF token required */
+        "X-CSRF-Token": string
+      }
+      path: {
+        id: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["FeatureTurnBody"]
+      }
+    }
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["RunView"]
+        }
+      }
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
       503: {
         headers: {
           [name: string]: unknown

@@ -2,7 +2,7 @@ use crate::{
     admin, agent_connections,
     auth::{self, AuthState},
     config::RuntimeConfig,
-    conversations, environments, health, http, projects, terminals,
+    conversations, environments, features, health, http, projects, terminals,
 };
 use axum::{
     Router,
@@ -22,6 +22,12 @@ use utoipa_axum::router::OpenApiRouter;
 pub struct IdentityRuntime {
     pub auth: AuthState,
     pub database: Arc<IdentityDatabase>,
+}
+
+#[derive(Default)]
+pub(crate) struct WorkspaceRuntime {
+    pub projects: Option<Arc<projects::runtime::ProjectsRuntime>>,
+    pub features: Option<features::FeatureRuntime>,
 }
 
 pub fn router(
@@ -66,18 +72,18 @@ pub(crate) fn router_with_conversations(
     claude_accounts: Option<Arc<AgentConnectionService>>,
     conversations: Option<Arc<conversations::runtime::ConversationRuntime>>,
 ) -> Result<Router, &'static str> {
-    router_with_projects(
+    router_with_workspace(
         config,
         identity,
         environments,
         terminal,
         (accounts, claude_accounts),
         conversations,
-        None,
+        WorkspaceRuntime::default(),
     )
 }
 
-pub(crate) fn router_with_projects(
+pub(crate) fn router_with_workspace(
     config: &RuntimeConfig,
     identity: Option<IdentityRuntime>,
     environments: Option<Arc<EnvironmentService>>,
@@ -87,7 +93,7 @@ pub(crate) fn router_with_projects(
         Option<Arc<AgentConnectionService>>,
     ),
     conversations: Option<Arc<conversations::runtime::ConversationRuntime>>,
-    project_runtime: Option<Arc<projects::runtime::ProjectsRuntime>>,
+    workspace: WorkspaceRuntime,
 ) -> Result<Router, &'static str> {
     let (accounts, claude_accounts) = accounts;
     let origin = HeaderValue::from_str(config.web_origin()).map_err(|_| "WEB_ORIGIN_INVALID")?;
@@ -100,14 +106,14 @@ pub(crate) fn router_with_projects(
             axum::http::HeaderName::from_static("x-csrf-token"),
         ])
         .max_age(Duration::from_secs(60));
-    let (routes, _) = documented_router_with_projects(
+    let (routes, _) = documented_router_with_workspace(
         identity,
         environments,
         terminal,
         accounts,
         claude_accounts,
         conversations,
-        project_runtime,
+        workspace,
     )
     .split_for_parts();
     Ok(routes
@@ -129,28 +135,28 @@ pub(crate) fn documented_router(
     claude_accounts: Option<Arc<AgentConnectionService>>,
     conversations: Option<Arc<conversations::runtime::ConversationRuntime>>,
 ) -> OpenApiRouter {
-    documented_router_with_projects(
+    documented_router_with_workspace(
         identity,
         environments,
         terminal,
         accounts,
         claude_accounts,
         conversations,
-        None,
+        WorkspaceRuntime::default(),
     )
 }
 
-fn documented_router_with_projects(
+fn documented_router_with_workspace(
     identity: Option<IdentityRuntime>,
     environments: Option<Arc<EnvironmentService>>,
     terminal: Option<Arc<TerminalService>>,
     accounts: Option<Arc<AgentConnectionService>>,
     claude_accounts: Option<Arc<AgentConnectionService>>,
     conversations: Option<Arc<conversations::runtime::ConversationRuntime>>,
-    project_runtime: Option<Arc<projects::runtime::ProjectsRuntime>>,
+    workspace: WorkspaceRuntime,
 ) -> OpenApiRouter {
     let database = identity.as_ref().map(|runtime| runtime.database.clone());
-    let auth = identity.map(|runtime| runtime.auth.with_projects(project_runtime.clone()));
+    let auth = identity.map(|runtime| runtime.auth.with_projects(workspace.projects.clone()));
     auth::documented_router(auth.clone())
         .merge(admin::documented_router(auth.clone()))
         .merge(environments::documented_router(auth.clone(), environments))
@@ -167,7 +173,11 @@ fn documented_router_with_projects(
             auth.clone(),
             conversations,
         ))
-        .merge(projects::documented_router(auth, project_runtime))
+        .merge(features::documented_router(
+            auth.clone(),
+            workspace.features,
+        ))
+        .merge(projects::documented_router(auth, workspace.projects))
         .merge(health::documented_router(database))
 }
 

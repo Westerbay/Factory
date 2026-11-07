@@ -151,14 +151,17 @@ async fn create_host_router(
     identity: Option<IdentityRuntime>,
 ) -> Result<HostRouter<EnvironmentHost>, EnvironmentError> {
     let mut host = factory.start().await?;
-    let router = app::router_with_projects(
+    let router = app::router_with_workspace(
         config,
         identity,
         Some(host.service()),
         Some(host.terminal()),
         (Some(host.accounts()), Some(host.claude_accounts())),
         Some(host.conversations()),
-        Some(host.projects()),
+        app::WorkspaceRuntime {
+            projects: Some(host.projects()),
+            features: Some(host.features()),
+        },
     );
     match router {
         Ok(router) => Ok(HostRouter { router, host }),
