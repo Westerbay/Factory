@@ -94,10 +94,17 @@ async fn get(
         return Ok(Json(EnvironmentResponse::project(None, false)));
     };
     let environment = service.get(actor).await.map_err(error)?;
-    Ok(Json(EnvironmentResponse::project(
+    let mut response = EnvironmentResponse::project(
         environment.as_ref(),
         service.can_report(environment.as_ref()),
-    )))
+    );
+    if environment
+        .as_ref()
+        .is_some_and(|environment| service.has_policy_mismatch(environment))
+    {
+        response.error_code = Some(EnvironmentError::PolicyMismatch.code().into());
+    }
+    Ok(Json(response))
 }
 
 #[utoipa::path(

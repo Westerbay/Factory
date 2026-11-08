@@ -178,6 +178,15 @@ ${state}`
       await readFile(join(directory, "prepared.json"), "utf8"),
       beforePreflight
     )
+    image = "d"
+    await assert.rejects(
+      prepare(directory, docker, images, checkOptions),
+      /release changes the prepared workspace image or policy/
+    )
+    assert.equal(
+      await readFile(join(directory, "prepared.json"), "utf8"),
+      beforePreflight
+    )
     proxyFailure = true
     image = "d"
     await assert.rejects(prepare(directory, docker), /fixture proxy failure/)
