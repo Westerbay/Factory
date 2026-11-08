@@ -7,6 +7,8 @@
   "later": "Plus tard",
   "install_factory": "Installer Factory",
   "install_app": "Installer l’application",
+  "install_home_screen": "Ouvrez Factory depuis votre écran d’accueil.",
+  "dismiss_install_offer": "Masquer l’invitation à installer Factory",
   "app_updates_could_not_be_checked_reload_this_page_when_you_are_on": "Impossible de vérifier les mises à jour. Rechargez cette page lorsque vous serez en ligne pour réessayer.",
   "account": "Compte",
   "workspace": "Espace de travail",

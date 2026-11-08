@@ -1,47 +1,15 @@
 import * as m from "@workspace/i18n/messages"
 import { useLocale } from "../lib/i18n"
-import { useEffect, useRef, useState } from "react"
+import { useState } from "react"
 
 import { Button } from "../components/ui/button"
 import { useAppUpdate } from "./use-app-update"
 import "./updates.css"
 
-interface InstallPromptEvent extends Event {
-  prompt(): Promise<unknown>
-}
-
 export function AppUpdates() {
   useLocale()
   const { available, error, applyUpdate } = useAppUpdate()
   const [dismissed, setDismissed] = useState(false)
-  const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(
-    null
-  )
-  const installDismissed = useRef(false)
-
-  useEffect(() => {
-    if (window.matchMedia("(display-mode: standalone)").matches) return
-    function offerInstallation(event: Event) {
-      event.preventDefault()
-      if (!installDismissed.current)
-        setInstallPrompt(event as InstallPromptEvent)
-    }
-    function clearInstallation() {
-      installDismissed.current = true
-      setInstallPrompt(null)
-    }
-    window.addEventListener("beforeinstallprompt", offerInstallation)
-    window.addEventListener("appinstalled", clearInstallation)
-    return () => {
-      window.removeEventListener("beforeinstallprompt", offerInstallation)
-      window.removeEventListener("appinstalled", clearInstallation)
-    }
-  }, [])
-
-  function dismissInstallation() {
-    installDismissed.current = true
-    setInstallPrompt(null)
-  }
 
   if (available) {
     if (dismissed) {
@@ -70,27 +38,6 @@ export function AppUpdates() {
             {m.reload_to_update()}{" "}
           </Button>
           <Button onClick={() => setDismissed(true)}>{m.later()}</Button>
-        </div>
-      </aside>
-    )
-  }
-
-  if (installPrompt) {
-    return (
-      <aside className="update-prompt" aria-labelledby="install-title">
-        <h2 id="install-title">{m.install_factory()}</h2>
-        <div className="update-actions">
-          <Button
-            variant="primary"
-            onClick={() => {
-              if (installDismissed.current) return
-              dismissInstallation()
-              void installPrompt.prompt().catch(() => undefined)
-            }}
-          >
-            {m.install_app()}
-          </Button>
-          <Button onClick={dismissInstallation}>{m.later()}</Button>
         </div>
       </aside>
     )
