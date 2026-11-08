@@ -128,6 +128,8 @@ jobs:
   bundle:
     needs: images
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -148,7 +150,8 @@ jobs:
         run: |
           set -euo pipefail
           cat "$IMAGE_DIR"/release-{api,workspace,egress}.env > release.env
-          tar -czf factory-server.tar.gz release.env web-dist infra/deploy crates/database/schema.sql \
+          tar --sort=name --mtime="@$(git show -s --format=%ct HEAD)" --owner=0 --group=0 --numeric-owner \
+            -czf factory-server.tar.gz release.env web-dist infra/deploy crates/database/schema.sql \
             scripts/environments/prepare.mjs scripts/environments/docker.mjs scripts/egress/prepare.mjs
           sha256sum factory-server.tar.gz > factory-server.tar.gz.sha256
       - uses: actions/upload-artifact@v4
@@ -158,3 +161,19 @@ jobs:
             factory-server.tar.gz
             factory-server.tar.gz.sha256
           if-no-files-found: error
+      - name: Attach the server bundle to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" --jq '.assets')
+          for file in factory-server.tar.gz factory-server.tar.gz.sha256; do
+            digest=$(jq -r --arg name "$file" '.[] | select(.name == $name) | .digest // "missing"' <<< "$assets")
+            if [[ -z "$digest" ]]; then
+              gh release upload "$GITHUB_REF_NAME" "$file" --repo "$GITHUB_REPOSITORY"
+            elif [[ "$digest" != "sha256:$(sha256sum "$file" | cut -d' ' -f1)" ]]; then
+              echo "Existing GitHub Release asset differs: $file" >&2
+              exit 1
+            fi
+          done

@@ -15,7 +15,7 @@ Monitor these resources and test real workloads before increasing concurrency.
 ## Prepare the server
 
 1. Install rootful Docker Engine 28 or later with isolated bridges, the Docker
-   Compose plugin, Bash, `flock`, and Node.js 24.22.1. Allow inbound TCP 80 and
+   Compose plugin, Bash, `curl`, `flock`, and Node.js 24.22.1. Allow inbound TCP 80 and
    443 for Caddy and restrict SSH to trusted operators. Point
    `factory.example.com` directly at the server in DNS. Caddy obtains and renews
    the certificate. Configure an AAAA record if the server serves IPv6.
@@ -40,9 +40,9 @@ Publish a stable GitHub Release tagged `vX.Y.Z` from a commit on `main`. The
 [release workflow](../.github/workflows/publish-release.yml) runs the project
 checks, publishes three Linux amd64 images to GHCR and assembles a versioned
 server bundle with the static web build. Unchanged workspace and egress sources
-reuse their published images. Download the `factory-server` artifact from that workflow run.
-It contains a tarball, checksum, and a manifest of exact image digests. Keep a
-copy of each deployed bundle outside Actions artifact retention.
+reuse their published images. Wait for the workflow to attach the server tarball
+and checksum to the GitHub Release. The tarball includes the exact image digests.
+For older releases, download the `factory-server` artifact from their workflow run.
 
 Copy the tarball and checksum to the server. From their directory, verify and
 extract the bundle into a new version directory. Run these as root or through sudo using the actual release number in place of
@@ -55,6 +55,25 @@ tar -xzf factory-server.tar.gz -C /opt/factory/releases/vX.Y.Z
 /opt/factory/releases/vX.Y.Z/infra/deploy/server.sh /opt/factory deploy
 curl --fail --silent --show-error https://factory.example.com/health/ready
 ```
+
+For public repositories, install the updater from a verified bundle once. Run it
+as the deployment operator with the installation directory and the repository that
+publishes your builds.
+
+```sh
+install -m 0755 /opt/factory/releases/vX.Y.Z/infra/deploy/factory-update /usr/local/sbin/factory-update
+factory-update /opt/factory OWNER/REPOSITORY
+```
+
+The updater downloads the latest stable release, validates its checksum, and
+deploys the bundle. It reuses a release already staged in the installation and
+retains earlier versions. Pass an explicit `vX.Y.Z` as the last argument to
+select a specific version. A release whose assets are still being published
+can be retried once the workflow completes.
+
+Put host-specific Compose settings in `/opt/factory/compose.override.yml` when
+needed, such as custom DNS resolvers for the API. The deployment script merges
+this file with the Compose file bundled in each release.
 
 Finish or stop active agent work before upgrading. Deployments are serialized.
 The command pulls the exact images before stopping the API, then verifies and

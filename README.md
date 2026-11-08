@@ -58,7 +58,8 @@ Compose. A published GitHub Release builds the server images and deployment
 bundle. The bundle includes the static frontend, which Caddy serves alongside
 the API at the configured HTTPS address. The
 [production runbook](docs/DEPLOYMENT.md) covers server prerequisites, local secret
-configuration, first sign-in, separate frontend hosting and recovery.
+configuration, first sign-in, one-command release updates, separate frontend
+hosting and recovery.
 
 ## Validation
 
