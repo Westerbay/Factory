@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS codex
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS codex
 # Immutable Debian snapshot and official artifact checksums make rebuilds explicit.
 RUN printf '%s\n' 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261027T000000Z bookworm main' > /etc/apt/sources.list \
     && rm /etc/apt/sources.list.d/debian.sources \
@@ -55,7 +55,7 @@ RUN curl --fail --silent --show-error --location --retry 3 --retry-all-errors --
     && tar -xzf /tmp/oh-my-zsh.tar.gz --strip-components=1 -C /opt/oh-my-zsh \
     && chmod -R go-w /opt/oh-my-zsh
 
-FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 LABEL io.factory.environment.image="5"
 LABEL io.factory.codex.version="0.160.0"
 LABEL io.factory.claude.version="2.1.284"
