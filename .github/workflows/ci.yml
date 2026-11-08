@@ -1,4 +1,4 @@
-name: Foundation checks
+name: CI
 
 on:
   push:
@@ -12,14 +12,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: foundation-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   changes:
+    name: Change scope
     runs-on: ubuntu-latest
     outputs:
-      integration: ${{ steps.scope.outputs.integration }}
+      postgres: ${{ steps.scope.outputs.postgres }}
+      docker: ${{ steps.scope.outputs.docker }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -32,23 +34,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          integration=true
+          postgres=true
+          docker=true
           if [[ "$EVENT_NAME" == pull_request ]]; then
             git diff --no-renames --name-only -z "$BASE_SHA" HEAD > "$RUNNER_TEMP/changed-files"
             if [[ -s "$RUNNER_TEMP/changed-files" ]]; then
-              integration=false
+              postgres=false
+              docker=false
               while IFS= read -r -d '' path; do
                 case "$path" in
                   apps/web/*|docs/*|README.md) ;;
-                  *) integration=true; break ;;
+                  scripts/database/*) postgres=true ;;
+                  infra/environments/*|infra/egress/*|scripts/environments/*|scripts/egress/*)
+                    docker=true ;;
+                  *) postgres=true; docker=true; break ;;
                 esac
               done < "$RUNNER_TEMP/changed-files"
             fi
           fi
-          echo "integration=$integration" >> "$GITHUB_OUTPUT"
-          echo "Full integration required: $integration"
+          printf 'postgres=%s\ndocker=%s\n' "$postgres" "$docker" >> "$GITHUB_OUTPUT"
 
   javascript:
+    name: Web and TypeScript
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -69,9 +76,18 @@ jobs:
       - name: Boundaries and documentation
         run: pnpm boundaries:check && pnpm docs:check
       - name: Build TypeScript packages and web
+        env:
+          VITE_API_BASE_URL: /
         run: pnpm exec turbo build --filter='!@workspace/api'
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        with:
+          name: web-dist
+          path: apps/web/dist
+          if-no-files-found: error
 
   rust:
+    name: Rust and API contract
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -92,8 +108,9 @@ jobs:
         run: pnpm api:contract
 
   database-integration:
+    name: Postgres integration
     needs: changes
-    if: needs.changes.outputs.integration == 'true'
+    if: needs.changes.outputs.postgres == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -118,8 +135,9 @@ jobs:
         run: node scripts/database/identity-integration.mjs
 
   docker-integration:
+    name: Docker runtime integration
     needs: changes
-    if: needs.changes.outputs.integration == 'true'
+    if: needs.changes.outputs.docker == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -135,6 +153,7 @@ jobs:
         run: node scripts/egress/integration.mjs
 
   check:
+    name: Checks passed
     if: always()
     needs: [changes, javascript, rust, database-integration, docker-integration]
     runs-on: ubuntu-latest
@@ -144,7 +163,8 @@ jobs:
           CHANGES: ${{ needs.changes.result }}
           JAVASCRIPT: ${{ needs.javascript.result }}
           RUST: ${{ needs.rust.result }}
-          INTEGRATION_REQUIRED: ${{ needs.changes.outputs.integration }}
+          POSTGRES_REQUIRED: ${{ needs.changes.outputs.postgres }}
+          DOCKER_REQUIRED: ${{ needs.changes.outputs.docker }}
           DATABASE: ${{ needs.database-integration.result }}
           DOCKER: ${{ needs.docker-integration.result }}
         shell: bash
@@ -154,12 +174,191 @@ jobs:
             echo "A required quality job did not succeed" >&2
             exit 1
           fi
-          if [[ "$INTEGRATION_REQUIRED" == true ]]; then
-            if [[ "$DATABASE" != success || "$DOCKER" != success ]]; then
-              echo "A required integration job did not succeed" >&2
-              exit 1
-            fi
-          elif [[ "$INTEGRATION_REQUIRED" != false || "$DATABASE" != skipped || "$DOCKER" != skipped ]]; then
-            echo "Integration jobs did not match the expected scope" >&2
+          integration_passed() {
+            case "$1" in
+              true) [[ "$2" == success ]] ;;
+              false) [[ "$2" == skipped ]] ;;
+              *) return 1 ;;
+            esac
+          }
+          if ! integration_passed "$POSTGRES_REQUIRED" "$DATABASE" ||
+             ! integration_passed "$DOCKER_REQUIRED" "$DOCKER"; then
+            echo "The integration results do not match the required checks" >&2
             exit 1
           fi
+
+  images:
+    name: Build ${{ matrix.name }} image
+    needs: check
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            context: .
+            file: infra/deploy/api.Dockerfile
+            variable: FACTORY_API_IMAGE
+          - name: workspace
+            context: infra/environments
+            file: infra/environments/Dockerfile
+            variable: FACTORY_WORKSPACE_IMAGE
+          - name: egress
+            context: infra/egress
+            file: infra/egress/Dockerfile
+            variable: FACTORY_EGRESS_IMAGE
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve package name
+        id: package
+        env:
+          COMPONENT: ${{ matrix.name }}
+        run: printf 'name=ghcr.io/%s-%s\n' "${GITHUB_REPOSITORY,,}" "$COMPONENT" >> "$GITHUB_OUTPUT"
+      - name: Look up an unchanged runtime image
+        id: runtime
+        if: matrix.name != 'api'
+        env:
+          SOURCE_CONTEXT: ${{ matrix.context }}
+          PACKAGE: ${{ steps.package.outputs.name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_ref="$PACKAGE:source-$(git rev-parse "HEAD:$SOURCE_CONTEXT")"
+          printf 'ref=%s\n' "$source_ref" >> "$GITHUB_OUTPUT"
+          if digest=$(docker buildx imagetools inspect "$source_ref" --format '{{.Manifest.Digest}}'); then
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: docker/build-push-action@v6
+        if: steps.runtime.outputs.digest == ''
+        id: image
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.package.outputs.name }}:commit-${{ github.sha }}
+            ${{ steps.runtime.outputs.ref }}
+      - name: Record the pushed digest
+        env:
+          VARIABLE: ${{ matrix.variable }}
+          PACKAGE: ${{ steps.package.outputs.name }}
+          DIGEST: ${{ steps.runtime.outputs.digest || steps.image.outputs.digest }}
+        run: |
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf '%s=%s@%s\n' "$VARIABLE" "$PACKAGE" "$DIGEST" > release-${{ matrix.name }}.env
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.name }}
+          path: release-${{ matrix.name }}.env
+          if-no-files-found: error
+
+  bundle:
+    name: Assemble server bundle
+    needs: images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/factory-images
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web-dist
+      - name: Assemble the deployment bundle
+        env:
+          IMAGE_DIR: ${{ runner.temp }}/factory-images
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat "$IMAGE_DIR"/release-{api,workspace,egress}.env > release.env
+          tar --sort=name --mtime="@$(git show -s --format=%ct HEAD)" --owner=0 --group=0 --numeric-owner \
+            -czf factory-server.tar.gz release.env web-dist infra/deploy crates/database/schema.sql \
+            scripts/environments/prepare.mjs scripts/environments/docker.mjs scripts/egress/prepare.mjs
+          sha256sum factory-server.tar.gz > factory-server.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: factory-server-${{ github.sha }}
+          path: |
+            factory-server.tar.gz
+            factory-server.tar.gz.sha256
+          if-no-files-found: error
+
+  upgrade-smoke:
+    name: Upgrade from the previous release
+    needs: bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - uses: actions/download-artifact@v4
+        with:
+          name: factory-server-${{ github.sha }}
+          path: ${{ runner.temp }}/candidate
+      - name: Download the previous stable bundle
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline=''
+          tags=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=30" --jq '
+            .[] | select(.draft == false and .prerelease == false)
+            | select(any(.assets[]; .name == "factory-server.tar.gz"))
+            | select(any(.assets[]; .name == "factory-server.tar.gz.sha256")) | .tag_name')
+          while IFS= read -r tag; do
+            [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || continue
+            if [[ "$(git rev-parse "refs/tags/$tag^{commit}")" != "$GITHUB_SHA" ]]; then
+              baseline=$tag
+              break
+            fi
+          done <<< "$tags"
+          if [[ -n "$baseline" ]]; then
+            gh release download "$baseline" --repo "$GITHUB_REPOSITORY" \
+              --pattern 'factory-server.tar.gz*' --dir "$RUNNER_TEMP/previous"
+          else
+            echo "No older published bundle. Exercising a fresh install and redeploy of the first candidate."
+            cp -R "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/previous"
+          fi
+          for bundle in previous candidate; do
+            (cd "$RUNNER_TEMP/$bundle" && sha256sum --check --strict factory-server.tar.gz.sha256)
+          done
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upgrade a disposable installation and verify its existing workspace
+        shell: bash
+        run: |
+          sudo env "PATH=$PATH" "GITHUB_ACTIONS=$GITHUB_ACTIONS" "RUNNER_ENVIRONMENT=$RUNNER_ENVIRONMENT" \
+            "RUNNER_TEMP=$RUNNER_TEMP" "DOCKER_CONFIG=${DOCKER_CONFIG:-$HOME/.docker}" \
+            bash scripts/environments/upgrade-smoke.sh \
+            "$RUNNER_TEMP/previous/factory-server.tar.gz" "$RUNNER_TEMP/candidate/factory-server.tar.gz"
