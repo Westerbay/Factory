@@ -1,18 +1,21 @@
 FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS codex
-# Immutable Debian snapshot and official release asset checksums make rebuilds explicit.
+# Immutable Debian snapshot and official artifact checksums make rebuilds explicit.
 RUN printf '%s\n' 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261027T000000Z bookworm main' > /etc/apt/sources.list \
     && rm /etc/apt/sources.list.d/debian.sources \
     && apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update && apt-get -o Acquire::Retries=3 install -y --no-install-recommends ca-certificates curl jq
+# Use the official npm platform bundle; only its native runtime is needed.
 RUN set -eu; \
     case "$(dpkg --print-architecture)" in \
-      amd64) target=x86_64-unknown-linux-musl; checksum=4fcc47ab57f52ff75363951a8761146cd10c8288bd86fed45487dbb204a16b71 ;; \
-      arm64) target=aarch64-unknown-linux-musl; checksum=7f0fe42ff22ecfa3a47bc4a34f5b22c4218b431a4ec0aba51c7d98299f07900c ;; \
+      amd64) platform=linux-x64; target=x86_64-unknown-linux-musl; checksum=288ffbdcea86ac7991d7cb3bc9aec4d4da95eab4f4cb7971af4b3c4b5a91da6eb353a41117f1e5479dbd8c02cb879be37549ec453e00868c6dd1ac5be2463df6 ;; \
+      arm64) platform=linux-arm64; target=aarch64-unknown-linux-musl; checksum=56755db12d3a6250ec2fc3b06898d0df176a749346e22f9e049055dcbcad75d927cd2685feeae28cbcd5837a6d930be88fc0bb1a7ee25a9544fb2f1611a3e20a ;; \
       *) echo 'Unsupported Codex architecture' >&2; exit 1 ;; \
     esac; \
     curl --fail --silent --show-error --location --retry 3 --retry-all-errors --connect-timeout 15 --retry-max-time 180 --max-time 180 --proto '=https' --proto-redir '=https' --tlsv1.2 \
-      "https://github.com/openai/codex/releases/download/rust-v0.160.0/codex-package-${target}.tar.gz" -o /tmp/codex.tar.gz; \
-    echo "$checksum  /tmp/codex.tar.gz" | sha256sum --check --strict; \
-    mkdir /opt/codex; tar -xzf /tmp/codex.tar.gz -C /opt/codex; \
+      "https://registry.npmjs.org/@openai/codex/-/codex-0.160.0-${platform}.tgz" -o /tmp/codex.tgz; \
+    echo "$checksum  /tmp/codex.tgz" | sha512sum --check --strict; \
+    mkdir /tmp/codex-package; tar -xzf /tmp/codex.tgz -C /tmp/codex-package; \
+    mv "/tmp/codex-package/package/vendor/$target" /opt/codex; \
+    rm -r /tmp/codex.tgz /tmp/codex-package; \
     test "$(/opt/codex/bin/codex --version)" = 'codex-cli 0.160.0'; \
     mkdir /tmp/schema-home; \
     CODEX_HOME=/tmp/schema-home /opt/codex/bin/codex app-server generate-json-schema --out /tmp/schema; \
