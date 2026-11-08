@@ -78,6 +78,8 @@ this file with the Compose file bundled in each release.
 Finish active agent work and stop workspaces in Factory before upgrading.
 Deployments are serialized. The command pulls the exact images and refuses to
 stop the API while a workspace is active or the shared proxy is incompatible.
+An installed workspace image or policy must also match the prepared state. A
+release that changes it needs an explicit workspace migration before upgrade.
 If the proxy image or host addresses have changed, follow the
 [explicit proxy maintenance procedure](../infra/egress/README.md) before
 retrying. After a successful check, the command stops the API, rechecks the

@@ -556,6 +556,7 @@ async fn image_or_policy_mismatch_refuses_start_and_stop_preserves_home() {
         };
         let read = json(f.call(Method::GET, "/api/environment", 0, "").await).await;
         assert_eq!(read["status"], "unavailable");
+        assert_eq!(read["errorCode"], "policy_mismatch");
         assert!(!read.to_string().contains("previous-"));
         let start = f.call(Method::POST, "/api/environment/start", 0, "").await;
         assert_eq!(start.status(), 503);

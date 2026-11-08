@@ -70,6 +70,12 @@ export function WorkspacePage() {
   const codexConnected = connection.state.connection?.status === "connected"
   const claudeConnected = claude.data?.status === "connected"
   const connected = codexConnected || claudeConnected
+  const checkingProviders =
+    (!connection.state.connection &&
+      !connection.state.message &&
+      (connection.state.pending === null ||
+        connection.state.pending === "read")) ||
+    claude.isPending
   const [wasConnected, setWasConnected] = useState(false)
   if (connected && !wasConnected) setWasConnected(true)
   if (
@@ -440,6 +446,8 @@ export function WorkspacePage() {
                   headingRef={claudeHeading}
                   onClose={() => setClaudeSetup(false)}
                 />
+              ) : checkingProviders ? (
+                <LoadingState title={m.checking_your_provider()} />
               ) : (
                 <ProviderConnection
                   {...connection}

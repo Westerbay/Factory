@@ -14,7 +14,7 @@ export function EnvironmentView({
   controller,
 }: {
   state: EnvironmentState
-  controller: EnvironmentController
+  controller: Pick<EnvironmentController, "start" | "retry">
 }) {
   useLocale()
   const environment = state.environment
@@ -45,7 +45,9 @@ export function EnvironmentView({
       {message && <p role="status">{translateMessage(message)}</p>}
       <Button
         variant="primary"
-        disabled={state.pending !== null || state.paused}
+        disabled={
+          state.paused || (state.pending !== null && state.pending !== "read")
+        }
         onClick={() => void (stopped ? controller.start() : controller.retry())}
       >
         {stopped ? m.return_to_workspace() : m.try_again()}

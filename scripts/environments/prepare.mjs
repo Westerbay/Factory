@@ -98,6 +98,26 @@ export async function prepare(
     imageId: image.Id,
     policyVersion,
   }
+  if (checkOnly) {
+    const previous = await readFile(
+      resolve(directory, "prepared.json"),
+      "utf8"
+    ).then(JSON.parse, (error) => {
+      if (error.code !== "ENOENT") throw error
+    })
+    // Existing workspace records are pinned to the prepared image and policy.
+    if (
+      previous !== undefined &&
+      (previous?.schemaVersion !== metadata.schemaVersion ||
+        previous.installationId !== metadata.installationId ||
+        previous.imageId !== metadata.imageId ||
+        previous.policyVersion !== metadata.policyVersion)
+    ) {
+      throw new Error(
+        "The release changes the prepared workspace image or policy. Existing workspaces require a compatible release or a workspace migration before updating."
+      )
+    }
+  }
   // Never publish the user manifest before proxy image and engine validation succeeds.
   await prepareEgress(directory, runDocker, images.egress, { checkOnly })
   if (checkOnly) return
