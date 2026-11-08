@@ -72,9 +72,10 @@ are public static resources; loading the interface does not require a remote fon
   and `IntoParams` derive their shapes from Rust types, without a parallel path list.
   [The generation command](../scripts/api-contract.mjs) exports OpenAPI and TypeScript
   without runtime configuration. Regenerate instead of manually editing generated output.
-- [The browser API client](../apps/web/src/lib/api/client.ts) owns the explicit public API
+- [The browser API client](../apps/web/src/lib/api/client.ts) owns the public API
   origin, credentialed requests, no-store behavior and authorization invalidation.
-  Features use it rather than infer addresses from the page location.
+  It resolves `VITE_API_BASE_URL=/` to the page origin for the bundled deployment.
+  Features reuse the client and its resolved origin.
 - [Session context and controller](../apps/web/src/lib/auth/session-context.tsx) serve
   member and administrator views with shared verification, expiry, logout and cross-tab
   invalidation. Keep private session state in memory and clear private queries through
