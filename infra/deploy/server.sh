@@ -84,8 +84,19 @@ fi
 docker --host unix:///var/run/docker.sock image pull "$FACTORY_WORKSPACE_IMAGE"
 docker --host unix:///var/run/docker.sock image pull "$FACTORY_EGRESS_IMAGE"
 
+prepare=(node "$bundle/scripts/environments/prepare.mjs"
+  --directory "$FACTORY_STATE_DIR/.factory/environments"
+  --images "$FACTORY_WORKSPACE_IMAGE" "$FACTORY_EGRESS_IMAGE")
+api_running=$("${compose[@]}" ps --status running --quiet api)
+"${prepare[@]}" --check
 "${compose[@]}" stop api
-node "$bundle/scripts/environments/prepare.mjs" --directory "$FACTORY_STATE_DIR/.factory/environments" \
-  --images "$FACTORY_WORKSPACE_IMAGE" "$FACTORY_EGRESS_IMAGE"
+# An environment may have started while the API was still accepting requests.
+if ! "${prepare[@]}" --check; then
+  if [[ -n "$api_running" ]]; then
+    "${compose[@]}" start api
+  fi
+  exit 1
+fi
+"${prepare[@]}"
 "${compose[@]}" up -d --pull never --wait --wait-timeout 120
 printf 'Factory API is ready. Verify HTTPS and test sign-in.\n'

@@ -75,10 +75,15 @@ Put host-specific Compose settings in `/opt/factory/compose.override.yml` when
 needed, such as custom DNS resolvers for the API. The deployment script merges
 this file with the Compose file bundled in each release.
 
-Finish or stop active agent work before upgrading. Deployments are serialized.
-The command pulls the exact images before stopping the API, then verifies and
-records the workspace and egress images and starts Compose. It preserves the
-installation state, database and user volumes. PostgreSQL applies the repository
+Finish active agent work and stop workspaces in Factory before upgrading.
+Deployments are serialized. The command pulls the exact images and refuses to
+stop the API while a workspace is active or the shared proxy is incompatible.
+If the proxy image or host addresses have changed, follow the
+[explicit proxy maintenance procedure](../infra/egress/README.md) before
+retrying. After a successful check, the command stops the API, rechecks the
+workspaces and proxy, records the verified images and starts Compose. If the
+second check fails, it restarts the previously running API. The command
+preserves the installation state, database and user volumes. PostgreSQL applies the repository
 schema during first initialization only and uses a separate non-superuser role
 for the API. Future schema changes require an explicit, reviewed upgrade step
 before starting an API that expects them. `/health/ready` checks identity and the

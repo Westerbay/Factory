@@ -66,6 +66,7 @@ test("repeated preparation preserves installation and changes only the prepared 
   let policy = "5"
   let claudeVersion = "2.1.284"
   let proxyFailure = false
+  let workspaceStates = ""
   const commands = []
   const images = {
     workspace: `ghcr.io/example/factory-workspace@sha256:${"1".repeat(64)}`,
@@ -74,7 +75,11 @@ test("repeated preparation preserves installation and changes only the prepared 
   const docker = (args) => {
     commands.push(args)
     if (args[0] === "build") return ""
-    if (args[0] === "container" && args[1] === "ls") return ""
+    if (args[0] === "container" && args[1] === "ls") {
+      return args.includes("label=io.factory.environment")
+        ? workspaceStates
+        : ""
+    }
     if (args[0] === "version")
       return JSON.stringify({ Os: "linux", ApiVersion: "1.56" })
     if (args[2].startsWith("factory-egress:") || args[2] === images.egress) {
@@ -109,6 +114,12 @@ test("repeated preparation preserves installation and changes only the prepared 
     ])
   }
   try {
+    const checkOptions = { checkOnly: true }
+    await prepare(directory, docker, images, checkOptions)
+    for (const name of ["installation.json", "prepared.json", "egress.json"]) {
+      assert.equal(existsSync(join(directory, name)), false)
+    }
+    commands.length = 0
     const first = await prepare(directory, docker)
     image = "b"
     const second = await prepare(directory, docker)
@@ -148,6 +159,24 @@ test("repeated preparation preserves installation and changes only the prepared 
     assert.equal(
       registryPreparation.some(([command]) => command === "build"),
       false
+    )
+    const beforePreflight = await readFile(
+      join(directory, "prepared.json"),
+      "utf8"
+    )
+    for (const state of ["running", "created", "paused", "restarting"]) {
+      workspaceStates = `exited
+${state}`
+      await assert.rejects(
+        prepare(directory, docker, images, checkOptions),
+        /workspaces are active/
+      )
+    }
+    workspaceStates = "exited"
+    await prepare(directory, docker, images, checkOptions)
+    assert.equal(
+      await readFile(join(directory, "prepared.json"), "utf8"),
+      beforePreflight
     )
     proxyFailure = true
     image = "d"

@@ -12,7 +12,7 @@
   "scripts": {
     "factory": "node scripts/rust/factory.mjs",
     "environments:prepare": "node scripts/environments/prepare.mjs",
-    "environments:test": "node --test scripts/environments/prepare.test.mjs",
+    "environments:test": "node --test scripts/environments/*.test.mjs",
     "environments:integration": "node scripts/environments/integration.mjs",
     "egress:test": "node --test scripts/egress/prepare.test.mjs",
     "egress:integration": "node scripts/egress/integration.mjs",

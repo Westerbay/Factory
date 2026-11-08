@@ -55,7 +55,7 @@ async function requireCompatibleProxy(directory, metadata, runDocker) {
   const refuse = () => {
     throw new Error(
       `Proxy ${name} is incompatible with this preparation; existing metadata was preserved. ` +
-        "Stop the environments and API, then follow the verified proxy maintenance procedure in infra/egress/README.md before preparing again."
+        "Follow the verified proxy maintenance procedure in infra/egress/README.md before retrying."
     )
   }
   if (ids.length !== 1 || !/^[0-9a-f]{64}$/.test(ids[0])) refuse()
@@ -108,14 +108,26 @@ async function requireCompatibleProxy(directory, metadata, runDocker) {
     refuse()
 }
 
-// Only builds the proxy image. Runtime creation requires the exclusive Rust supervisor.
-export async function prepareEgress(directory, runDocker = docker, reference) {
-  const installation = JSON.parse(
-    await readFile(resolve(directory, "installation.json"), "utf8")
-  )
+// Runtime creation requires the exclusive Rust supervisor.
+export async function prepareEgress(
+  directory,
+  runDocker = docker,
+  reference,
+  { checkOnly = false } = {}
+) {
+  if (checkOnly && !reference) {
+    throw new Error("Deployment checks require a release proxy image")
+  }
+  const installation = await readFile(
+    resolve(directory, "installation.json"),
+    "utf8"
+  ).then(JSON.parse, (error) => {
+    if (!checkOnly || error.code !== "ENOENT") throw error
+  })
   if (
-    !uuid.test(installation.installationId) ||
-    /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(installation.installationId)
+    installation !== undefined &&
+    (!uuid.test(installation?.installationId) ||
+      /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(installation.installationId))
   ) {
     throw new Error("Invalid egress installation identity")
   }
@@ -153,11 +165,12 @@ export async function prepareEgress(directory, runDocker = docker, reference) {
   }
   const metadata = {
     schemaVersion: 1,
-    installationId: installation.installationId,
+    installationId: installation?.installationId,
     imageId: image.Id,
     hostIpv4: hostAddresses(undefined, Boolean(reference)),
   }
-  await requireCompatibleProxy(directory, metadata, runDocker)
+  if (installation) await requireCompatibleProxy(directory, metadata, runDocker)
+  if (checkOnly) return
   const temporary = resolve(directory, `egress-${randomUUID()}.tmp`)
   try {
     await writeFile(temporary, JSON.stringify(metadata, null, 2) + "\n", {
