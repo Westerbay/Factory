@@ -5,7 +5,9 @@ import createClient from "openapi-fetch"
 import { parseApiOrigin } from "./config"
 import type { paths } from "./schema"
 
-export const API_ORIGIN = parseApiOrigin(import.meta.env.VITE_API_BASE_URL)
+const configuredOrigin = parseApiOrigin(import.meta.env.VITE_API_BASE_URL)
+export const API_ORIGIN =
+  configuredOrigin === "/" ? window.location.origin : configuredOrigin
 const livenessSchema = z.object({ status: z.literal("ok") })
 const authorizationListeners = new Set<(status: number) => void>()
 

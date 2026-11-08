@@ -55,10 +55,10 @@ for troubleshooting, environment lifecycle and provider setup.
 
 Run the API, PostgreSQL and agent runtime on a dedicated Linux host with Docker
 Compose. A published GitHub Release builds the server images and deployment
-bundle. Build the frontend as static files with the public HTTPS API URL and
-serve it on a sibling subdomain using any static host with SPA routing.
-The [production runbook](docs/DEPLOYMENT.md) covers server prerequisites, local
-secret configuration, first sign-in, frontend publishing and recovery.
+bundle. The bundle includes the static frontend, which Caddy serves alongside
+the API at the configured HTTPS address. The
+[production runbook](docs/DEPLOYMENT.md) covers server prerequisites, local secret
+configuration, first sign-in, separate frontend hosting and recovery.
 
 ## Validation
 

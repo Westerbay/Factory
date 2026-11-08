@@ -38,6 +38,15 @@ jobs:
           save-if: false
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+      - name: Build the bundled web app
+        env:
+          VITE_API_BASE_URL: /
+        run: pnpm --filter @workspace/web build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: apps/web/dist
+          if-no-files-found: error
 
   images:
     needs: verify
@@ -128,6 +137,10 @@ jobs:
           pattern: release-*
           merge-multiple: true
           path: ${{ runner.temp }}/factory-images
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web-dist
       - name: Assemble the deployment bundle
         env:
           IMAGE_DIR: ${{ runner.temp }}/factory-images
@@ -135,7 +148,7 @@ jobs:
         run: |
           set -euo pipefail
           cat "$IMAGE_DIR"/release-{api,workspace,egress}.env > release.env
-          tar -czf factory-server.tar.gz release.env infra/deploy crates/database/schema.sql \
+          tar -czf factory-server.tar.gz release.env web-dist infra/deploy crates/database/schema.sql \
             scripts/environments/prepare.mjs scripts/environments/docker.mjs scripts/egress/prepare.mjs
           sha256sum factory-server.tar.gz > factory-server.tar.gz.sha256
       - uses: actions/upload-artifact@v4

@@ -1,17 +1,25 @@
+x-factory-origins: &factory-origins
+  FACTORY_WEB_ORIGIN: ${FACTORY_WEB_ORIGIN:-https://app.${FACTORY_DOMAIN:?Set FACTORY_WEB_ORIGIN or FACTORY_DOMAIN}}
+  FACTORY_API_ORIGIN: ${FACTORY_API_ORIGIN:-${FACTORY_WEB_ORIGIN:-https://api.${FACTORY_DOMAIN:?Set FACTORY_WEB_ORIGIN or FACTORY_DOMAIN}}}
+
 services:
   caddy:
     image: caddy:2-alpine@sha256:78bd35025c7ba85961dd149ae670315129954e77abe2383ac47c89106b35ade9
     restart: unless-stopped
     environment:
-      FACTORY_DOMAIN: ${FACTORY_DOMAIN:?Set FACTORY_DOMAIN}
+      <<: *factory-origins
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../../web-dist:/srv/factory-web:ro
       - caddy_data:/data
       - caddy_config:/config
     networks: [edge]
+    depends_on:
+      api:
+        condition: service_healthy
     logging:
       driver: local
 
@@ -22,8 +30,8 @@ services:
     image: ${FACTORY_API_IMAGE:?Use release.env}
     restart: unless-stopped
     environment:
+      <<: *factory-origins
       FACTORY_DEPLOYMENT: production
-      FACTORY_DOMAIN: ${FACTORY_DOMAIN:?Set FACTORY_DOMAIN}
       FACTORY_DB_PASSWORD: ${FACTORY_DB_PASSWORD:?Set FACTORY_DB_PASSWORD}
       FACTORY_GITHUB_CLIENT_ID: ${FACTORY_GITHUB_CLIENT_ID:?Set FACTORY_GITHUB_CLIENT_ID}
       FACTORY_GITHUB_CLIENT_SECRET: ${FACTORY_GITHUB_CLIENT_SECRET:?Set FACTORY_GITHUB_CLIENT_SECRET}

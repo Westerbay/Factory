@@ -31,7 +31,8 @@ done < "$bundle/release.env"
 : "${FACTORY_WORKSPACE_IMAGE:?Missing release workspace image}"
 : "${FACTORY_EGRESS_IMAGE:?Missing release egress image}"
 
-unset FACTORY_DOMAIN FACTORY_GITHUB_CLIENT_ID FACTORY_GITHUB_CLIENT_SECRET
+unset FACTORY_DOMAIN FACTORY_WEB_ORIGIN FACTORY_API_ORIGIN
+unset FACTORY_GITHUB_CLIENT_ID FACTORY_GITHUB_CLIENT_SECRET
 unset FACTORY_DB_PASSWORD FACTORY_POSTGRES_PASSWORD
 compose=(docker --host unix:///var/run/docker.sock compose
   --project-name factory-prod --project-directory "$bundle/infra/deploy"
@@ -57,6 +58,12 @@ fi
 
 exec 9>"$installation/deploy.lock"
 flock -n 9 || { echo "Another Factory deployment is in progress" >&2; exit 1; }
+for asset in index.html sw.js manifest.webmanifest; do
+  if [[ ! -s "$bundle/web-dist/$asset" ]]; then
+    echo "Missing web release file: $asset" >&2
+    exit 1
+  fi
+done
 mkdir -p "$FACTORY_STATE_DIR"
 
 # Keep first-boot files at stable host paths, even when changing releases.
@@ -78,4 +85,4 @@ docker --host unix:///var/run/docker.sock image pull "$FACTORY_EGRESS_IMAGE"
 node "$bundle/scripts/environments/prepare.mjs" --directory "$FACTORY_STATE_DIR/.factory/environments" \
   --images "$FACTORY_WORKSPACE_IMAGE" "$FACTORY_EGRESS_IMAGE"
 "${compose[@]}" up -d --pull never --wait --wait-timeout 120
-printf 'Factory API is ready. Verify HTTPS, then publish the frontend and test sign-in.\n'
+printf 'Factory API is ready. Verify HTTPS and test sign-in.\n'

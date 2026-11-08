@@ -7,6 +7,7 @@ afterEach(() => vi.unstubAllGlobals())
 
 describe("API origin", () => {
   it("accepts HTTPS and local HTTP but rejects insecure, credentialed and non-origin URLs", () => {
+    expect(parseApiOrigin("/")).toBe("/")
     expect(parseApiOrigin()).toBe("http://localhost:3001")
     expect(parseApiOrigin("http://127.0.0.1:3001/")).toBe(
       "http://127.0.0.1:3001"
@@ -26,7 +27,7 @@ describe("API origin", () => {
       "http://localhost:3001/#hash",
     ]) {
       expect(() => parseApiOrigin(value)).toThrow(
-        "HTTPS or loopback HTTP origin"
+        "must be /, an HTTPS origin, or a loopback HTTP origin"
       )
     }
   })

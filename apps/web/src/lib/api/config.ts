@@ -1,13 +1,14 @@
 const DEFAULT_API_ORIGIN = "http://localhost:3001"
 
-/** Public API traffic uses HTTPS; local development can use loopback HTTP. */
+/** A slash targets the web page's origin. Explicit API origins use HTTPS or loopback HTTP. */
 export function parseApiOrigin(value = DEFAULT_API_ORIGIN): string {
+  if (value === "/") return value
   let url: URL
   try {
     url = new URL(value)
   } catch {
     throw new Error(
-      "VITE_API_BASE_URL must be an HTTPS or loopback HTTP origin"
+      "VITE_API_BASE_URL must be /, an HTTPS origin, or a loopback HTTP origin"
     )
   }
   const localHttp =
@@ -23,7 +24,7 @@ export function parseApiOrigin(value = DEFAULT_API_ORIGIN): string {
     url.hash
   ) {
     throw new Error(
-      "VITE_API_BASE_URL must be an HTTPS or loopback HTTP origin"
+      "VITE_API_BASE_URL must be /, an HTTPS origin, or a loopback HTTP origin"
     )
   }
   return url.origin
