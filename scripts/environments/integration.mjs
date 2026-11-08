@@ -22,7 +22,7 @@ function trackedDocker(args, options) {
       `Environment integration fixture: ${installationId} (${directory})`
     )
   }
-  const output = docker(args, options)
+  const output = docker(args, { ...options, logBuild: true })
   if (
     args[0] === "image" &&
     args[1] === "inspect" &&

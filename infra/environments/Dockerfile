@@ -2,14 +2,14 @@ FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde
 # Immutable Debian snapshot and official release asset checksums make rebuilds explicit.
 RUN printf '%s\n' 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261027T000000Z bookworm main' > /etc/apt/sources.list \
     && rm /etc/apt/sources.list.d/debian.sources \
-    && apt-get update && apt-get install -y --no-install-recommends ca-certificates curl jq
+    && apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update && apt-get -o Acquire::Retries=3 install -y --no-install-recommends ca-certificates curl jq
 RUN set -eu; \
     case "$(dpkg --print-architecture)" in \
       amd64) target=x86_64-unknown-linux-musl; checksum=4fcc47ab57f52ff75363951a8761146cd10c8288bd86fed45487dbb204a16b71 ;; \
       arm64) target=aarch64-unknown-linux-musl; checksum=7f0fe42ff22ecfa3a47bc4a34f5b22c4218b431a4ec0aba51c7d98299f07900c ;; \
       *) echo 'Unsupported Codex architecture' >&2; exit 1 ;; \
     esac; \
-    curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+    curl --fail --silent --show-error --location --retry 3 --retry-all-errors --connect-timeout 15 --retry-max-time 180 --max-time 180 --proto '=https' --proto-redir '=https' --tlsv1.2 \
       "https://github.com/openai/codex/releases/download/rust-v0.160.0/codex-package-${target}.tar.gz" -o /tmp/codex.tar.gz; \
     echo "$checksum  /tmp/codex.tar.gz" | sha256sum --check --strict; \
     mkdir /opt/codex; tar -xzf /tmp/codex.tar.gz -C /opt/codex; \
@@ -30,7 +30,7 @@ RUN set -eu; \
       *) echo 'Unsupported Claude Code architecture' >&2; exit 1 ;; \
     esac; \
     mkdir /opt/claude; \
-    curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+    curl --fail --silent --show-error --location --retry 3 --retry-all-errors --connect-timeout 15 --retry-max-time 180 --max-time 180 --proto '=https' --proto-redir '=https' --tlsv1.2 \
       "https://downloads.claude.ai/claude-code-releases/2.1.284/${platform}/claude" -o /opt/claude/claude; \
     echo "$checksum  /opt/claude/claude" | sha256sum --check --strict; \
     chmod 0555 /opt/claude/claude; \
@@ -45,7 +45,7 @@ RUN set -eu; \
       | jq -e 'select(.type == "control_response" and .response.request_id == "factory-probe" and .response.subtype == "success") | .response.response | (.models | type == "array" and length > 0) and (.account.tokenSource == "none")' >/dev/null
 
 # Pin and verify the upstream Oh My Zsh source independently of the mutable branch.
-RUN curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+RUN curl --fail --silent --show-error --location --retry 3 --retry-all-errors --connect-timeout 15 --retry-max-time 180 --max-time 180 --proto '=https' --proto-redir '=https' --tlsv1.2 \
       https://codeload.github.com/ohmyzsh/ohmyzsh/tar.gz/17a2b4c3a5855524ad4772a17ada0dc474e2fdf3 -o /tmp/oh-my-zsh.tar.gz \
     && echo 'eb6f2788316ff75f9be60c00372da0da97d4bcab202d64a9229e1f6365166932  /tmp/oh-my-zsh.tar.gz' | sha256sum --check --strict \
     && mkdir /opt/oh-my-zsh \
@@ -59,7 +59,7 @@ LABEL io.factory.claude.version="2.1.284"
 RUN printf '%s\n' 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261027T000000Z bookworm main' \
       'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20261027T000000Z bookworm-security main' > /etc/apt/sources.list \
     && rm /etc/apt/sources.list.d/debian.sources \
-    && apt-get update && apt-get install -y --no-install-recommends bash zsh tmux git neofetch ca-certificates util-linux openssh-client netcat-openbsd python3 \
+    && apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update && apt-get -o Acquire::Retries=3 install -y --no-install-recommends bash zsh tmux git neofetch ca-certificates util-linux openssh-client netcat-openbsd python3 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 10000 factory \
     && useradd -u 10000 -g factory -d /home/factory -s /bin/zsh factory \
