@@ -566,8 +566,9 @@ hidden/offline pages and stops at logout, and inspect keyboard/narrow-screen
 behavior. Record actual platforms and outcomes; synthetic checks do not establish human
 acceptance or production behavior.
 
-Using the built preview in a supported Chromium browser, install and reopen the PWA,
-check the public offline fallback, then build a visible local change. Verify the update
+Using the built preview in a supported Chromium browser, use the install offer and
+reopen the installed PWA. Verify that the offer is absent in the installed window.
+Check the public offline fallback, then build a visible local change. Verify the update
 notice appears after focus/reconnection and only an explicit action reloads the chosen
 tab. Check that another tab is not forced to reload and no private API/OAuth content
 appears in CacheStorage. Record actual observations and limits locally.
