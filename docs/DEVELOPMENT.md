@@ -189,15 +189,19 @@ lockfile when installing the workspace; scanners may still report its original v
 Web tests live under `apps/web/test/`, grouped by feature. Vitest discovers both
 TypeScript and TSX tests there.
 
-GitHub Actions runs TypeScript and Rust checks in parallel. Pull requests limited to
-`apps/web/`, `docs/` and `README.md` skip Docker and database integrations; all other
-pull requests run them. Pushes to `main`, nightly runs and manual runs execute the full
-integrations. A separate workflow builds Rust release binaries on those same events,
-without adding a skipped job to pull requests. Branch pushes without a pull request do
-not start either workflow. The `check` job requires the applicable foundation jobs to
-succeed; the release workflow reports its result separately. The Docker integration builds
-the real workspace and egress images and may remain slow on a cold runner. `pnpm check`
-locally continues to include the release build.
+The CI workflow runs Web and TypeScript, Rust and API contract, Postgres
+integration and Docker runtime integration as separate jobs. Pull requests
+limited to `apps/web/`, `docs/` and `README.md` skip the integration jobs. Changes
+to the database or Docker fixture scripts run the corresponding integration.
+Shared changes, pushes to `main`, nightly runs and manual runs run both. **Checks passed** summarizes
+the applicable checks for a pull request.
+
+On `main`, CI also builds the production candidate and tests the upgrade from
+the previous stable bundle. That test uses a disposable GitHub-hosted Linux
+x86-64 runner and a synthetic session, since the production Compose project
+name is fixed. Maintainers can dispatch CI on a branch to validate a candidate
+before merge. Release publication retrieves the tested artifact for the tag's
+exact commit from a successful run on `main`. Locally, `pnpm check` still includes the Rust release build.
 
 `environments:test` runs deterministic preparation-tool regressions and is included in
 routine checks. `environments:integration` explicitly builds a fixture image and runs

@@ -36,13 +36,21 @@ Monitor these resources and test real workloads before increasing concurrency.
 
 ## Publish and deploy a version
 
-Publish a stable GitHub Release tagged `vX.Y.Z` from a commit on `main`. The
-[release workflow](../.github/workflows/publish-release.yml) runs the project
-checks, publishes three Linux amd64 images to GHCR and assembles a versioned
-server bundle with the static web build. Unchanged workspace and egress sources
-reuse their published images. Wait for the workflow to attach the server tarball
-and checksum to the GitHub Release. The tarball includes the exact image digests.
-For older releases, download the `factory-server` artifact from their workflow run.
+[CI](../.github/workflows/ci.yml) builds the static frontend, publishes Linux
+amd64 candidate images to GHCR and tests the server bundle on a disposable
+installation of the previous stable version. Unchanged workspace and egress
+sources reuse their published images. The upgrade check verifies the existing
+workspace and its home volume. When a runtime image changes, it verifies safe
+refusal and then exercises the compatible application upgrade using the previous
+runtime in the fixture. The first release uses the candidate for both installs.
+
+Publish a stable GitHub Release tagged `vX.Y.Z` from a successful CI commit on
+`main`. The [release workflow](../.github/workflows/publish-release.yml)
+tags the tested images and publishes the server bundle from that exact CI run. Wait for
+the server tarball and checksum to appear in the GitHub Release. If the CI
+artifact has expired, rerun CI for the same commit. The tarball pins the exact
+image digests. For releases published before bundle attachments were introduced,
+download the `factory-server` artifact from their original workflow run.
 
 Copy the tarball and checksum to the server. From their directory, verify and
 extract the bundle into a new version directory. Run these as root or through sudo using the actual release number in place of

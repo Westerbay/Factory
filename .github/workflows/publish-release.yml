@@ -1,4 +1,4 @@
-name: Publish production release
+name: Release
 
 on:
   release:
@@ -8,162 +8,86 @@ permissions:
   contents: read
 
 concurrency:
-  group: publish-release-${{ github.ref }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  verify:
+  publish:
+    name: Publish the validated bundle
     if: ${{ !github.event.release.prerelease }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: write
+      packages: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Verify the release tag
+      - name: Find the successful CI run for this exact release commit
+        id: candidate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
           [[ "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
-          git merge-base --is-ancestor HEAD refs/remotes/origin/main
-      - uses: pnpm/action-setup@v4
+          commit=$(git rev-parse "$GITHUB_REF^{commit}")
+          git merge-base --is-ancestor "$commit" refs/remotes/origin/main
+          artifact="factory-server-$commit"
+          for attempt in $(seq 1 80); do
+            runs=$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+              -f branch=main -f head_sha="$commit" -f status=success -F per_page=30 \
+              --jq '.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch") | .id')
+            while IFS= read -r run; do
+              [[ -n "$run" ]] || continue
+              artifacts=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts")
+              if jq -e --arg artifact "$artifact" 'any(.artifacts[]; .name == $artifact and .expired == false)' <<< "$artifacts" >/dev/null; then
+                printf 'run-id=%s\nartifact=%s\n' "$run" "$artifact" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            done <<< "$runs"
+            sleep 15
+          done
+          echo "No successful CI run has a current server bundle for $commit. Verify or rerun CI for that commit." >&2
+          exit 1
+      - uses: actions/download-artifact@v4
         with:
-          version: 12.11.2
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .node-version
-          cache: pnpm
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: false
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm check
-      - name: Build the bundled web app
-        env:
-          VITE_API_BASE_URL: /
-        run: pnpm --filter @workspace/web build
-      - uses: actions/upload-artifact@v4
-        with:
-          name: web-dist
-          path: apps/web/dist
-          if-no-files-found: error
-
-  images:
-    needs: verify
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    strategy:
-      matrix:
-        include:
-          - name: api
-            context: .
-            file: infra/deploy/api.Dockerfile
-            variable: FACTORY_API_IMAGE
-          - name: workspace
-            context: infra/environments
-            file: infra/environments/Dockerfile
-            variable: FACTORY_WORKSPACE_IMAGE
-          - name: egress
-            context: infra/egress
-            file: infra/egress/Dockerfile
-            variable: FACTORY_EGRESS_IMAGE
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
+          name: ${{ steps.candidate.outputs.artifact }}
+          run-id: ${{ steps.candidate.outputs.run-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: candidate
+      - name: Verify the bundle checksum
+        working-directory: candidate
+        run: sha256sum --check --strict factory-server.tar.gz.sha256
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Resolve package name
-        id: package
-        env:
-          COMPONENT: ${{ matrix.name }}
-        run: printf 'name=ghcr.io/%s-%s\n' "${GITHUB_REPOSITORY,,}" "$COMPONENT" >> "$GITHUB_OUTPUT"
-      - name: Look up an unchanged runtime image
-        id: runtime
-        if: matrix.name != 'api'
-        env:
-          SOURCE_CONTEXT: ${{ matrix.context }}
-          PACKAGE: ${{ steps.package.outputs.name }}
+      - name: Tag the tested container digests
         shell: bash
         run: |
           set -euo pipefail
-          source_ref="$PACKAGE:source-$(git rev-parse "HEAD:$SOURCE_CONTEXT")"
-          printf 'ref=%s\n' "$source_ref" >> "$GITHUB_OUTPUT"
-          if digest=$(docker buildx imagetools inspect "$source_ref" --format '{{.Manifest.Digest}}'); then
-            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-            printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
-            docker buildx imagetools create --tag "$PACKAGE:$GITHUB_REF_NAME" "$PACKAGE@$digest"
-          fi
-      - uses: docker/build-push-action@v6
-        if: steps.runtime.outputs.digest == ''
-        id: image
-        with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.file }}
-          platforms: linux/amd64
-          push: true
-          tags: |
-            ${{ steps.package.outputs.name }}:${{ github.ref_name }}
-            ${{ steps.runtime.outputs.ref }}
-      - name: Record the pushed digest
+          images=$(tar -xOzf candidate/factory-server.tar.gz release.env)
+          for component in api workspace egress; do
+            package="ghcr.io/${GITHUB_REPOSITORY,,}-$component"
+            ref=$(sed -n "s/^FACTORY_${component^^}_IMAGE=//p" <<< "$images")
+            [[ "$ref" == "$package@sha256:"* && "${ref#*@}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            tag="$package:$GITHUB_REF_NAME"
+            if existing=$(docker buildx imagetools inspect "$tag" --format '{{.Manifest.Digest}}' 2>/dev/null); then
+              [[ "$existing" == "${ref#*@}" ]] || { echo "Release tag $tag already points to a different image" >&2; exit 1; }
+            else
+              docker buildx imagetools create --prefer-index=false --tag "$tag" "$ref"
+            fi
+          done
+      - name: Attach the bundle to the GitHub Release
+        working-directory: candidate
         env:
-          VARIABLE: ${{ matrix.variable }}
-          PACKAGE: ${{ steps.package.outputs.name }}
-          DIGEST: ${{ steps.runtime.outputs.digest || steps.image.outputs.digest }}
-        run: |
-          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          printf '%s=%s@%s\n' "$VARIABLE" "$PACKAGE" "$DIGEST" > release-${{ matrix.name }}.env
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-${{ matrix.name }}
-          path: release-${{ matrix.name }}.env
-          if-no-files-found: error
-
-  bundle:
-    needs: images
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: release-*
-          merge-multiple: true
-          path: ${{ runner.temp }}/factory-images
-      - uses: actions/download-artifact@v4
-        with:
-          name: web-dist
-          path: web-dist
-      - name: Assemble the deployment bundle
-        env:
-          IMAGE_DIR: ${{ runner.temp }}/factory-images
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat "$IMAGE_DIR"/release-{api,workspace,egress}.env > release.env
-          tar --sort=name --mtime="@$(git show -s --format=%ct HEAD)" --owner=0 --group=0 --numeric-owner \
-            -czf factory-server.tar.gz release.env web-dist infra/deploy crates/database/schema.sql \
-            scripts/environments/prepare.mjs scripts/environments/docker.mjs scripts/egress/prepare.mjs
-          sha256sum factory-server.tar.gz > factory-server.tar.gz.sha256
-      - uses: actions/upload-artifact@v4
-        with:
-          name: factory-server
-          path: |
-            factory-server.tar.gz
-            factory-server.tar.gz.sha256
-          if-no-files-found: error
-      - name: Attach the server bundle to the GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
