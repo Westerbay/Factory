@@ -1,10 +1,10 @@
 # Context
 
 Factory is a private web/PWA application with a Rust backend. React/TypeScript compiles
-to static files hosted independently of the API; there is no frontend SSR process or
-Rust static-file server. Development uses loopback HTTP. The
-[production deployment](DEPLOYMENT.md) uses a static frontend host and a dedicated Linux
-server with Caddy, PostgreSQL and release images from GHCR.
+to static files and Rust serves the API. Development uses loopback HTTP. The
+[production deployment](DEPLOYMENT.md) uses a dedicated Linux server with Caddy,
+PostgreSQL and release images from GHCR. Caddy can serve the bundled static
+frontend alongside the API, or the frontend can use a separate static host.
 
 GitHub OAuth identifies users by a stable provider identity. The operator CLI resolves a GitHub
 username and stores the selected account as the first administrator. Other verified users remain pending

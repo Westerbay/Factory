@@ -72,8 +72,9 @@ Parsing does not mutate the process environment. Restart the API after editing t
 
 Both origins must use the same local host. Current configuration accepts canonical
 loopback HTTP origins without credentials, trailing slash, paths, query or fragment.
-The separate [production configuration](DEPLOYMENT.md) uses HTTPS origins. Do not put secrets in
-`VITE_*` variables: their values can be included in the public bundle. Vite also does
+The [production configuration](DEPLOYMENT.md) uses HTTPS origins. A bundled
+web build sets `VITE_API_BASE_URL=/` to call the API at the page's origin.
+Values in `VITE_*` variables can be included in the public bundle. Vite also does
 not read `.env` files: this file configures the server only. The default frontend origin
 already matches the example. A custom `VITE_API_BASE_URL` is still an explicit public
 frontend build-time process variable.

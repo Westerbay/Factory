@@ -254,10 +254,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn production_web_origin_gets_credentialed_cors_but_preview_does_not() {
+    async fn production_custom_web_origin_is_the_only_credentialed_cors_origin() {
         let config = RuntimeConfig::from_values(|name| match name {
             "FACTORY_DEPLOYMENT" => Some("production".into()),
-            "FACTORY_DOMAIN" => Some("example.com".into()),
+            "FACTORY_WEB_ORIGIN" => Some("https://factory.example.com".into()),
             "FACTORY_DB_PASSWORD" => Some("synthetic-password".into()),
             "FACTORY_GITHUB_CLIENT_ID" => Some("synthetic-client".into()),
             "FACTORY_GITHUB_CLIENT_SECRET" => Some("synthetic-secret".into()),
@@ -265,9 +265,10 @@ mod tests {
         })
         .unwrap();
         for (origin, allowed) in [
-            ("https://app.example.com", true),
-            ("https://preview.example.com", false),
-            ("http://app.example.com", false),
+            ("https://factory.example.com", true),
+            ("https://other.example.com", false),
+            ("https://factory-api.example.com", false),
+            ("http://factory.example.com", false),
         ] {
             let response =
                 request_with_config(&config, Method::OPTIONS, "/health/live", origin).await;

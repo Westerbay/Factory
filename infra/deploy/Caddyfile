@@ -1,4 +1,45 @@
-api.{$FACTORY_DOMAIN} {
+(factory_api) {
 	header Cache-Control "no-store"
 	reverse_proxy api:3001
+}
+
+{$FACTORY_API_ORIGIN} {
+	route {
+		@backend path /api /api/* /health /health/*
+		handle @backend {
+			import factory_api
+		}
+
+		@bundled_web expression `"{$FACTORY_WEB_ORIGIN}" == "{$FACTORY_API_ORIGIN}"`
+		handle @bundled_web {
+			root * /srv/factory-web
+
+			handle /assets/* {
+				header Cache-Control "public, max-age=31536000, immutable" {
+					match status 2xx 304
+				}
+				file_server
+			}
+
+			handle {
+				header Cache-Control "no-cache"
+				@navigation {
+					method GET HEAD
+					header Accept *text/html*
+					not path /sw.js /manifest.webmanifest /offline.html /brand/* /fonts/* /icons/*
+				}
+				handle @navigation {
+					try_files {path} /index.html
+					file_server
+				}
+				handle {
+					file_server
+				}
+			}
+		}
+
+		handle {
+			import factory_api
+		}
+	}
 }

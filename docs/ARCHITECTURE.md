@@ -446,11 +446,13 @@ transitions and a periodic interval. A waiting worker activates after explicit u
 action, and only the consenting tab reloads automatically. An already installed client
 is not evidence that the API or a session is currently available.
 
-A static host must serve SPA navigation fallbacks and fresh entry/worker/manifest
-resources; hashed assets can be immutable. The API remains a separate origin with exact
-credentialed CORS. Production uses sibling HTTPS origins so API session cookies work
-across the web and API hosts. A static host serves the PWA and Caddy terminates TLS
-for the API on the Linux server. See the [deployment runbook](DEPLOYMENT.md).
+The production bundle builds the web app with `VITE_API_BASE_URL=/`, so its API
+requests use the page's HTTPS origin. Caddy serves the static files and sends
+`/api` and `/health` to Rust before considering the SPA fallback. It revalidates
+the entry document, service worker and manifest, while hashed assets can be
+immutable. With separate frontend hosting, the two origins use sibling
+subdomains and the API enables credentialed CORS for the configured frontend.
+See the [deployment runbook](DEPLOYMENT.md).
 
 ## Preserved TypeScript execution reference
 
