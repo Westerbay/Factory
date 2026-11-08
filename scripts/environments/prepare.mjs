@@ -13,26 +13,58 @@ const imageId = /^sha256:[0-9a-f]{64}$/
 export async function prepare(
   directory = resolve(root, ".factory/environments"),
   runDocker = docker,
-  images = {}
+  images = {},
+  { checkOnly = false } = {}
 ) {
-  await mkdir(directory, { recursive: true })
   const installationPath = resolve(directory, "installation.json")
-  // Exclusive creation prevents simultaneous prepares from assigning different identities.
-  try {
-    await writeFile(
-      installationPath,
-      JSON.stringify({ installationId: randomUUID() }),
-      { flag: "wx", mode: 0o600 }
-    )
-  } catch (error) {
-    if (error.code !== "EEXIST") throw error
+  if (checkOnly && (!images.workspace || !images.egress)) {
+    throw new Error("Deployment checks require both release images")
   }
-  const installation = JSON.parse(await readFile(installationPath, "utf8"))
+  if (!checkOnly) {
+    await mkdir(directory, { recursive: true })
+    // Exclusive creation prevents simultaneous prepares from assigning different identities.
+    try {
+      await writeFile(
+        installationPath,
+        JSON.stringify({ installationId: randomUUID() }),
+        { flag: "wx", mode: 0o600 }
+      )
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error
+    }
+  }
+  const installation = await readFile(installationPath, "utf8").then(
+    JSON.parse,
+    (error) => {
+      if (!checkOnly || error.code !== "ENOENT") throw error
+    }
+  )
   if (
-    !uuid.test(installation.installationId) ||
-    installation.installationId === "00000000-0000-0000-0000-000000000000"
+    installation !== undefined &&
+    (!uuid.test(installation?.installationId) ||
+      installation.installationId === "00000000-0000-0000-0000-000000000000")
   ) {
     throw new Error("Invalid local environment installation identity")
+  }
+  if (checkOnly && installation) {
+    const states = runDocker([
+      "container",
+      "ls",
+      "--all",
+      "--filter",
+      `label=io.factory.installation=${installation.installationId}`,
+      "--filter",
+      "label=io.factory.environment",
+      "--format",
+      "{{.State}}",
+    ])
+      .split(/\r?\n/)
+      .filter(Boolean)
+    if (states.some((state) => state !== "exited" && state !== "dead")) {
+      throw new Error(
+        "Factory workspaces are active. Finish agent work and stop the workspaces in Factory before updating."
+      )
+    }
   }
   const tag =
     images.workspace ?? `factory-environment:${installation.installationId}`
@@ -62,13 +94,14 @@ export async function prepare(
   }
   const metadata = {
     schemaVersion: 1,
-    installationId: installation.installationId,
+    installationId: installation?.installationId,
     imageId: image.Id,
     policyVersion,
   }
-  const temporary = resolve(directory, `prepared-${randomUUID()}.tmp`)
   // Never publish the user manifest before proxy image and engine validation succeeds.
-  await prepareEgress(directory, runDocker, images.egress)
+  await prepareEgress(directory, runDocker, images.egress, { checkOnly })
+  if (checkOnly) return
+  const temporary = resolve(directory, `prepared-${randomUUID()}.tmp`)
   try {
     await writeFile(temporary, JSON.stringify(metadata, null, 2) + "\n", {
       flag: "wx",
@@ -89,6 +122,8 @@ if (
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
   const args = process.argv.slice(2)
+  const checkOnly = args.at(-1) === "--check"
+  if (checkOnly) args.pop()
   const [directoryFlag, directory, imagesFlag, workspace, egress] = args
   const digestReference = /^ghcr\.io\/[a-z0-9_./-]+@sha256:[0-9a-f]{64}$/
   const validDirectory = directoryFlag === "--directory" && directory
@@ -97,21 +132,25 @@ if (
     digestReference.test(workspace ?? "") &&
     digestReference.test(egress ?? "")
   if (
-    args.length !== 0 &&
     !(
-      validDirectory &&
-      (args.length === 2 || (args.length === 5 && validImages))
+      (args.length === 5 && validDirectory && validImages) ||
+      (!checkOnly &&
+        (args.length === 0 || (args.length === 2 && validDirectory)))
     )
   ) {
     throw new Error(
-      "Usage: environments:prepare [--directory <state directory> [--images <workspace digest ref> <egress digest ref>]]"
+      "Usage: environments:prepare [--directory <state directory> [--images <workspace digest ref> <egress digest ref> [--check]]]"
     )
   }
-  await prepare(directory ? resolve(directory) : undefined, docker, {
-    workspace,
-    egress,
-  })
-  console.log(
-    "Environment images prepared. Existing environments retain their recorded image."
+  await prepare(
+    directory ? resolve(directory) : undefined,
+    docker,
+    { workspace, egress },
+    { checkOnly }
   )
+  if (!checkOnly) {
+    console.log(
+      "Environment images prepared. Existing environments retain their recorded image."
+    )
+  }
 }

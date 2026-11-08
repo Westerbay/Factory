@@ -94,7 +94,23 @@ test("preparation preserves the previous contract until incompatible proxy maint
     }
     assert.deepEqual(await prepareEgress(directory, runDocker), first)
     const initialBytes = await readFile(join(directory, "egress.json"), "utf8")
+    const release = `ghcr.io/example/factory-egress@sha256:${"1".repeat(64)}`
+    const interfaces = { ...first, hostIpv4: hostAddresses(undefined, true) }
+    await writeFile(join(directory, "egress.json"), JSON.stringify(interfaces))
+    proxy.Config.Env[0] = `FACTORY_HOST_IPV4=${interfaces.hostIpv4.join(",")}`
+    const beforeCheck = await readFile(join(directory, "egress.json"), "utf8")
+    await prepareEgress(directory, runDocker, release, { checkOnly: true })
     imageId = `sha256:${"b".repeat(64)}`
+    await assert.rejects(
+      prepareEgress(directory, runDocker, release, { checkOnly: true }),
+      /verified proxy maintenance/
+    )
+    assert.equal(
+      await readFile(join(directory, "egress.json"), "utf8"),
+      beforeCheck
+    )
+    await writeFile(join(directory, "egress.json"), initialBytes)
+    proxy.Config.Env[0] = `FACTORY_HOST_IPV4=${first.hostIpv4.join(",")}`
     await assert.rejects(
       prepareEgress(directory, runDocker),
       /existing metadata was preserved/
