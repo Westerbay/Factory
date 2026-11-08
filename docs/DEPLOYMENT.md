@@ -91,8 +91,9 @@ FACTORY_API_ORIGIN=https://factory-api.example.com
 ```
 
 Point the API hostname at the server, use the web URL as the OAuth homepage
-and the API URL with `/api/auth/github/callback` as the OAuth callback. Existing
-installations that only set `FACTORY_DOMAIN` keep their `app.` and `api.` origins.
+and the API URL with `/api/auth/github/callback` as the OAuth callback. When
+upgrading an existing split deployment, set both variables to its current
+public origins to keep the existing DNS and OAuth configuration.
 
 Build the frontend from the release commit at the repository root using Node.js
 24.22.1 and pnpm 12.11.2. Build variables prefixed with `VITE_` are public.
@@ -134,9 +135,9 @@ To roll back a compatible API release, run the same deploy command from the
 previous bundle. It restores the bundled web build as well. If you host the
 frontend separately, restore its matching build on the static host. Verify the
 previous API accepts the database schema and the origin settings before rolling
-back. Releases without a bundled frontend require `FACTORY_DOMAIN` and separate
-frontend hosting. A changed egress image may require the
-[explicit proxy maintenance procedure](../infra/egress/README.md). After its
-verified removal steps, rerun the production deploy command to prepare the new
-proxy. Existing workspace containers keep their recorded image after deployment.
-Retain images referenced by those containers.
+back. For releases without a bundled frontend, restore the server environment
+configuration and separate frontend used by that release. A changed egress
+image may require the [explicit proxy maintenance procedure](../infra/egress/README.md).
+After its verified removal steps, rerun the production deploy command to prepare
+the new proxy. Existing workspace containers keep their recorded image after
+deployment. Retain images referenced by those containers.

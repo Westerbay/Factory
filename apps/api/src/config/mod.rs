@@ -110,22 +110,12 @@ impl RuntimeConfig {
 fn production_origins(
     get: &impl Fn(&str) -> Option<String>,
 ) -> Result<(String, String), &'static str> {
-    let web = get("FACTORY_WEB_ORIGIN").filter(|origin| !origin.is_empty());
-    let api = get("FACTORY_API_ORIGIN").filter(|origin| !origin.is_empty());
-    let (web, api) = match web {
-        Some(web) => {
-            let api = api.unwrap_or_else(|| web.clone());
-            (web, api)
-        }
-        None => {
-            let domain = get("FACTORY_DOMAIN")
-                .filter(|domain| !domain.is_empty())
-                .ok_or("PRODUCTION_WEB_ORIGIN_REQUIRED")?;
-            let web = format!("https://app.{domain}");
-            let legacy_api = format!("https://api.{domain}");
-            (web, api.unwrap_or(legacy_api))
-        }
-    };
+    let web = get("FACTORY_WEB_ORIGIN")
+        .filter(|origin| !origin.is_empty())
+        .ok_or("PRODUCTION_WEB_ORIGIN_REQUIRED")?;
+    let api = get("FACTORY_API_ORIGIN")
+        .filter(|origin| !origin.is_empty())
+        .unwrap_or_else(|| web.clone());
     let web_parent = production_parent(&web).ok_or("PRODUCTION_WEB_ORIGIN_INVALID")?;
     let api_parent = production_parent(&api).ok_or("PRODUCTION_API_ORIGIN_INVALID")?;
     if web_parent != api_parent {
@@ -250,7 +240,7 @@ mod tests {
             }
             match name {
                 "FACTORY_DEPLOYMENT" => Some("production".into()),
-                "FACTORY_DOMAIN" => Some("example.com".into()),
+                "FACTORY_WEB_ORIGIN" => Some("https://factory.example.com".into()),
                 "FACTORY_DB_PASSWORD" => Some("synthetic-password".into()),
                 "FACTORY_GITHUB_CLIENT_ID" => Some("synthetic-client".into()),
                 "FACTORY_GITHUB_CLIENT_SECRET" => Some("synthetic-secret".into()),
@@ -260,21 +250,29 @@ mod tests {
     }
 
     #[test]
-    fn production_derives_https_sibling_origins_and_requires_credentials() {
-        let config = production(&[]).unwrap();
-        assert_eq!(config.bind(), "0.0.0.0:3001".parse().unwrap());
-        assert_eq!(config.web_origin(), "https://app.example.com");
-        assert_eq!(config.api_origin(), "https://api.example.com");
-        for domain in [
-            "example.com/path",
+    fn production_requires_a_canonical_https_web_origin_and_credentials() {
+        let api = (
+            "FACTORY_API_ORIGIN",
+            Some("https://factory-api.example.com"),
+        );
+        for missing in [None, Some("")] {
+            assert!(matches!(
+                production(&[("FACTORY_WEB_ORIGIN", missing), api]),
+                Err("PRODUCTION_WEB_ORIGIN_REQUIRED")
+            ));
+        }
+        for invalid in [
+            "factory.example.com",
+            "http://factory.example.com",
+            "https://factory.example.com/path",
             "https://example.com",
-            "example.com:443",
-            "a..com",
-            "127.0.0.1",
-            "app.localhost",
+            "https://factory.example.com:443",
+            "https://a..com",
+            "https://127.0.0.1",
+            "https://factory.localhost",
         ] {
             assert!(matches!(
-                production(&[("FACTORY_DOMAIN", Some(domain))]),
+                production(&[("FACTORY_WEB_ORIGIN", Some(invalid))]),
                 Err("PRODUCTION_WEB_ORIGIN_INVALID")
             ));
         }
@@ -290,23 +288,21 @@ mod tests {
 
     #[test]
     fn production_web_origin_defaults_to_serving_the_api_on_the_same_host() {
-        let config = production(&[
-            ("FACTORY_DOMAIN", None),
-            ("FACTORY_WEB_ORIGIN", Some("https://factory.example.com")),
-        ])
-        .unwrap();
-        assert_eq!(config.web_origin(), "https://factory.example.com");
-        assert_eq!(config.api_origin(), config.web_origin());
+        for api in [None, Some("")] {
+            let config = production(&[("FACTORY_API_ORIGIN", api)]).unwrap();
+            assert_eq!(config.bind(), "0.0.0.0:3001".parse().unwrap());
+            assert_eq!(config.web_origin(), "https://factory.example.com");
+            assert_eq!(config.api_origin(), config.web_origin());
+        }
     }
 
     #[test]
     fn production_api_origin_accepts_only_https_on_the_same_or_a_sibling_host() {
-        let web = ("FACTORY_WEB_ORIGIN", Some("https://factory.example.com"));
         let configured_api = "https://factory-api.example.com";
-        let config = production(&[web, ("FACTORY_API_ORIGIN", Some(configured_api))]).unwrap();
+        let config = production(&[("FACTORY_API_ORIGIN", Some(configured_api))]).unwrap();
         assert_eq!(config.api_origin(), configured_api);
         assert!(matches!(
-            production(&[web, ("FACTORY_API_ORIGIN", Some("https://api.other.com"))]),
+            production(&[("FACTORY_API_ORIGIN", Some("https://factory-api.other.com"))]),
             Err("PRODUCTION_ORIGINS_MUST_SHARE_DOMAIN")
         ));
         for invalid in [
@@ -316,7 +312,7 @@ mod tests {
             "https://name@factory-api.example.com",
         ] {
             assert!(matches!(
-                production(&[web, ("FACTORY_API_ORIGIN", Some(invalid))]),
+                production(&[("FACTORY_API_ORIGIN", Some(invalid))]),
                 Err("PRODUCTION_API_ORIGIN_INVALID")
             ));
         }

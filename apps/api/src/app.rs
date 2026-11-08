@@ -266,7 +266,7 @@ mod tests {
         .unwrap();
         for (origin, allowed) in [
             ("https://factory.example.com", true),
-            ("https://app.example.com", false),
+            ("https://other.example.com", false),
             ("https://factory-api.example.com", false),
             ("http://factory.example.com", false),
         ] {

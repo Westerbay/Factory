@@ -31,7 +31,7 @@ done < "$bundle/release.env"
 : "${FACTORY_WORKSPACE_IMAGE:?Missing release workspace image}"
 : "${FACTORY_EGRESS_IMAGE:?Missing release egress image}"
 
-unset FACTORY_DOMAIN FACTORY_WEB_ORIGIN FACTORY_API_ORIGIN
+unset FACTORY_WEB_ORIGIN FACTORY_API_ORIGIN
 unset FACTORY_GITHUB_CLIENT_ID FACTORY_GITHUB_CLIENT_SECRET
 unset FACTORY_DB_PASSWORD FACTORY_POSTGRES_PASSWORD
 compose=(docker --host unix:///var/run/docker.sock compose
