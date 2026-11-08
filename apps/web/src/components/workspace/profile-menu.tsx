@@ -2,10 +2,18 @@ import * as m from "@workspace/i18n/messages"
 import { useLocale } from "../../lib/i18n"
 import { useEffect, useId, useRef } from "react"
 import { Link } from "@tanstack/react-router"
-import { ChevronUp, LogOut, Power, Settings, Users } from "lucide-react"
+import {
+  ChevronUp,
+  Download,
+  LogOut,
+  Power,
+  Settings,
+  Users,
+} from "lucide-react"
 
 import { setTheme, useTheme } from "../../lib/theme/theme"
 import { useSession } from "../../lib/auth/session-context"
+import { useAppInstall } from "../../pwa/app-install"
 import { Button } from "../ui/button"
 
 export function ProfileMenu({
@@ -19,6 +27,7 @@ export function ProfileMenu({
 }) {
   useLocale()
   const { state, controller } = useSession()
+  const install = useAppInstall()?.install
   const theme = useTheme()
   const themeGroup = useId()
   const ref = useRef<HTMLDetailsElement>(null)
@@ -73,6 +82,12 @@ export function ProfileMenu({
             <Users size={16} aria-hidden="true" />
             {m.user_access()}
           </Link>
+        )}
+        {install && (
+          <Button variant="ghost" onClick={install}>
+            <Download aria-hidden="true" />
+            {m.install_app()}
+          </Button>
         )}
         <Button variant="ghost" disabled={!canStop} onClick={onStop}>
           <Power aria-hidden="true" />

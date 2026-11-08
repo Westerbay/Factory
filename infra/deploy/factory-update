@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+if [[ $# -lt 2 || $# -gt 3 || $1 != /* || ! $2 =~ ^[A-Za-z0-9-]+/[A-Za-z0-9_.-]+$ ]]; then
+  echo "Usage: factory-update <absolute installation directory> <owner/repository> [vX.Y.Z]" >&2
+  exit 2
+fi
+installation=$(cd -- "$1" && pwd -P)
+repository=$2
+tag=${3:-}
+download=(curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https'
+  --retry 2 --connect-timeout 10 --max-time 120)
+
+exec 9>"$installation/update.lock"
+flock -n 9 || { echo "Another Factory update is in progress" >&2; exit 1; }
+
+if [[ -z "$tag" ]]; then
+  tag=$("${download[@]}" "https://api.github.com/repos/$repository/releases/latest" |
+    node -e 'const release = JSON.parse(require("node:fs").readFileSync(0, "utf8"))
+      if (release.draft !== false || release.prerelease !== false || typeof release.tag_name !== "string")
+        throw new Error("Expected a published stable GitHub release")
+      process.stdout.write(release.tag_name)')
+fi
+if [[ ! "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+  echo "Expected a stable release tag of the form vX.Y.Z" >&2
+  exit 2
+fi
+
+releases="$installation/releases"
+release="$releases/$tag"
+archive=factory-server.tar.gz
+if [[ ! -e "$release" && ! -L "$release" ]]; then
+  mkdir -p -- "$releases"
+  staging=$(mktemp -d "$releases/.download-$tag.XXXXXX")
+  trap 'rm -rf -- "$staging"' EXIT
+  url="https://github.com/$repository/releases/download/$tag"
+  for file in "$archive.sha256" "$archive"; do
+    if ! "${download[@]}" "$url/$file" --output "$staging/$file"; then
+      echo "Could not download $file for $tag. Check the GitHub Release assets." >&2
+      exit 1
+    fi
+  done
+  (
+    cd -- "$staging"
+    mapfile -t checksums < "$archive.sha256"
+    if [[ ${#checksums[@]} -ne 1 || ! ${checksums[0]} =~ ^[0-9a-f]{64}\ \ factory-server\.tar\.gz$ ]]; then
+      echo "Invalid Factory release checksum file" >&2
+      exit 1
+    fi
+    sha256sum --check --strict "$archive.sha256"
+    mkdir bundle
+    tar -xzf "$archive" -C bundle
+  )
+  if [[ ! -x "$staging/bundle/infra/deploy/server.sh" || ! -s "$staging/bundle/release.env" ]]; then
+    echo "Incomplete Factory server bundle for $tag" >&2
+    exit 1
+  fi
+  mv -T -- "$staging/bundle" "$release"
+fi
+
+if [[ -L "$release" || ! -x "$release/infra/deploy/server.sh" || ! -s "$release/release.env" ]]; then
+  echo "Invalid staged release directory for $tag" >&2
+  exit 1
+fi
+
+docker_socket=(docker --host unix:///var/run/docker.sock)
+web_source=$("${docker_socket[@]}" inspect --format +  '{{if .State.Running}}{{range .Mounts}}{{if eq .Destination "/srv/factory-web"}}{{.Source}}{{end}}{{end}}{{end}}' +  factory-prod-caddy-1 2>/dev/null || true)
+if [[ "$web_source" == "$release/web-dist" ]] &&
+  [[ $("${docker_socket[@]}" inspect --format '{{.State.Health.Status}}' factory-prod-api-1 2>/dev/null || true) == healthy ]]; then
+  printf 'Factory %s is already running.\n' "$tag"
+  exit 0
+fi
+
+printf 'Deploying Factory %s\n' "$tag"
+"$release/infra/deploy/server.sh" "$installation" deploy

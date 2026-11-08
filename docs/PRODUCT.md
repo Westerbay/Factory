@@ -271,9 +271,10 @@ confirmed, private content stays hidden and the user can explicitly retry it.
 
 ## Installation and updates
 
-The built frontend is installable in supported browsers. Its offline fallback is a public
-page explaining that a connection is needed; installation does not restore private work
-from storage while offline. An already open tab can retain its current chat in memory
+When the browser exposes its native install prompt, the sign-in screen offers installation
+below the sign-in action. Members can also install from the profile menu.
+Its public offline page explains that a connection is needed to reopen private work.
+An already open tab can retain its current chat in memory
 until session expiry. Service-worker updates are checked on focus, reconnection and
 periodically. A user chooses when to apply the available update and reload the current
 tab; another tab's choice does not automatically reload it.

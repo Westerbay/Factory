@@ -1,5 +1,6 @@
 import * as m from "@workspace/i18n/messages"
 import { useLocale, translateMessage } from "../../lib/i18n"
+import { AppInstallOffer } from "../../pwa/app-install"
 import { Brand } from "../../components/ui/brand"
 import { API_ORIGIN } from "../../lib/api/client"
 import "./auth.css"
@@ -49,6 +50,7 @@ export function SignInView({ reason }: { reason?: keyof typeof reasons }) {
           <img src="/brand/github.svg" width="20" height="20" alt="" />
           {m.continue_with_github()}
         </a>
+        <AppInstallOffer />
       </div>
     </section>
   )

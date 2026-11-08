@@ -4,7 +4,8 @@ import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 
 // No ambient Docker context, endpoint, auth config, build args, or real .env files.
-export function docker(args, { timeout = 30_000 } = {}) {
+export function docker(args, { timeout = 30_000, logBuild = false } = {}) {
+  const showBuildOutput = logBuild && args[0] === "build"
   const temporaryRoot = realpathSync(tmpdir())
   const prefix = "factory-environment-docker-"
   const config = mkdtempSync(join(temporaryRoot, prefix))
@@ -19,7 +20,7 @@ export function docker(args, { timeout = 30_000 } = {}) {
     if (process.env[key]) env[key] = process.env[key]
   }
   try {
-    return execFileSync(
+    const output = execFileSync(
       "docker",
       [
         "--config",
@@ -35,12 +36,15 @@ export function docker(args, { timeout = 30_000 } = {}) {
         encoding: "utf8",
         timeout,
         maxBuffer: 4 * 1024 * 1024,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: showBuildOutput
+          ? ["ignore", "inherit", "inherit"]
+          : ["ignore", "pipe", "pipe"],
       }
-    ).trim()
+    )
+    return output?.trim() ?? ""
   } catch (error) {
-    // Preserve only machine status. Command lines and Docker/build stderr may
-    // contain operator-specific data and must not escape through this helper.
+    // Regular calls expose only machine status. The integration fixture can
+    // stream builds of the repository Dockerfiles for CI diagnostics.
     const details = []
     if (typeof error.code === "string" && /^E[A-Z0-9_]{1,40}$/.test(error.code))
       details.push(`code=${error.code}`)

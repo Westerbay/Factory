@@ -3,6 +3,7 @@ import { useLocale } from "../../lib/i18n"
 import { useEffect, useState, type ReactNode } from "react"
 import { Link, useRouterState } from "@tanstack/react-router"
 
+import { AppInstallOffer } from "../../pwa/app-install"
 import { Brand } from "../../components/ui/brand"
 import { Button } from "../../components/ui/button"
 import { LoadingState } from "../../components/ui/loading-state"
@@ -66,6 +67,7 @@ export function SessionGate({ children }: { children: ReactNode }) {
         <Link className="ui-button ui-button-primary" to="/sign-in">
           {m.continue_to_sign_in()}{" "}
         </Link>
+        <AppInstallOffer />
       </>
     )
   else if (state.status === "logout-failed")

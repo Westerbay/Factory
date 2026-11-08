@@ -37,6 +37,9 @@ unset FACTORY_DB_PASSWORD FACTORY_POSTGRES_PASSWORD
 compose=(docker --host unix:///var/run/docker.sock compose
   --project-name factory-prod --project-directory "$bundle/infra/deploy"
   --env-file "$installation/.env" --file "$bundle/infra/deploy/compose.yml")
+if [[ -f "$installation/compose.override.yml" ]]; then
+  compose+=(--file "$installation/compose.override.yml")
+fi
 
 case "$command" in
   compose)
