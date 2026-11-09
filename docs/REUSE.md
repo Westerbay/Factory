@@ -203,7 +203,9 @@ Connection patterns were checked against the official
   changes. The
   [API routes](../apps/api/src/conversations/mod.rs) and
   [host facilities](../apps/api/src/conversations/runtime.rs) own HTTP, event transport,
-  task execution and encoding. Uncertain cleanup requires explicit recovery after a
+  task execution and encoding. The event stream accepts either the configured frontend
+  Origin or the browser's same-origin Fetch Metadata on a shared-origin deployment when
+  Origin is absent. Uncertain cleanup requires explicit recovery after a
   verified environment stop and a conclusively settled launch; reconnecting must not
   replay a turn. A stopped observation alone cannot release an unsettled launch. Consumers must honor
   conversation-page cursors, history truncation and claimed/uncertain question receipt

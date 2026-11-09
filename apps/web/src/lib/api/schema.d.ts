@@ -3005,9 +3005,9 @@ export interface operations {
   streamConversationRun: {
     parameters: {
       query?: never
-      header: {
-        /** @description Exact configured frontend Origin required */
-        Origin: string
+      header?: {
+        /** @description Exact configured frontend Origin required unless the web and API share an origin and the browser sends Sec-Fetch-Site: same-origin */
+        Origin?: string | null
       }
       path: {
         id: string

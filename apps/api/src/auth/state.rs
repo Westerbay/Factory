@@ -19,6 +19,7 @@ use subtle::ConstantTimeEq;
 pub struct AuthState {
     service: Arc<IdentityService>,
     pub(super) web_origin: String,
+    shares_web_origin: bool,
     pub(super) secure_cookie: bool,
     quotas: Arc<Mutex<[Window; 2]>>,
     pub(crate) projects: Option<Arc<crate::projects::runtime::ProjectsRuntime>>,
@@ -56,6 +57,7 @@ impl AuthState {
         Self {
             service,
             web_origin: config.web_origin().to_owned(),
+            shares_web_origin: config.api_origin() == config.web_origin(),
             secure_cookie: config.api_origin().starts_with("https://"),
             quotas: Arc::new(Mutex::new(std::array::from_fn(|_| Window {
                 start: Instant::now(),
@@ -125,6 +127,21 @@ impl AuthState {
         } else {
             Err(AuthError::forbidden())
         }
+    }
+
+    pub(crate) fn authorize_event_stream_origin(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<(), AuthError> {
+        // A same-origin GET does not normally carry Origin. Only use browser
+        // metadata when Origin is absent, so invalid or duplicate values fail closed.
+        if self.shares_web_origin
+            && !headers.contains_key(header::ORIGIN)
+            && single_header(headers, "sec-fetch-site") == Some("same-origin")
+        {
+            return Ok(());
+        }
+        self.authorize_origin(headers)
     }
 
     /// Fixed-size process-local quotas bound anonymous OAuth work without retaining IPs.

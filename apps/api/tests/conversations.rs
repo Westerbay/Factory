@@ -1075,7 +1075,81 @@ async fn owned_conversation_streams_and_persists_without_leaking_provider_refere
     );
     let stream = f.call("GET", &event_path, 0, "").await;
     assert_eq!(stream.status(), StatusCode::OK);
-    let mut chunks = stream.into_body().into_data_stream();
+    let shared_origin_config = RuntimeConfig::from_values(|key| match key {
+        "FACTORY_API_BIND" => Some("127.0.0.1:3000".into()),
+        "FACTORY_API_ORIGIN" => Some(ORIGIN.into()),
+        _ => None,
+    })
+    .unwrap();
+    let shared_origin_auth = AuthState::new(
+        Arc::new(IdentityService::new(f.store.clone(), Arc::new(NoProvider))),
+        &shared_origin_config,
+    );
+    let shared_origin_app = conversations::router(shared_origin_auth, Some(f.runtime.clone()));
+    let request = || {
+        Request::builder()
+            .uri(&event_path)
+            .header("cookie", format!("factory_session={}", f.tokens[0]))
+    };
+    let browser_request = || {
+        request()
+            .header("sec-fetch-site", "same-origin")
+            .body(Body::empty())
+            .unwrap()
+    };
+    let same_origin_stream = shared_origin_app
+        .clone()
+        .oneshot(browser_request())
+        .await
+        .unwrap();
+    assert_eq!(same_origin_stream.status(), StatusCode::OK);
+
+    assert_eq!(
+        f.app
+            .clone()
+            .oneshot(browser_request())
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN,
+        "a split deployment still requires the configured frontend Origin"
+    );
+    for rejected in [
+        request(),
+        request().header("sec-fetch-site", "same-site"),
+        request().header("sec-fetch-site", "cross-site"),
+        request()
+            .header("sec-fetch-site", "same-origin")
+            .header("sec-fetch-site", "cross-site"),
+        request()
+            .header("sec-fetch-site", "same-origin")
+            .header("origin", "null"),
+        request()
+            .header("sec-fetch-site", "same-origin")
+            .header("origin", ORIGIN)
+            .header("origin", ORIGIN),
+    ] {
+        let response = shared_origin_app
+            .clone()
+            .oneshot(rejected.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    let no_session = Request::builder()
+        .uri(&event_path)
+        .header("sec-fetch-site", "same-origin")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        shared_origin_app
+            .oneshot(no_session)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let mut chunks = same_origin_stream.into_body().into_data_stream();
     f.provider
         .tx
         .send(ExecutionEvent::Delta {

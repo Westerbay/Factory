@@ -328,7 +328,7 @@ async fn recover(
     rt.service.recover_stopped(a, run).await.map_err(error)?;
     Ok(StatusCode::NO_CONTENT)
 }
-#[utoipa::path(get,path="/api/conversations/{id}/runs/{run}/events",operation_id="streamConversationRun",params(("id"=Uuid,Path),("run"=Uuid,Path),("Origin"=String,Header,description="Exact configured frontend Origin required")),security(("sessionCookie"=[])),responses((status=200,description="Authorized bounded event stream",content_type="text/event-stream"),(status=400,body=ApiError),(status=401,body=ApiError),(status=403,body=ApiError),(status=404,body=ApiError),(status=409,body=ApiError),(status=429,body=ApiError),(status=503,body=ApiError)))]
+#[utoipa::path(get,path="/api/conversations/{id}/runs/{run}/events",operation_id="streamConversationRun",params(("id"=Uuid,Path),("run"=Uuid,Path),("Origin"=Option<String>,Header,description="Exact configured frontend Origin required unless the web and API share an origin and the browser sends Sec-Fetch-Site: same-origin")),security(("sessionCookie"=[])),responses((status=200,description="Authorized bounded event stream",content_type="text/event-stream"),(status=400,body=ApiError),(status=401,body=ApiError),(status=403,body=ApiError),(status=404,body=ApiError),(status=409,body=ApiError),(status=429,body=ApiError),(status=503,body=ApiError)))]
 async fn events(
     State(s): State<StateData>,
     path: Result<Path<(Uuid, Uuid)>, PathRejection>,
@@ -336,7 +336,7 @@ async fn events(
 ) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, Response> {
     let (auth, a) = s.authenticate(&h, None).await?;
     let Path((id, run)) = path.map_err(|_| error(ConversationError::Invalid))?;
-    auth.authorize_origin(&h)
+    auth.authorize_event_stream_origin(&h)
         .map_err(IntoResponse::into_response)?;
     let rt = s.runtime().map_err(error)?;
     // Subscribe before a fresh authentication so revocation cannot be missed while attaching.
