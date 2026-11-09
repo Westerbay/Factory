@@ -307,7 +307,9 @@ account read. The API monitors expiry and revocation even after the initiating H
 handler disappears. No account operation issues `turn/start`.
 
 Account controllers run under a fixed image wrapper with a single-controller lock,
-private file permissions and a watchdog shorter than ten minutes. Cleanup shuts down
+private file permissions and a watchdog shorter than ten minutes. The Codex wrapper
+holds its lock outside the CLI so background processes cannot keep it after the
+controller exits. Cleanup shuts down
 stdin and drops both Docker stream halves before waiting for exit. Credentials stay in
 `/home/factory/.codex`; only a bounded account projection and pending device challenge
 cross HTTP. Cancellation/logout remain local when the proxy is stopped. Browser account
