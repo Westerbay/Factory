@@ -116,7 +116,7 @@ counts. They share available host resources; Docker Desktop and operating-system
 still apply. Containers retain a non-root user and a read-only root
 filesystem. Temporary storage and logs remain bounded; persistent named volumes have no
 portable disk quota. Each user has an isolated internal network; approved OpenAI and
-Anthropic HTTPS destinations and GitHub SSH on port 443 are reachable through the shared
+Anthropic, GitHub and npm destinations on port 443 are reachable through the shared
 installation proxy. General Internet, host/LAN and other-user access are blocked. There is no file editor.
 
 Existing environments with a different image or policy are never silently replaced.
@@ -175,6 +175,16 @@ to the active-run guard. Members can also deliberately run either CLI in the ter
 Overview links to Chat and Features. A member starts a feature in a ready project
 and selects a connected provider. The conversation opens with the assistant's first
 message and uses a side panel for the current decision or result.
+
+Codex and Claude Code run commands without per-command approval in their isolated
+feature workspace. They can read public GitHub repositories over HTTPS and clone
+repositories that the member's connected GitHub SSH key can read. For example,
+`git clone --depth 1 git@github.com:owner/repo.git /tmp/repo` reads a private repository
+without a separate login. Temporary research files are discarded after each attempt.
+The project checkout is writable for implementation and correction tasks.
+The workspace Web profile includes Node.js, npm, pnpm and Playwright with headless
+Chromium. Agents can install dependencies from the public npm registry, start an app
+on localhost in their workspace, and capture screenshots for verification.
 
 The member first approves the current product brief, then the current architecture
 proposal and UML. A new product decision invalidates dependent architecture approval.

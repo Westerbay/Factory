@@ -1,3 +1,4 @@
+FROM node:24.22.1-bookworm-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c AS node
 FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS codex
 # Immutable Debian snapshot and official artifact checksums make rebuilds explicit.
 RUN printf '%s\n' 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261027T000000Z bookworm main' > /etc/apt/sources.list \
@@ -62,12 +63,29 @@ LABEL io.factory.claude.version="2.1.284"
 RUN printf '%s\n' 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261027T000000Z bookworm main' \
       'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20261027T000000Z bookworm-security main' > /etc/apt/sources.list \
     && rm /etc/apt/sources.list.d/debian.sources \
-    && apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update && apt-get -o Acquire::Retries=3 install -y --no-install-recommends bash zsh tmux git neofetch ca-certificates util-linux openssh-client netcat-openbsd python3 \
+    && apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update && apt-get -o Acquire::Retries=3 install -y --no-install-recommends bash zsh tmux git curl gh neofetch ca-certificates util-linux openssh-client netcat-openbsd python3 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 10000 factory \
     && useradd -u 10000 -g factory -d /home/factory -s /bin/zsh factory \
     && mkdir -p /home/factory/Documents \
     && chown -R 10000:10000 /home/factory
+
+# The Web profile is part of the shared workspace image. Runtime downloads
+# are unnecessary for the Playwright CLI and its pinned headless Chromium.
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+COPY web-tools/package.json web-tools/package-lock.json /opt/factory/web-tools/
+COPY web-tools/playwright /usr/local/bin/playwright
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && npm --prefix /opt/factory/web-tools ci --ignore-scripts --no-audit --no-fund \
+    && ln -s /opt/factory/web-tools/node_modules/.bin/pnpm /usr/local/bin/pnpm \
+    && chmod 0555 /usr/local/bin/playwright \
+    && pnpm --version \
+    && playwright install --with-deps --only-shell chromium \
+    && npm cache clean --force \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=codex /opt/codex /opt/codex
 COPY --from=codex /opt/claude /opt/claude
 COPY --from=codex /opt/oh-my-zsh /opt/oh-my-zsh

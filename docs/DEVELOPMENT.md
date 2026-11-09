@@ -274,10 +274,10 @@ supported migration to the current schema.
 
 Feature verification commands run in disposable copies of the reviewed checkout.
 They can use the prepared workspace image's tools and project files. The standard
-image includes Git and Python, and does not include Node, pnpm or Cargo. Operators
-who need additional tooling must include it in their prepared image. Verification
-has no package download access. A missing tool or offline dependency is reported as
-a failed or unavailable verification.
+image includes Git, Python and the Web profile. Operators who need additional tools
+such as Cargo must include them in their prepared image. Verification has no package
+download access. A missing tool or offline dependency is reported as a failed or
+unavailable verification.
 
 Every target is checked against Docker project, owner and checkout labels, container,
 database identity, credentials, volume and exact loopback port before SQL. Docker is
@@ -325,6 +325,12 @@ the immutable workspace image ID/policy in `prepared.json` and the proxy metadat
 its resources exist; do not regenerate its identity or delete `supervisor.lock` to bypass
 a conflict. Repeated preparation retains the installation identity. Existing environments
 keep their recorded image and policy; preparation does not replace them.
+The Web profile bundles Node.js, npm, pnpm and the Playwright CLI with headless Chromium.
+Feature agents can install dependencies from the public npm registry. They can start a
+local server and capture a page with `playwright screenshot http://127.0.0.1:3000 /tmp/page.png`.
+For a read-only checkout, use a writable copy under `/tmp` to install dependencies or
+create build output.
+
 If an existing proxy differs from the proposed image or host-address configuration,
 preparation preserves the previous manifest and refuses publication. Follow the
 [explicit proxy maintenance procedure](../infra/egress/README.md) before retrying;

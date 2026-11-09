@@ -233,7 +233,7 @@ network membership and ownership before interactive exec. Only the proxy joins b
 the user's bridge and the installation's outbound bridge; IP forwarding is disabled.
 
 The pinned [Squid policy](../infra/egress/squid.conf) permits CONNECT on port 443 only for
-the listed OpenAI, Anthropic and GitHub SSH hosts. DNS answers and actual destination addresses are
+the listed OpenAI, Anthropic, GitHub and npm hosts. DNS answers and actual destination addresses are
 both checked against private/reserved ranges. The proxy entrypoint installs
 its nftables policy, then drops privilege and all capabilities before serving requests.
 There is no TLS interception or tunnel-content logging. Unsupported engine/network policy
@@ -410,13 +410,17 @@ agent replies and computes revision fingerprints outside application policy.
 The [project controller](../infra/environments/project-controller.py) uses owned Git
 checkouts and validates a writer's paths and the cumulative diff before moving the
 integration branch. The [feature execution adapter](../crates/adapters/src/environments/feature_execution/mod.rs)
-mounts only the verified attempt checkout, read-only for reviewers. Disposable workers
-have no direct network, GitHub SSH key or member home mount. Provider work uses a fixed
-relay to the selected provider and an access-only credential seed. The selected worker
-can access this seed. It does not receive refresh credentials, so an expired connection
-must be renewed before retrying. Verification commands have neither provider credentials
-nor network. The main environment owns the trusted Git push; the GitHub token stays on
-the server.
+mounts only the verified attempt checkout. Agent checkouts are writable for implementation
+and correction. Both provider CLIs run without command approval prompts inside the isolated
+worker.
+Workers use the relay for the selected provider, public GitHub HTTPS and the public
+npm registry. Loopback requests stay inside the worker so Playwright can reach a local
+app. The workspace image supplies the CLI and its matching Chromium browser.
+The relay also runs Git upload-pack through the member environment's existing SSH identity
+for repository reads. The worker receives neither the SSH key nor the GitHub OAuth token.
+The selected provider receives an access-only credential seed, so an expired connection
+must be renewed before retrying. Verification commands run with loopback only and
+without provider credentials. The main environment owns the trusted Git push.
 
 Factory verifies the stable GitHub repository identity before fetching and again
 before promoting a provisional repository into the owned feature checkout. Initial

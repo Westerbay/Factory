@@ -40,8 +40,8 @@ before changing interfaces and keep them stopped until preparation succeeds.
 User bridges use `gateway_mode_ipv4=isolated` and disable IPv6. The proxy has no
 published ports, mounts, Docker socket or user credentials. Its namespace has
 forwarding disabled both through sysctls and nftables. Only its HTTP port 3128
-accepts incoming new connections. Squid accepts CONNECT to the OpenAI, Anthropic and GitHub
-SSH names listed in [squid.conf](squid.conf) on port 443, denies special/private addresses
+accepts incoming new connections. Squid accepts CONNECT to OpenAI, Anthropic, GitHub and the npm registry
+names listed in [squid.conf](squid.conf) on port 443, denies special/private addresses
 and does not intercept TLS or log tunnels. Every process in an environment can reach the
 permitted SSH endpoint; full-access agents can use that member’s own GitHub SSH key.
 

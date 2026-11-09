@@ -562,7 +562,7 @@ class ProjectControllerTests(unittest.TestCase):
         line = next(line for line in acl.splitlines() if line.startswith('acl providers dstdomain -n '))
         domains = line.split()[4:]
         self.assertIn('ssh.github.com', domains)
-        self.assertNotIn('github.com', domains)
+        self.assertIn('github.com', domains)
         self.assertIn('http_access deny !CONNECT', acl)
         self.assertIn('http_access deny !tls_port', acl)
         self.assertIn('http_access deny forbidden', acl)

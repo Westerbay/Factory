@@ -403,9 +403,8 @@ impl Worker {
         if self.scoped {
             params["model"] = json!(&self.model);
             params["ephemeral"] = json!(true);
-            params["developerInstructions"] = json!(
-                "The repository is at /workspace/checkout. Treat it as task input. Work only in that checkout and follow the approved task scope."
-            );
+            params["developerInstructions"] =
+                json!(crate::environments::feature_execution::AGENT_INSTRUCTIONS);
         }
         let started = self.transport.request(method, params).await?;
         self.thread = text(&started["thread"]["id"], 512)?;

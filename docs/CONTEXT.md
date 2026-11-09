@@ -50,11 +50,12 @@ and credentials without per-action approval. GitHub sign-in also authorizes repo
 allowing members to import accessible repositories once and start project-bound chats.
 A dedicated SSH key permits Git operations with the member’s own permissions. The workspace
 also offers a Features journey from product discussion and UML approval to implementation,
-review and an explicitly requested draft PR. Features use a versioned workflow with task
-profiles for either connected provider. Multiple accounts per provider remain future work.
+review and an explicitly requested draft PR. Feature agents use either connected provider
+and can read GitHub repositories from their isolated workspace. Multiple accounts per
+provider remain future work.
 
 Environments use an isolated internal network per user and an installation-owned HTTPS
-CONNECT proxy. Approved OpenAI and Anthropic destinations and GitHub SSH on port 443 are
+CONNECT proxy. Approved OpenAI, Anthropic, GitHub and npm destinations on port 443 are
 allowed. Existing containers are not silently replaced when the image changes. A local
 database reset removes database records but leaves Docker homes untouched and unassociated.
 

@@ -86,8 +86,11 @@ impl WorkerIdentity {
         command: Vec<String>,
     ) -> Result<ContainerCreateBody, ExecutionError> {
         let mut mounts = vec![mount(env, CHECKOUT, &self.checkout, self.readonly)];
+        let mut scratch_mib = 256;
         if let Some(relay) = &self.relay {
             mounts.push(mount(env, "/run/factory-relay", relay, true));
+            // Agent research needs room for both the Git pack and its working tree.
+            scratch_mib = 768;
         }
         serde_json::from_value(json!({
             "Image": env.image_id, "User": "10000:10000", "WorkingDir": cwd,
@@ -96,7 +99,8 @@ impl WorkerIdentity {
             "AttachStdout": true, "AttachStderr": true, "Tty": false,
             "Env": ["HOME=/home/factory", "CODEX_HOME=/home/factory/.codex",
                 "CLAUDE_CONFIG_DIR=/home/factory/.claude", "GIT_CONFIG_NOSYSTEM=1",
-                "PATH=/usr/local/bin:/usr/bin:/bin", "NO_PROXY=", "no_proxy="],
+                "PATH=/usr/local/bin:/usr/bin:/bin",
+                "NO_PROXY=localhost,127.0.0.1,::1", "no_proxy=localhost,127.0.0.1,::1"],
             "HostConfig": {
                 "NetworkMode": "none", "ReadonlyRootfs": true, "CapDrop": ["ALL"],
                 "SecurityOpt": ["no-new-privileges"], "Init": true, "PidsLimit": 256,
@@ -104,7 +108,7 @@ impl WorkerIdentity {
                 "IpcMode": "private", "CgroupnsMode": "private", "Runtime": "runc",
                 "RestartPolicy": {"Name": "no"}, "AutoRemove": false, "Mounts": mounts,
                 "Tmpfs": {
-                    "/tmp": "rw,nosuid,nodev,size=268435456,mode=1777",
+                    "/tmp": format!("rw,nosuid,nodev,size={},mode=1777", scratch_mib * 1024 * 1024),
                     "/home/factory": "rw,nosuid,nodev,size=268435456,mode=0700,uid=10000,gid=10000"
                 },
                 "LogConfig": {"Type": "none", "Config": {}}

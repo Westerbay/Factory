@@ -92,7 +92,7 @@ async fn execute(runtime: &DockerEnvironmentRuntime, id: &str, args: &[&str]) ->
 
 #[tokio::test]
 #[ignore = "explicit local Docker fixture: FACTORY_ENV_TEST_DIRECTORY with prepared pinned images"]
-async fn isolated_workers_initialize_without_github_or_direct_network() {
+async fn isolated_workers_initialize_without_direct_network() {
     let (metadata, env, project) = environment();
     let egress = fixture::egress_metadata(metadata.installation_id());
     let runtime =
@@ -162,7 +162,9 @@ python3 -c 'import json, os, sys; path=sys.argv[1]; info=os.stat(path); json.dum
                 provider.as_str(), runtime.inspect_feature_worker(&process_receipt).await.unwrap().map(|value| value["State"].clone())
             );
             let probe = format!(r#"
-import os, socket
+import os, shutil, socket
+assert all(shutil.which(tool) for tool in ('git', 'curl', 'gh', 'node', 'npm', 'pnpm', 'playwright'))
+assert os.path.isfile('/home/factory/.factory-git-ssh.py')
 assert os.path.isfile('/workspace/checkout/tracked')
 assert not os.path.exists('/home/factory/.ssh/witness')
 assert not os.path.exists('/home/factory/Documents')
