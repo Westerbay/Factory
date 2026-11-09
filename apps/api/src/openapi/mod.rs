@@ -92,7 +92,7 @@ mod conversation_contract_tests {
     }
 
     #[test]
-    fn event_stream_requires_origin_and_documents_access_errors() {
+    fn event_stream_documents_conditional_origin_and_access_errors() {
         let doc = serde_json::to_value(super::document()).unwrap();
         let operation = &doc["paths"]["/api/conversations/{id}/runs/{run}/events"]["get"];
         let origin = operation["parameters"]
@@ -101,7 +101,13 @@ mod conversation_contract_tests {
             .iter()
             .find(|p| p["in"] == "header" && p["name"] == "Origin")
             .unwrap();
-        assert_eq!(origin["required"], true);
+        assert_eq!(origin["required"], false);
+        assert!(
+            origin["description"]
+                .as_str()
+                .unwrap()
+                .contains("Sec-Fetch-Site: same-origin")
+        );
         for status in ["400", "401", "403", "404", "409", "429", "503"] {
             assert!(
                 operation["responses"].get(status).is_some(),
