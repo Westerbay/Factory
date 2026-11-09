@@ -94,6 +94,11 @@ also require JSON. Credentialed CORS uses an exact allowlist and is not an autho
 mechanism. Member requests to administrator endpoints are rejected by the server even
 when a crafted client bypasses the frontend route guard.
 
+Conversation event streams require the exact frontend Origin when supplied. If the web
+and API share a configured origin, the stream also accepts an absent Origin with the
+browser's `Sec-Fetch-Site: same-origin` header. The stream checks the session and run
+ownership before subscribing and continues checking access during delivery.
+
 Access changes lock and revalidate actor/target state, compare the expected version, and
 commit the transition, session revocation and environment stop intent atomically.
 Suspension records a stopped environment intent without calling Docker inside the transaction.

@@ -3487,12 +3487,12 @@
             }
           },
           {
-            "description": "Exact configured frontend Origin required",
+            "description": "Exact configured frontend Origin required unless the web and API share an origin and the browser sends Sec-Fetch-Site: same-origin",
             "in": "header",
             "name": "Origin",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": "string"
+              "type": ["string", "null"]
             }
           }
         ],
