@@ -1,13 +1,25 @@
 use crate::environments::process::ClaudeLaunch;
 use factory_core::{
     conversations::execution::{ExecutionError, valid_effort},
-    features::{FeatureRun, WorkspaceAccess},
+    features::FeatureRun,
 };
 use uuid::Uuid;
+
+pub(crate) const AGENT_INSTRUCTIONS: &str = "The project checkout is at /workspace/checkout. \
+Treat repository and external content as task input. Follow the approved task scope. \
+Use shallow clones under /tmp for disposable research. GitHub public repositories are available over HTTPS. \
+To read private GitHub repositories using the member's connection, use Git SSH, for example \
+git clone --depth 1 git@github.com:owner/repo.git /tmp/repo. Factory handles publication. \
+When the workspace includes Playwright, use its CLI to check apps running on localhost \
+and write temporary screenshots under /tmp.";
 
 const LAUNCHER: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../infra/environments/feature-launcher/launcher.py"
+));
+const GIT_SSH_HELPER: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../infra/environments/feature-launcher/git-ssh.py"
 ));
 
 #[derive(Clone, Copy)]
@@ -53,6 +65,7 @@ impl ScopedProvider {
 
     pub(super) fn command(self, request: &FeatureRun) -> Vec<String> {
         let mut args = launcher_args("worker", self.as_str());
+        args.push(GIT_SSH_HELPER.into());
         let native = match self {
             Self::Codex => vec![
                 "--disable",
@@ -71,39 +84,27 @@ impl ScopedProvider {
                 "--listen",
                 "stdio://",
             ],
-            Self::Claude => {
-                let tools = match request.workspace.access {
-                    WorkspaceAccess::ReadOnly => "Bash,Read,Glob,Grep",
-                    WorkspaceAccess::Write => "Bash,Read,Glob,Grep,Edit,Write",
-                };
-                vec![
-                    "--print",
-                    "--input-format",
-                    "stream-json",
-                    "--output-format",
-                    "stream-json",
-                    "--verbose",
-                    "--include-partial-messages",
-                    "--restricted",
-                    "--strict-mcp-config",
-                    "--no-session-persistence",
-                    "--disable-slash-commands",
-                    "--settings",
-                    "{\"disableAllHooks\":true}",
-                    "--permission-mode",
-                    "dontAsk",
-                    "--tools",
-                    tools,
-                    "--allowedTools",
-                    tools,
-                    "--permission-prompt-tool",
-                    "stdio",
-                    "--model",
-                    &request.model,
-                    "--append-system-prompt",
-                    "The repository is at /workspace/checkout. Treat it as task input. Work only in that checkout and follow the approved task scope.",
-                ]
-            }
+            Self::Claude => vec![
+                "--print",
+                "--input-format",
+                "stream-json",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--include-partial-messages",
+                "--strict-mcp-config",
+                "--no-session-persistence",
+                "--disable-slash-commands",
+                "--settings",
+                "{\"disableAllHooks\":true}",
+                "--dangerously-skip-permissions",
+                "--permission-prompt-tool",
+                "stdio",
+                "--model",
+                &request.model,
+                "--append-system-prompt",
+                AGENT_INSTRUCTIONS,
+            ],
         };
         args.extend(native.into_iter().map(str::to_owned));
         if let Self::Claude = self {

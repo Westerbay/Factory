@@ -7,13 +7,34 @@ import socket
 import tempfile
 import unittest
 import uuid
+from unittest.mock import patch
 
-from launcher import PROVIDERS, access_only, checkout_proof, connect_target, establish
+from launcher import (
+    PROVIDERS,
+    WORKSPACE_HTTPS,
+    access_only,
+    checkout_proof,
+    connect_target,
+    establish,
+    github_read,
+)
 
 
 class ConnectTargetTest(unittest.TestCase):
-    def test_allows_exact_provider_connect(self):
-        for _, _, hosts in PROVIDERS.values():
+    def test_worker_hosts_are_reachable_through_installation_proxy(self):
+        squid_config = Path(__file__).resolve().parents[2] / "egress/squid.conf"
+        acl_prefix = "acl providers dstdomain -n "
+        proxy_hosts = next(
+            line.removeprefix(acl_prefix).split()
+            for line in squid_config.read_text().splitlines()
+            if line.startswith(acl_prefix)
+        )
+        for _, _, provider_hosts in PROVIDERS.values():
+            self.assertLessEqual(set(provider_hosts + WORKSPACE_HTTPS), set(proxy_hosts))
+
+    def test_allows_exact_provider_and_workspace_hosts(self):
+        for _, _, provider_hosts in PROVIDERS.values():
+            hosts = provider_hosts + WORKSPACE_HTTPS
             for host in hosts:
                 authority = host + ":443"
                 self.assertEqual(
@@ -26,9 +47,11 @@ class ConnectTargetTest(unittest.TestCase):
                 )
 
     def test_rejects_cross_provider_and_smuggled_connect(self):
-        hosts = PROVIDERS["codex"][2]
+        hosts = PROVIDERS["codex"][2] + WORKSPACE_HTTPS
         for request in (
             b"CONNECT ssh.github.com:443 HTTP/1.1\r\n\r\n",
+            b"CONNECT github.com.example.org:443 HTTP/1.1\r\n\r\n",
+            b"CONNECT registry.npmjs.org.example.org:443 HTTP/1.1\r\n\r\n",
             b"CONNECT auth.openai.com:443 HTTP/1.1\r\n\r\n",
             b"CONNECT api.anthropic.com:443 HTTP/1.1\r\n\r\n",
             b"CONNECT API.OPENAI.COM:443 HTTP/1.1\r\n\r\n",
@@ -77,6 +100,27 @@ class WorkerCredentialTest(unittest.TestCase):
             "claudeAiOauth":{"accessToken":"fixture","expiresAt":4102444800000}
         })
         self.assertNotIn("platform.claude.com", PROVIDERS["claude"][2])
+
+
+class GitHubReadTest(unittest.TestCase):
+    def test_only_runs_a_fixed_upload_pack_command(self):
+        client, server = socket.socketpair()
+        with client, server, patch("launcher.subprocess.run") as run:
+            for request in (
+                b"FACTORY-GIT git-receive-pack 'owner/repo.git'\r\n",
+                b"FACTORY-GIT git-upload-pack 'owner/repo.git'; id\r\n",
+                b"FACTORY-GIT git-upload-pack '../repo.git'\r\n",
+                b"FACTORY-GIT git-upload-pack '-owner/repo.git'\r\n",
+                b"FACTORY-GIT git-upload-pack 'owner/sub/repo.git'\r\n",
+            ):
+                github_read(server, request)
+            run.assert_not_called()
+            github_read(server, b"FACTORY-GIT git-upload-pack '/owner/repo.git'\r\n")
+            run.assert_called_once()
+            self.assertEqual(run.call_args.args[0][-2:], ["github.com", "git-upload-pack 'owner/repo.git'"])
+            self.assertIs(run.call_args.kwargs["stdin"], server)
+            self.assertIs(run.call_args.kwargs["stdout"], server)
+            self.assertEqual(run.call_args.kwargs["env"], {"HOME": "/home/factory", "PATH": "/usr/bin:/bin"})
 
 
 class CheckoutProofTest(unittest.TestCase):

@@ -33,7 +33,7 @@ use policy::{
     ROLE, Role, WorkerIdentity, inspect_id, verify_identity, verify_worker, verify_worker_owner,
 };
 use provider::guarded_command;
-pub(crate) use provider::{ScopedProvider, proof_command, relay_command};
+pub(crate) use provider::{AGENT_INSTRUCTIONS, ScopedProvider, proof_command, relay_command};
 use serde_json::Value;
 use std::{
     collections::HashMap,

@@ -1,0 +1,8 @@
+{
+  "name": "factory-workspace-web-tools",
+  "private": true,
+  "dependencies": {
+    "playwright": "1.64.1",
+    "pnpm": "12.11.2"
+  }
+}

@@ -17,6 +17,13 @@ PROVIDERS = {
     "codex": (".codex", "auth.json", ("chatgpt.com", "api.openai.com")),
     "claude": (".claude", ".credentials.json", ("api.anthropic.com",)),
 }
+WORKSPACE_HTTPS = (
+    "github.com", "api.github.com", "raw.githubusercontent.com", "codeload.github.com",
+    "registry.npmjs.org",
+)
+GITHUB_READ = re.compile(
+    rb"FACTORY-GIT git-upload-pack '/?([A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}\.git)'\r\n"
+)
 PROXY = ("factory-egress", 3128)
 MAX_HEADERS = 8192
 MAX_CREDENTIAL = 65536
@@ -171,6 +178,25 @@ def establish(upstream, authority):
     return False
 
 
+def github_read(connection, line):
+    """Expose only Git's read protocol through the member's existing SSH identity."""
+    match = GITHUB_READ.fullmatch(line)
+    if match is None:
+        return
+    repository = match[1].decode("ascii")
+    connection.settimeout(None)
+    # This process runs in the member container. The worker never receives the key.
+    # A separate watchdog still bounds SSH if the relay itself is stopped.
+    subprocess.run(
+        ["/usr/bin/timeout", "--kill-after=5s", "120s", "/usr/bin/ssh",
+         "-F", "/etc/factory/github-ssh-config", "-T", "-o", "ClearAllForwardings=yes",
+         "github.com", f"git-upload-pack '{repository}'"],
+        stdin=connection, stdout=connection, stderr=subprocess.DEVNULL,
+        cwd="/", env={"HOME": "/home/factory", "PATH": "/usr/bin:/bin"},
+        check=False,
+    )
+
+
 def serve(listener, data, hosts):
     slots = threading.BoundedSemaphore(16)
     auth_lock = threading.Lock()
@@ -187,6 +213,9 @@ def serve(listener, data, hosts):
                         data.clear()
                         auth_served.set()
                     connection.sendall(len(value).to_bytes(4, "big") + value)
+                    return
+                if line.startswith(b"FACTORY-GIT "):
+                    github_read(connection, line)
                     return
                 authority = connect_target(line, request, hosts)
                 if authority is None:
@@ -246,7 +275,7 @@ def relay_main(attempt, provider):
                 listener.listen(16)
                 info = os.fstat(private)
                 print(f"ready {info.st_dev}:{info.st_ino}", flush=True)
-                serve(listener, data, PROVIDERS[provider][2])
+                serve(listener, data, PROVIDERS[provider][2] + WORKSPACE_HTTPS)
             finally:
                 try:
                     os.unlink("relay.sock", dir_fd=private)
@@ -360,9 +389,12 @@ def serve_loop(listener):
         threading.Thread(target=proxy, args=(connection,), daemon=True).start()
 
 
-def worker_main(provider, *args):
+def worker_main(provider, git_ssh_source, *args):
     os.umask(0o077)
     seed_credentials(provider)
+    git_ssh_path = "/home/factory/.factory-git-ssh.py"
+    with open(git_ssh_path, "x") as helper:
+        helper.write(git_ssh_source)
     with socket.socket(socket.AF_INET) as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen(16)
@@ -370,6 +402,11 @@ def worker_main(provider, *args):
         thread.start()
         proxy = f"http://127.0.0.1:{listener.getsockname()[1]}"
         os.environ.update(HTTP_PROXY=proxy, HTTPS_PROXY=proxy, http_proxy=proxy, https_proxy=proxy)
+        os.environ.update(
+            GIT_SSH_COMMAND=f"/usr/bin/python3 -I {git_ssh_path}",
+            GIT_SSH_VARIANT="simple",
+            GIT_TERMINAL_PROMPT="0",
+        )
         binary = {"codex": "/opt/codex/bin/codex", "claude": "/opt/claude/claude"}[provider]
         try:
             return subprocess.call([binary, *args], timeout=86400)

@@ -6,3 +6,6 @@
 !project-controller.py
 !github-ssh-config
 !github-known-hosts
+!web-tools/package.json
+!web-tools/package-lock.json
+!web-tools/playwright
