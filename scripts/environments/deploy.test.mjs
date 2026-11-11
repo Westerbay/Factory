@@ -16,6 +16,7 @@ import test from "node:test"
 const docker = `#!/bin/sh
 case "$*" in
   *" compose "*" pull "*|*" image inspect "*) exit 0 ;;
+  *" container inspect factory-prod-caddy-1") [ "$BLOCK" != bootstrap-retry ] ;;
   *" inspect "*" factory-prod-caddy-1") echo "$INSTALL/previous/web-dist" ;;
   *" api workspace upgrade check")
     echo check >> "$TRACE"
@@ -33,6 +34,10 @@ esac
 
 const prepare = `#!/bin/sh
 for output do :; done
+case "$output" in
+  --check) echo check >> "$TRACE"; exit 0 ;;
+  ghcr.io/*) echo prepare >> "$TRACE"; exit 0 ;;
+esac
 printf '%s\\n' "$WORKSPACE_IMAGE" > "$output/prepared.json"
 printf '%s\\n' 'proxy' > "$output/egress.json"
 echo stage >> "$TRACE"
@@ -72,6 +77,11 @@ test(
         block: "compatible",
         status: 0,
         trace: ["stage", "check", "up"],
+      },
+      {
+        block: "bootstrap-retry",
+        status: 0,
+        trace: ["check", "prepare", "up"],
       },
     ]
     for (const { block, status, trace } of cases) {

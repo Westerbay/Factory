@@ -92,7 +92,9 @@ workspace_state="$FACTORY_STATE_DIR/.factory/environments"
 prepare=(node "$bundle/scripts/environments/prepare.mjs"
   --directory "$workspace_state"
   --images "$FACTORY_WORKSPACE_IMAGE" "$FACTORY_EGRESS_IMAGE")
-if [[ -e "$workspace_state/prepared.json" || -e "$workspace_state/upgrade" ]]; then
+if [[ -e "$workspace_state/upgrade" ]] ||
+  { [[ -e "$workspace_state/prepared.json" ]] &&
+    "${engine[@]}" container inspect factory-prod-caddy-1 >/dev/null 2>&1; }; then
   source "$bundle/infra/deploy/upgrade.sh"
   upgrade_installation
 else
