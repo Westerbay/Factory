@@ -21,6 +21,8 @@ function problem(error: unknown): string {
     switch (error.code) {
       case "feature-conflict":
         return m.feature_conflict()
+      case "feature-repository-authorization-required":
+        return m.github_repository_access_expired_reconnect_github()
       case "feature-execution-uncertain":
         return m.feature_execution_uncertain()
       case "feature-stale-snapshot":
@@ -78,6 +80,7 @@ export function useFeatureWorkspace({
       return feature &&
         (hasActiveAttempts(feature) ||
           hasUncertainAttempts(feature) ||
+          (feature.feature.stage === "architecture" && !feature.architecture) ||
           feature.feature.stage === "execution" ||
           feature.feature.stage === "review")
         ? 2000
@@ -179,6 +182,9 @@ export function useFeatureWorkspace({
     featureError: detail.isError,
     busy,
     message: error ? problem(error) : "",
+    needsRepositoryReconnect:
+      error instanceof api.FeatureFailure &&
+      error.code === "feature-repository-authorization-required",
     hasMore: features.hasNextPage,
     loadingMore: features.isFetchingNextPage,
     loadMore: () => void features.fetchNextPage(),

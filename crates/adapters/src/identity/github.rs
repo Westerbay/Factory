@@ -169,6 +169,7 @@ impl IdentityProvider for GitHubProvider {
             .add_scope(Scope::new("repo".into()))
             .add_scope(Scope::new("write:public_key".into()))
             .add_scope(Scope::new("user:email".into()))
+            .add_scope(Scope::new("offline_access".into()))
             .add_extra_param("code_challenge", challenge)
             .add_extra_param("code_challenge_method", "S256")
             .url();

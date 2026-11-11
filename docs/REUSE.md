@@ -78,7 +78,7 @@ are public static resources; loading the interface does not require a remote fon
   Features reuse the client and its resolved origin.
 - [Session context and controller](../apps/web/src/lib/auth/session-context.tsx) serve
   member and administrator views with shared verification, expiry, logout and cross-tab
-  invalidation. Keep private session state in memory and clear private queries through
+  rechecks and invalidation. Keep private session state in memory and clear private queries through
   this lifecycle; do not add feature-specific session caches. Routine checks coalesce
   without replacing an active snapshot or its expiry deadline. An opaque presentation
   scope keys private UI by user, session token and role; it never authorizes a request.
@@ -87,7 +87,9 @@ are public static resources; loading the interface does not require a remote fon
 
 - [Repository access contracts](../crates/core/src/identity/repository_access.rs) and
   [service](../crates/application/src/identity/repository_access.rs) define a
-  session-bound provider capability authorized at sign-in; adapters implement provider I/O and token encryption.
+  session-bound provider capability authorized at sign-in. Reuse the service for
+  repository operations so token renewal and the authorization epoch are enforced
+  centrally. Adapters implement provider I/O and encrypt both credentials.
 - [Project contracts](../crates/core/src/projects/mod.rs) own stable repository identity,
   bounded import reservations and stopped-state recovery. The
   [project adapter](../crates/adapters/src/projects/mod.rs) owns typed container operations;

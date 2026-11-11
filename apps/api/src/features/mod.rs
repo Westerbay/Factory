@@ -107,6 +107,10 @@ fn error(e: FeatureError) -> Response {
         FeatureError::NotFound => (StatusCode::NOT_FOUND, "feature-not-found"),
         FeatureError::Invalid => (StatusCode::BAD_REQUEST, "invalid-input"),
         FeatureError::Conflict => (StatusCode::CONFLICT, "feature-conflict"),
+        FeatureError::RepositoryAuthorizationRequired => (
+            StatusCode::CONFLICT,
+            "feature-repository-authorization-required",
+        ),
         FeatureError::ExecutionUncertain => (StatusCode::CONFLICT, "feature-execution-uncertain"),
         FeatureError::ReviewBlocked => (StatusCode::CONFLICT, "feature-review-blocked"),
         FeatureError::StaleSnapshot => (StatusCode::CONFLICT, "feature-stale-snapshot"),

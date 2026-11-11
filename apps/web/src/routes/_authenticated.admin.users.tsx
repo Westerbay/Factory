@@ -1,6 +1,7 @@
 import { createRoute } from "@tanstack/react-router"
 
 import { AppHeader } from "../components/app-header"
+import { SessionGate } from "../features/auth/session-gate"
 import { AdminUsersPage } from "../features/admin-users/admin-users-page"
 import { parseUsersSearch } from "../features/admin-users/api"
 import { authenticatedRoute } from "./_authenticated"
@@ -9,7 +10,11 @@ export const adminUsersRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: "/admin/users",
   validateSearch: parseUsersSearch,
-  component: AdminUsersRoute,
+  component: () => (
+    <SessionGate verifyOnEntry>
+      <AdminUsersRoute />
+    </SessionGate>
+  ),
 })
 
 function AdminUsersRoute() {

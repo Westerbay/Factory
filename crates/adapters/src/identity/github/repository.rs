@@ -3,8 +3,9 @@ use factory_core::identity::{
     AccessibleRepository, AccessibleRepositoryPage, RepositoryAccessError as Error,
     RepositoryAccessProvider, RepositoryAccessToken, RepositoryDraft, RepositoryDraftDiff,
     RepositoryDraftDiffTarget, RepositoryDraftTarget, RepositoryOperationGuard,
-    RepositoryOriginVerification,
+    RepositoryOriginVerification, RepositoryTokenRenewal,
 };
+use oauth2::{RefreshToken, basic::BasicTokenResponse};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -416,6 +417,40 @@ fn valid_repo_name(value: &str) -> bool {
         && name != ".."
 }
 
+fn verify_repository_scopes(granted: &[Scope]) -> Result<(), Error> {
+    let values: Vec<&str> = granted
+        .iter()
+        .flat_map(|scope| scope.as_ref().split([',', ' ']))
+        .collect();
+    if !values.contains(&"repo")
+        || !(values.contains(&"write:public_key") || values.contains(&"admin:public_key"))
+        || !(values.contains(&"user:email") || values.contains(&"user"))
+    {
+        return Err(Error::Forbidden);
+    }
+    Ok(())
+}
+
+fn repository_token(token: &BasicTokenResponse) -> Result<RepositoryAccessToken, Error> {
+    if token.token_type() != &BasicTokenType::Bearer {
+        return Err(Error::InvalidLogin);
+    }
+    let access = token.access_token().secret().to_owned();
+    let Some(refresh) = token.refresh_token() else {
+        return RepositoryAccessToken::new(access);
+    };
+    let lifetime = token
+        .expires_in()
+        .and_then(|duration| i64::try_from(duration.as_secs()).ok())
+        .filter(|seconds| *seconds > 0)
+        .ok_or(Error::InvalidLogin)?;
+    let expires_at = chrono::Utc::now()
+        .timestamp()
+        .checked_add(lifetime)
+        .ok_or(Error::InvalidLogin)?;
+    RepositoryAccessToken::renewable(access, refresh.secret().to_owned(), expires_at)
+}
+
 #[async_trait]
 impl RepositoryAccessProvider for GitHubRepositoryProvider {
     fn authorization_url(&self, state: &str, challenge: &str) -> Result<String, Error> {
@@ -434,6 +469,7 @@ impl RepositoryAccessProvider for GitHubRepositoryProvider {
             .add_scope(Scope::new("repo".into()))
             .add_scope(Scope::new("write:public_key".into()))
             .add_scope(Scope::new("user:email".into()))
+            .add_scope(Scope::new("offline_access".into()))
             .add_extra_param("code_challenge", challenge)
             .add_extra_param("code_challenge_method", "S256")
             .url();
@@ -473,21 +509,8 @@ impl RepositoryAccessProvider for GitHubRepositoryProvider {
                 }
                 _ => Error::Unavailable,
             })?;
-        if token.token_type() != &BasicTokenType::Bearer {
-            return Err(Error::InvalidLogin);
-        }
-        let granted = token.scopes().ok_or(Error::Forbidden)?;
-        let values: Vec<&str> = granted
-            .iter()
-            .flat_map(|scope| scope.as_ref().split([',', ' ']))
-            .collect();
-        if !values.contains(&"repo")
-            || !(values.contains(&"write:public_key") || values.contains(&"admin:public_key"))
-            || !(values.contains(&"user:email") || values.contains(&"user"))
-        {
-            return Err(Error::Forbidden);
-        }
-        let token = RepositoryAccessToken::new(token.access_token().secret().to_owned())?;
+        verify_repository_scopes(token.scopes().ok_or(Error::Forbidden)?)?;
+        let token = repository_token(&token)?;
         let response = self
             .inner
             .http
@@ -507,6 +530,39 @@ impl RepositoryAccessProvider for GitHubRepositoryProvider {
         let profile: Profile = serde_json::from_slice(&body).map_err(|_| Error::InvalidLogin)?;
         let identity = profile.into_identity().map_err(|_| Error::InvalidLogin)?;
         Ok((token, identity))
+    }
+
+    async fn refresh(
+        &self,
+        renewal: &RepositoryTokenRenewal,
+    ) -> Result<RepositoryAccessToken, Error> {
+        let http = self.inner.http.clone();
+        let transport = move |request| GitHubProvider::token_request(http.clone(), request);
+        let token = self
+            .inner
+            .oauth
+            .exchange_refresh_token(&RefreshToken::new(renewal.secret().to_owned()))
+            .request_async(&transport)
+            .await
+            .map_err(|error| match error {
+                RequestTokenError::ServerResponse(response)
+                    if matches!(
+                        response.error().as_ref(),
+                        "bad_refresh_token" | "invalid_grant"
+                    ) =>
+                {
+                    Error::ProviderUnauthorized
+                }
+                _ => Error::Unavailable,
+            })?;
+        if let Some(scopes) = token.scopes() {
+            verify_repository_scopes(scopes)?;
+        }
+        let token = repository_token(&token).map_err(|_| Error::Unavailable)?;
+        if token.renewal().is_none() {
+            return Err(Error::Unavailable);
+        }
+        Ok(token)
     }
 
     async fn primary_email(

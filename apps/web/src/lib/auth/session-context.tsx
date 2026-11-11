@@ -24,7 +24,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         read: readSession,
         revoke: revokeSession,
         clearPrivateData: () => queryClient.clear(),
-        announceChange: () => channel.current?.postMessage("invalidate"),
+        announceChange: (change) => channel.current?.postMessage(change),
         online: () => navigator.onLine,
       }),
     [queryClient]
@@ -36,8 +36,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       void controller.refresh()
     }
     function changed(event: MessageEvent) {
-      if (event.data !== "invalidate") return
-      void controller.invalidateRemote()
+      if (event.data === "invalidate") void controller.invalidateRemote()
+      if (event.data === "recheck") void controller.refresh("remote")
     }
     if ("BroadcastChannel" in window) {
       channel.current = new BroadcastChannel("factory-session")

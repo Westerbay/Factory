@@ -1,7 +1,7 @@
 use super::*;
 use axum::{
     Router,
-    extract::{Path, Query, State},
+    extract::{Form, Path, Query, State},
     http::HeaderMap,
     http::StatusCode,
     response::IntoResponse,
@@ -32,6 +32,7 @@ struct Fixture {
     fail_post_response: bool,
     no_verified_email: bool,
     denied_scope: bool,
+    renewable_tokens: bool,
     forbidden: bool,
     quota: bool,
     forbidden_message: Option<String>,
@@ -46,18 +47,45 @@ struct Fixture {
     move_base_on_diff: bool,
 }
 
-async fn token(State(state): State<Arc<Fixture>>) -> impl IntoResponse {
+async fn token(
+    State(state): State<Arc<Fixture>>,
+    Form(form): Form<HashMap<String, String>>,
+) -> impl IntoResponse {
     let scopes = if state.denied_scope {
         "repo"
     } else {
         "repo,user:email,write:public_key"
     };
-    (
-        StatusCode::OK,
-        axum::Json(
-            serde_json::json!({ "access_token":"fixture-token", "token_type":"bearer", "scope":scopes }),
-        ),
-    )
+    let body = if form
+        .get("grant_type")
+        .is_some_and(|kind| kind == "refresh_token")
+    {
+        if form
+            .get("refresh_token")
+            .is_some_and(|secret| secret == "fixture-refresh")
+            && form
+                .get("client_id")
+                .is_some_and(|id| id == "fixture-client")
+            && form
+                .get("client_secret")
+                .is_some_and(|secret| secret == "fixture-secret")
+        {
+            serde_json::json!({
+                "access_token": "rotated-access", "token_type": "bearer", "scope": scopes,
+                "refresh_token": "rotated-refresh", "expires_in": 28_800
+            })
+        } else {
+            serde_json::json!({ "error": "bad_refresh_token" })
+        }
+    } else if state.renewable_tokens {
+        serde_json::json!({
+            "access_token": "fixture-token", "token_type": "bearer", "scope": scopes,
+            "refresh_token": "fixture-refresh", "expires_in": 28_800
+        })
+    } else {
+        serde_json::json!({ "access_token": "fixture-token", "token_type": "bearer", "scope": scopes })
+    };
+    (StatusCode::OK, axum::Json(body))
 }
 async fn profile() -> impl IntoResponse {
     axum::Json(serde_json::json!({ "id":123, "login":"user", "name":null }))
@@ -427,7 +455,7 @@ async fn requests_required_scopes_and_lists_verified_data() {
         .find(|(name, _)| name == "scope")
         .unwrap()
         .1;
-    for value in ["repo", "write:public_key", "user:email"] {
+    for value in ["repo", "write:public_key", "user:email", "offline_access"] {
         assert!(scope.split(' ').any(|s| s == value));
     }
     let (token, identity) = provider.exchange("code", &"v".repeat(43)).await.unwrap();
@@ -441,6 +469,26 @@ async fn requests_required_scopes_and_lists_verified_data() {
     assert!(page.items[0].private);
     assert_eq!(page.next_page, None);
     assert!(provider.repositories(&token, 0).await.is_err());
+}
+
+#[tokio::test]
+async fn oauth_exchange_and_refresh_rotate_both_tokens() {
+    let (provider, _, _server) = fixture(Fixture {
+        renewable_tokens: true,
+        ..Default::default()
+    })
+    .await;
+    let (token, _) = provider.exchange("code", &"v".repeat(43)).await.unwrap();
+    let renewal = token.renewal().unwrap();
+    assert_eq!(renewal.secret(), "fixture-refresh");
+    assert!(renewal.expires_at() > chrono::Utc::now().timestamp());
+    let next = provider.refresh(renewal).await.unwrap();
+    assert_eq!(next.secret(), "rotated-access");
+    assert_eq!(next.renewal().unwrap().secret(), "rotated-refresh");
+    assert!(matches!(
+        provider.refresh(next.renewal().unwrap()).await,
+        Err(Error::ProviderUnauthorized)
+    ));
 }
 
 #[tokio::test]

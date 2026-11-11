@@ -275,6 +275,7 @@ export function WorkspacePage() {
             projectName={parts?.projectName}
             available={available && connected}
             onBack={() => browse("features")}
+            onReconnectGitHub={projects.reconnectInNewTab}
           />
         ) : (
           <div className="feature-home">

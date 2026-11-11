@@ -13,6 +13,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "../../components/ui/button"
+import { LoadingState } from "../../components/ui/loading-state"
 import type { components } from "../../lib/api/schema"
 import { useLocale } from "../../lib/i18n"
 import { ArtifactPreview } from "../artifacts/artifact-preview"
@@ -183,6 +184,15 @@ export function FeaturePanels({
     stage === viewStage || (isResultStage(stage) && isResultStage(viewStage))
   const scope = feature.scope
   const architecture = feature.architecture
+  const architectureAttempt = feature.attempts
+    .slice()
+    .reverse()
+    .find((item) => item.role === "architecture")
+  const architectureNeedsRecovery =
+    architectureAttempt?.status === "uncertain" ||
+    (architectureAttempt?.canResume &&
+      (architectureAttempt.status === "failed" ||
+        architectureAttempt.status === "interrupted"))
   const review = feature.review
   const delivery = feature.delivery
   const publishedStale = delivery?.status === "publishedStale"
@@ -359,6 +369,33 @@ export function FeaturePanels({
                     labels={artifactLabels}
                     compact={compact}
                   />
+                )}
+              </>
+            ) : scope?.approvedAt && stage === "architecture" ? (
+              <>
+                <p className="feature-panel-revision">
+                  <Check size={14} aria-hidden="true" />
+                  {m.feature_architecture_scope_approved()}
+                </p>
+                {architectureNeedsRecovery ? (
+                  <div className="feature-panel-empty" role="status">
+                    <p>{m.feature_architecture_recovery()}</p>
+                    {architectureAttempt?.canResume && (
+                      <Button
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={() => onResume(architectureAttempt.id)}
+                      >
+                        {m.feature_resume_step()}
+                      </Button>
+                    )}
+                  </div>
+                ) : feature.canContinue ? (
+                  <p className="feature-panel-empty" role="status">
+                    {m.feature_architecture_not_started()}
+                  </p>
+                ) : (
+                  <LoadingState title={m.feature_architecture_preparing()} />
                 )}
               </>
             ) : (

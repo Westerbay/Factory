@@ -9,7 +9,13 @@ import { Button } from "../../components/ui/button"
 import { LoadingState } from "../../components/ui/loading-state"
 import { useSession } from "../../lib/auth/session-context"
 
-export function SessionGate({ children }: { children: ReactNode }) {
+export function SessionGate({
+  children,
+  verifyOnEntry = false,
+}: {
+  children: ReactNode
+  verifyOnEntry?: boolean
+}) {
   useLocale()
   const { state, controller } = useSession()
   const pathname = useRouterState({
@@ -25,19 +31,30 @@ export function SessionGate({ children }: { children: ReactNode }) {
     }
     // A failed route check may later recover through the global online/focus
     // listener. An unchanged successful check resolves without publishing.
-    const unsubscribe = controller.subscribe(acceptVerification)
-    void controller.refresh().then(acceptVerification)
+    const unsubscribe = verifyOnEntry
+      ? controller.subscribe(acceptVerification)
+      : undefined
+    void controller.refresh().then(() => {
+      if (verifyOnEntry) acceptVerification()
+    })
     return () => {
       mounted = false
-      unsubscribe()
+      unsubscribe?.()
     }
-  }, [controller, pathname])
+  }, [controller, pathname, verifyOnEntry])
 
-  if (state.status === "active" && verifiedPath === pathname)
+  const expired =
+    state.status === "active" &&
+    Date.parse(state.session.expiresAt) <= Date.now()
+  if (
+    state.status === "active" &&
+    !expired &&
+    (!verifyOnEntry || verifiedPath === pathname)
+  )
     return (
       <div key={controller.getScope()}>
         {children}
-        {state.verification && (
+        {state.verification && !verifyOnEntry && (
           <div className="session-notice" role="status">
             <span>
               {state.verification === "offline"
@@ -56,6 +73,7 @@ export function SessionGate({ children }: { children: ReactNode }) {
   let content: ReactNode
   if (
     state.status === "checking" ||
+    expired ||
     (state.status === "active" && !state.verification)
   )
     content = <LoadingState title={m.checking_your_access()} />

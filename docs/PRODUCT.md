@@ -69,7 +69,12 @@ local work. This check does not inspect the Git remote or establish that a push 
 GitHub may change after the check, and the member may have configured a different remote
 or push URL. Factory never changes those Git settings automatically.
 
-Disconnecting repository access locally removes the saved OAuth token but does not itself
+Factory renews expiring GitHub repository access on demand when GitHub supplied a
+refresh token. When access has been revoked or can no longer be renewed, a feature
+discussion offers reconnection in a separate tab so the member can keep their draft
+and send it after reconnecting. The Factory session has its own expiration.
+
+Disconnecting repository access locally removes the saved OAuth credentials but does not itself
 remove the SSH key. Members can inspect or revoke SSH keys in GitHub settings. Revoking
 all GitHub OAuth app permissions also removes keys created by that app; GitHub removes
 keys unused for one year. Reconnection recovers a confirmed missing registered key.

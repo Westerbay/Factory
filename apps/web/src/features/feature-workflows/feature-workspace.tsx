@@ -35,6 +35,7 @@ export function FeatureWorkspace({
   projectName,
   available,
   onBack,
+  onReconnectGitHub,
 }: {
   state: FeatureWorkspaceState
   discussion: ReactNode
@@ -42,6 +43,7 @@ export function FeatureWorkspace({
   projectName?: string
   available: boolean
   onBack: () => void
+  onReconnectGitHub: () => void
 }) {
   useLocale()
   const feature = state.feature!
@@ -178,9 +180,15 @@ export function FeatureWorkspace({
           <Button
             variant="ghost"
             disabled={state.busy || !available}
-            onClick={() => void state.refresh()}
+            onClick={
+              state.needsRepositoryReconnect
+                ? onReconnectGitHub
+                : () => void state.refresh()
+            }
           >
-            {m.feature_refresh()}
+            {state.needsRepositoryReconnect
+              ? m.reconnect_github()
+              : m.feature_refresh()}
           </Button>
         </div>
       )}

@@ -28,6 +28,7 @@ import {
 
 import { ApiFailure } from "../../lib/api/client"
 import { useSession } from "../../lib/auth/session-context"
+import { FeatureFailure } from "../feature-workflows/api"
 import * as api from "./api"
 import { modelQueryKey, modelQueryOptions } from "./model-query"
 import { MessageMarkdown } from "./message-markdown"
@@ -39,6 +40,9 @@ import {
   selectedEffort,
 } from "./state"
 import "./conversations.css"
+
+const repositoryAuthorizationRequired =
+  "feature-repository-authorization-required"
 
 type PendingSend = {
   operationId: string
@@ -191,6 +195,13 @@ export function Chat({
         return
       }
       if (!showMessage) return
+      if (
+        error instanceof FeatureFailure &&
+        error.code === repositoryAuthorizationRequired
+      ) {
+        setMessage(repositoryAuthorizationRequired)
+        return
+      }
       setMessage(
         error instanceof api.ContextTransferFailure
           ? "This conversation is too long to transfer. Start a new chat to use another provider."
@@ -1003,8 +1014,22 @@ export function Chat({
           )}
           {message && (
             <div className="chat-notice" role="status">
-              <p>{translateMessage(message)}</p>
-              {selected && (
+              {message === repositoryAuthorizationRequired ? (
+                <>
+                  <p>{m.github_repository_access_expired_reconnect_github()}</p>
+                  <p>{m.github_reconnect_return_to_message()}</p>
+                  <Button
+                    variant="ghost"
+                    disabled={!available || busy || projectWorkspace.busy}
+                    onClick={projectWorkspace.reconnectInNewTab}
+                  >
+                    {m.reconnect_github()}
+                  </Button>
+                </>
+              ) : (
+                <p>{translateMessage(message)}</p>
+              )}
+              {selected && message !== repositoryAuthorizationRequired && (
                 <Button
                   variant="ghost"
                   disabled={!available || busy}

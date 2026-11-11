@@ -1,3 +1,4 @@
+import * as m from "@workspace/i18n/messages"
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import { useSession } from "../../lib/auth/session-context"
@@ -286,6 +287,26 @@ export function useProjects(available: boolean) {
       if (!signal.aborted) window.location.assign(url)
     })
   }
+  function reconnectInNewTab() {
+    if (pending.current || !lifetime.current || !available || !csrf) return
+    const tab = window.open("", "_blank")
+    if (!tab) {
+      setMessage(m.github_reconnect_tab_blocked())
+      return
+    }
+    tab.opener = null
+    void run(async (signal) => {
+      let redirected = false
+      try {
+        const url = await api.connect(csrf, signal)
+        if (signal.aborted || tab.closed) return
+        tab.location.replace(url)
+        redirected = true
+      } finally {
+        if (!redirected) tab.close()
+      }
+    })
+  }
   function disconnect() {
     void run(async (signal) => {
       await api.disconnect(csrf, signal)
@@ -498,6 +519,7 @@ export function useProjects(available: boolean) {
     needsCheck,
     repositoryMessage,
     connect,
+    reconnectInNewTab,
     disconnect,
     importRepository,
     removeProject,

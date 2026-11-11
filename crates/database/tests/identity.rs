@@ -607,6 +607,35 @@ async fn repository_authorization_is_session_and_environment_bound() {
             .email,
         "fixture@example.test"
     );
+    let current = store.repository_credential(actor).await.unwrap().unwrap();
+    let rotated = EncryptedRepositoryToken {
+        key_id: "fixture".into(),
+        nonce: vec![3; 12],
+        ciphertext: vec![4; 16],
+    };
+    store
+        .rotate_repository_token(
+            actor,
+            current.authorization_epoch,
+            &current.encrypted,
+            rotated.clone(),
+        )
+        .await
+        .unwrap();
+    let persisted = store.repository_credential(actor).await.unwrap().unwrap();
+    assert_eq!(persisted.authorization_epoch, current.authorization_epoch);
+    assert_eq!(persisted.encrypted.ciphertext, rotated.ciphertext);
+    assert!(matches!(
+        store
+            .rotate_repository_token(
+                actor,
+                current.authorization_epoch,
+                &current.encrypted,
+                rotated.clone(),
+            )
+            .await,
+        Err(RepositoryAccessError::Conflict)
+    ));
     // A consumed callback and a pending callback are both fenced by disconnect.
     let delayed_state = CredentialHash([31; 32]);
     let delayed_binding = CredentialHash([32; 32]);
@@ -639,6 +668,17 @@ async fn repository_authorization_is_session_and_environment_bound() {
         .unwrap();
     store.delete_repository_credential(actor).await.unwrap();
     assert!(!db.has_repository_credentials().await.unwrap());
+    assert!(matches!(
+        store
+            .rotate_repository_token(
+                actor,
+                persisted.authorization_epoch,
+                &persisted.encrypted,
+                rotated,
+            )
+            .await,
+        Err(RepositoryAccessError::ProviderUnauthorized)
+    ));
     assert!(matches!(
         store
             .take_repository_authorization(pending_state, pending_binding, actor.actor.session_hash)
