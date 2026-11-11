@@ -93,7 +93,7 @@ pub async fn run(
         .await
         .map_err(EnvironmentError::code)?
     {
-        None | Some(true) => (),
+        None | Some(true) => {}
         Some(false)
             if replace_proxy
                 && target_runtime
@@ -101,10 +101,7 @@ pub async fn run(
                     .upgrade_proxy()
                     .await
                     .map_err(EnvironmentError::code)?
-                    == Some(true) =>
-        {
-            ()
-        }
+                    == Some(true) => {}
         Some(false) => return Err("WORKSPACE_UPGRADE_UNKNOWN_PROXY"),
     }
     if !replace_image && !replace_proxy {
