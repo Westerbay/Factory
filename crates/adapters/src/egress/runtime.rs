@@ -199,6 +199,55 @@ impl DockerEgress {
         Ok(value)
     }
 
+    /// Identify the exact installed proxy against trusted preparation metadata.
+    pub async fn upgrade_proxy(&self) -> Result<Option<bool>, EnvironmentError> {
+        let value = match self
+            .docker
+            .inspect_container(&self.metadata.proxy_name(), None::<InspectContainerOptions>)
+            .await
+        {
+            Ok(value) => serde_json::to_value(value).map_err(|_| EnvironmentError::Unavailable)?,
+            Err(Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => return Ok(None),
+            Err(error) => return Err(map_error(error)),
+        };
+        if self.metadata.verify_proxy(&value).is_err() {
+            return Ok(Some(false));
+        }
+        self.verify_proxy_networks(&value).await?;
+        Ok(Some(true))
+    }
+
+    /// The installation's workspaces must be stopped before replacing its proxy.
+    pub async fn remove_upgrade_proxy(&self) -> Result<(), EnvironmentError> {
+        let proxy = self.inspect_proxy().await?;
+        self.verify_proxy_networks(&proxy).await?;
+        let id = id(&proxy)?;
+        if proxy["State"]["Running"] == true {
+            self.authorize()?;
+            self.docker
+                .stop_container(
+                    id,
+                    Some(StopContainerOptions {
+                        t: Some(10),
+                        ..Default::default()
+                    }),
+                )
+                .await
+                .map_err(map_error)?;
+        }
+        let stopped = self.inspect_proxy().await?;
+        if stopped["State"]["Running"] != false || stopped["Id"] != id {
+            return Err(EnvironmentError::OwnershipConflict);
+        }
+        self.authorize()?;
+        self.docker
+            .remove_container(id, None::<RemoveContainerOptions>)
+            .await
+            .map_err(map_error)
+    }
+
     async fn proxy(&self, outbound: &Value) -> Result<Value, EnvironmentError> {
         let image = self
             .docker

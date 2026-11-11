@@ -80,23 +80,24 @@ if [[ ! -d "$FACTORY_BOOTSTRAP_DIR" ]]; then
   trap - EXIT
 fi
 
-"${compose[@]}" pull
-docker --host unix:///var/run/docker.sock image pull "$FACTORY_WORKSPACE_IMAGE"
-docker --host unix:///var/run/docker.sock image pull "$FACTORY_EGRESS_IMAGE"
-
-prepare=(node "$bundle/scripts/environments/prepare.mjs"
-  --directory "$FACTORY_STATE_DIR/.factory/environments"
-  --images "$FACTORY_WORKSPACE_IMAGE" "$FACTORY_EGRESS_IMAGE")
-api_running=$("${compose[@]}" ps --status running --quiet api)
-"${prepare[@]}" --check
-"${compose[@]}" stop api
-# An environment may have started while the API was still accepting requests.
-if ! "${prepare[@]}" --check; then
-  if [[ -n "$api_running" ]]; then
-    "${compose[@]}" start api
+"${compose[@]}" pull --policy missing
+engine=(docker --host unix:///var/run/docker.sock)
+for image in "$FACTORY_WORKSPACE_IMAGE" "$FACTORY_EGRESS_IMAGE"; do
+  if ! "${engine[@]}" image inspect "$image" >/dev/null 2>&1; then
+    "${engine[@]}" image pull "$image"
   fi
-  exit 1
+done
+
+workspace_state="$FACTORY_STATE_DIR/.factory/environments"
+prepare=(node "$bundle/scripts/environments/prepare.mjs"
+  --directory "$workspace_state"
+  --images "$FACTORY_WORKSPACE_IMAGE" "$FACTORY_EGRESS_IMAGE")
+if [[ -e "$workspace_state/prepared.json" || -e "$workspace_state/upgrade" ]]; then
+  source "$bundle/infra/deploy/upgrade.sh"
+  upgrade_installation
+else
+  "${prepare[@]}" --check
+  "${prepare[@]}"
+  "${compose[@]}" up -d --pull never --wait --wait-timeout 120
 fi
-"${prepare[@]}"
-"${compose[@]}" up -d --pull never --wait --wait-timeout 120
 printf 'Factory API is ready. Verify HTTPS and test sign-in.\n'

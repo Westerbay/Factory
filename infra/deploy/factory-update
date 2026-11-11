@@ -66,7 +66,7 @@ fi
 
 docker_socket=(docker --host unix:///var/run/docker.sock)
 web_source=$("${docker_socket[@]}" inspect --format '{{if .State.Running}}{{range .Mounts}}{{if eq .Destination "/srv/factory-web"}}{{.Source}}{{end}}{{end}}{{end}}' factory-prod-caddy-1 2>/dev/null || true)
-if [[ "$web_source" == "$release/web-dist" ]] &&
+if [[ "$web_source" == "$release/web-dist" && ! -e "$installation/state/.factory/environments/upgrade" ]] &&
   [[ $("${docker_socket[@]}" inspect --format '{{.State.Health.Status}}' factory-prod-api-1 2>/dev/null || true) == healthy ]]; then
   printf 'Factory %s is already running.\n' "$tag"
   exit 0

@@ -236,7 +236,7 @@ async fn foreign_volume_is_never_adopted_or_mutated() {
 }
 
 #[tokio::test]
-async fn volume_with_mismatched_image_or_policy_is_never_adopted() {
+async fn volume_with_invalid_image_label_or_mismatched_policy_is_never_adopted() {
     for label in ["io.factory.image", "io.factory.policy"] {
         let metadata = metadata();
         let env = environment(&metadata);
@@ -257,6 +257,30 @@ async fn volume_with_mismatched_image_or_policy_is_never_adopted() {
         );
         assert!(fixture.replies.lock().unwrap().is_empty());
     }
+}
+
+#[tokio::test]
+async fn upgraded_workspace_reuses_the_owned_home_from_its_previous_image() {
+    let metadata = metadata();
+    let env = environment(&metadata);
+    let mut old_volume = volume(&env);
+    old_volume["Labels"]["io.factory.image"] = json!(format!("sha256:{}", "f".repeat(64)));
+    let fixture = fixture(
+        metadata,
+        vec![
+            version(),
+            reply(
+                "GET",
+                format!("/volumes/{}", env.volume_name),
+                200,
+                old_volume,
+            ),
+        ],
+        Duration::from_secs(2),
+    )
+    .await;
+    fixture.runtime.create_volume(&env).await.unwrap();
+    assert!(fixture.replies.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

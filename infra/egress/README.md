@@ -10,7 +10,11 @@ inventory because both network rules already reject those ranges. Preparation
 refuses to publish a changed image or interface inventory while an incompatible proxy exists; the previous `egress.json` and
 `prepared.json` remain intact. Preparation never removes a proxy or user container.
 
-## Explicit proxy maintenance
+Production release upgrades verify the previous proxy and replace it when the
+image or host interface inventory changes. The updater stops and restores
+workspaces according to their saved intent. See [production deployment](../../docs/DEPLOYMENT.md).
+
+## Manual proxy maintenance for development
 
 After changing host interfaces or the proxy image, use this maintenance sequence.
 The old inventory does not cover newly added host addresses, so stop environments

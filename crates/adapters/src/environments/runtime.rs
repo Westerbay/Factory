@@ -97,7 +97,15 @@ impl DockerEnvironmentRuntime {
             Err(e) => return Err(map_error(e)),
         };
         let value = json_value(volume)?;
-        verify_labels(env, &value["Labels"])?;
+        // A home volume outlives workspace images. Its image label identifies
+        // the image that provisioned it, while ownership and policy stay fixed.
+        let mut provisioned = env.clone();
+        provisioned.image_id = value["Labels"]["io.factory.image"]
+            .as_str()
+            .filter(|image| super::preparation::immutable_image(image))
+            .ok_or(EnvironmentError::OwnershipConflict)?
+            .to_owned();
+        verify_labels(&provisioned, &value["Labels"])?;
         if value["Name"] != env.volume_name
             || value["Driver"] != "local"
             || !empty(&value["Options"])
@@ -271,6 +279,59 @@ impl DockerEnvironmentRuntime {
             .start_container(id, None::<StartContainerOptions>)
             .await
             .map_err(map_error)
+    }
+
+    /// Deployment runs under the installation's exclusive supervisor locks.
+    pub async fn verify_upgrade_workspace(
+        &self,
+        env: &Environment,
+    ) -> Result<(), EnvironmentError> {
+        self.bounded(async {
+            self.prepare(env).await?;
+            require_current_policy(env)?;
+            let volume = self.volume(env).await?;
+            if env.provisioning_state == ProvisioningState::VolumeReady
+                && volume == VolumePresence::Missing
+            {
+                return Err(EnvironmentError::VolumeMissing);
+            }
+            if let Some(container) = self.container(env).await? {
+                self.policy.verify_container(env, &container)?;
+            }
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn stop_for_upgrade(
+        &self,
+        env: &Environment,
+        replace_container: bool,
+    ) -> Result<(), EnvironmentError> {
+        self.stop(env).await?;
+        self.bounded(async {
+            let mut stopped = env.clone();
+            stopped.desired_state = DesiredState::Stopped;
+            if !matches!(
+                self.inspect_inner(&stopped).await?.state,
+                ObservedState::Stopped | ObservedState::NotCreated
+            ) {
+                return Err(EnvironmentError::Conflict);
+            }
+            if replace_container && let Some(container) = self.container(env).await? {
+                self.policy.verify_container(env, &container)?;
+                let id = container["Id"]
+                    .as_str()
+                    .ok_or(EnvironmentError::OwnershipConflict)?;
+                self.require_mutation_permission()?;
+                self.docker
+                    .remove_container(id, None::<RemoveContainerOptions>)
+                    .await
+                    .map_err(map_error)?;
+            }
+            Ok(())
+        })
+        .await
     }
 }
 
