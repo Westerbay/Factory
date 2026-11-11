@@ -13,6 +13,7 @@ pub(super) struct Transport {
     stream: JsonStream,
     queued: VecDeque<Value>,
     next_id: u64,
+    rpc_error: Option<(&'static str, i64)>,
 }
 impl Transport {
     pub fn new(input: ProcessInput, output: ProcessOutput) -> Self {
@@ -20,6 +21,7 @@ impl Transport {
             stream: JsonStream::new(input, output),
             queued: VecDeque::new(),
             next_id: 1,
+            rpc_error: None,
         }
     }
     pub async fn send(&mut self, value: Value) -> Result<(), ExecutionError> {
@@ -37,7 +39,11 @@ impl Transport {
         }
         self.send(json!({"method":"initialized"})).await
     }
-    pub async fn request(&mut self, method: &str, params: Value) -> Result<Value, ExecutionError> {
+    pub async fn request(
+        &mut self,
+        method: &'static str,
+        params: Value,
+    ) -> Result<Value, ExecutionError> {
         let id = self.next_id;
         self.next_id = self
             .next_id
@@ -52,7 +58,8 @@ impl Transport {
                     if frame.get("id").and_then(Value::as_u64) != Some(id) {
                         return Err(ExecutionError::Protocol);
                     }
-                    if frame.get("error").is_some() {
+                    if let Some(error) = frame.get("error") {
+                        self.rpc_error = error["code"].as_i64().map(|code| (method, code));
                         return Err(ExecutionError::Unavailable);
                     }
                     return frame.get("result").cloned().ok_or(ExecutionError::Protocol);
@@ -72,6 +79,14 @@ impl Transport {
             None => self.stream.read().await,
         }
     }
+    pub fn read_failure(&self) -> Option<&'static str> {
+        self.stream.read_failure()
+    }
+
+    pub fn rpc_error(&self) -> Option<(&'static str, i64)> {
+        self.rpc_error
+    }
+
     pub async fn close(self) -> Result<(), ExecutionError> {
         self.stream.close().await
     }

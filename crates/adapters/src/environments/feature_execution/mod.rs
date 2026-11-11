@@ -162,7 +162,15 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
                 body,
                 Some((provider, request.workspace.attempt_id)),
             )
-            .await?;
+            .await
+            .inspect_err(|error| {
+                tracing::warn!(
+                    event = "agent.execution.launch_failed",
+                    provider = provider.as_str(),
+                    attempt_id = %request.workspace.attempt_id,
+                    execution_error = %error,
+                );
+            })?;
         let process_receipt = process.id.clone();
         let launch_ack = Arc::clone(&exit.launch_ack);
         let mut session = match provider {

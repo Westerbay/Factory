@@ -111,7 +111,13 @@ the displayed username to confirm:
 Open `https://factory.example.com` and verify GitHub sign-in, workspace startup,
 a terminal connection and an agent run with the intended accounts.
 Inspect the API and Caddy logs with `server.sh /opt/factory compose logs api caddy`
-if a check fails.
+if a check fails. For Claude Code and Codex failures, look for
+`agent.execution.failed` and `agent.execution.launch_failed` in the API logs.
+Feature workers include the attempt ID. The events record the execution phase,
+recognized provider error codes, HTTP or RPC codes, stream failures, and process
+exit details when available. Prompts, provider messages, and raw stderr are excluded.
+Collect the relevant API logs before replacing the API container if you need to
+retain them for an incident investigation.
 
 ## Host the frontend separately
 
