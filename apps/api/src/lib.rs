@@ -15,3 +15,4 @@ mod http;
 pub mod openapi;
 mod projects;
 pub mod terminals;
+pub mod workspace_upgrade;

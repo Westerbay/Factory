@@ -113,7 +113,7 @@ export async function prepareEgress(
   directory,
   runDocker = docker,
   reference,
-  { checkOnly = false } = {}
+  { checkOnly = false, stageDirectory } = {}
 ) {
   if (checkOnly && !reference) {
     throw new Error("Deployment checks require a release proxy image")
@@ -169,15 +169,18 @@ export async function prepareEgress(
     imageId: image.Id,
     hostIpv4: hostAddresses(undefined, Boolean(reference)),
   }
-  if (installation) await requireCompatibleProxy(directory, metadata, runDocker)
+  if (installation && !stageDirectory) {
+    await requireCompatibleProxy(directory, metadata, runDocker)
+  }
   if (checkOnly) return
-  const temporary = resolve(directory, `egress-${randomUUID()}.tmp`)
+  const output = stageDirectory ?? directory
+  const temporary = resolve(output, `egress-${randomUUID()}.tmp`)
   try {
     await writeFile(temporary, JSON.stringify(metadata, null, 2) + "\n", {
       flag: "wx",
       mode: 0o600,
     })
-    await rename(temporary, resolve(directory, "egress.json"))
+    await rename(temporary, resolve(output, "egress.json"))
   } catch (error) {
     await unlink(temporary).catch((cleanup) => {
       if (cleanup.code !== "ENOENT") throw cleanup

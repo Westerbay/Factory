@@ -14,13 +14,13 @@ export async function prepare(
   directory = resolve(root, ".factory/environments"),
   runDocker = docker,
   images = {},
-  { checkOnly = false } = {}
+  { checkOnly = false, stageDirectory } = {}
 ) {
   const installationPath = resolve(directory, "installation.json")
-  if (checkOnly && (!images.workspace || !images.egress)) {
+  if ((checkOnly || stageDirectory) && (!images.workspace || !images.egress)) {
     throw new Error("Deployment checks require both release images")
   }
-  if (!checkOnly) {
+  if (!checkOnly && !stageDirectory) {
     await mkdir(directory, { recursive: true })
     // Exclusive creation prevents simultaneous prepares from assigning different identities.
     try {
@@ -119,15 +119,19 @@ export async function prepare(
     }
   }
   // Never publish the user manifest before proxy image and engine validation succeeds.
-  await prepareEgress(directory, runDocker, images.egress, { checkOnly })
+  await prepareEgress(directory, runDocker, images.egress, {
+    checkOnly,
+    stageDirectory,
+  })
   if (checkOnly) return
-  const temporary = resolve(directory, `prepared-${randomUUID()}.tmp`)
+  const output = stageDirectory ?? directory
+  const temporary = resolve(output, `prepared-${randomUUID()}.tmp`)
   try {
     await writeFile(temporary, JSON.stringify(metadata, null, 2) + "\n", {
       flag: "wx",
       mode: 0o600,
     })
-    await rename(temporary, resolve(directory, "prepared.json"))
+    await rename(temporary, resolve(output, "prepared.json"))
   } catch (error) {
     await unlink(temporary).catch((cleanup) => {
       if (cleanup.code !== "ENOENT") throw cleanup
@@ -144,6 +148,8 @@ if (
   const args = process.argv.slice(2)
   const checkOnly = args.at(-1) === "--check"
   if (checkOnly) args.pop()
+  const stageDirectory = args.at(-2) === "--stage" ? args.pop() : undefined
+  if (stageDirectory) args.pop()
   const [directoryFlag, directory, imagesFlag, workspace, egress] = args
   const digestReference = /^ghcr\.io\/[a-z0-9_./-]+@sha256:[0-9a-f]{64}$/
   const validDirectory = directoryFlag === "--directory" && directory
@@ -152,23 +158,25 @@ if (
     digestReference.test(workspace ?? "") &&
     digestReference.test(egress ?? "")
   if (
+    (checkOnly && stageDirectory) ||
     !(
       (args.length === 5 && validDirectory && validImages) ||
       (!checkOnly &&
+        !stageDirectory &&
         (args.length === 0 || (args.length === 2 && validDirectory)))
     )
   ) {
     throw new Error(
-      "Usage: environments:prepare [--directory <state directory> [--images <workspace digest ref> <egress digest ref> [--check]]]"
+      "Usage: environments:prepare [--directory <state directory> [--images <workspace digest ref> <egress digest ref> [--check | --stage <directory>]]]"
     )
   }
   await prepare(
     directory ? resolve(directory) : undefined,
     docker,
     { workspace, egress },
-    { checkOnly }
+    { checkOnly, stageDirectory }
   )
-  if (!checkOnly) {
+  if (!checkOnly && !stageDirectory) {
     console.log(
       "Environment images prepared. Existing environments retain their recorded image."
     )

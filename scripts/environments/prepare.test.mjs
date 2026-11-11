@@ -62,6 +62,7 @@ test("Docker cleans buildx metadata on success and command failure without follo
 
 test("repeated preparation preserves installation and changes only the prepared image", async () => {
   const directory = await mkdtemp(join(tmpdir(), "factory-prepare-test-"))
+  const stageDirectory = await mkdtemp(join(directory, "candidate-"))
   let image = "a"
   let policy = "5"
   let claudeVersion = "2.1.284"
@@ -179,6 +180,19 @@ ${state}`
       beforePreflight
     )
     image = "d"
+    workspaceStates = "running"
+    const staged = await prepare(directory, docker, images, { stageDirectory })
+    assert.equal(staged.imageId, `sha256:${"d".repeat(64)}`)
+    assert.equal(staged.installationId, second.installationId)
+    assert.deepEqual(
+      JSON.parse(await readFile(join(stageDirectory, "prepared.json"), "utf8")),
+      staged
+    )
+    assert.equal(
+      await readFile(join(directory, "prepared.json"), "utf8"),
+      beforePreflight
+    )
+    workspaceStates = "exited"
     await assert.rejects(
       prepare(directory, docker, images, checkOptions),
       /release changes the prepared workspace image or policy/
@@ -215,6 +229,11 @@ ${state}`
       second
     )
   } finally {
+    for (const name of ["prepared.json", "egress.json"]) {
+      const path = join(stageDirectory, name)
+      if (existsSync(path)) await unlink(path)
+    }
+    await rmdir(stageDirectory)
     await unlink(join(directory, "prepared.json"))
     await unlink(join(directory, "egress.json"))
     await unlink(join(directory, "installation.json"))

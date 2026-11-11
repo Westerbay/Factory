@@ -1,6 +1,10 @@
 //! Explicit operator commands. Never invoked by the API or build process.
 use factory_adapters::identity::lookup_github_account;
-use factory_api::{bootstrap::connect_database, config::RuntimeConfig};
+use factory_api::{
+    bootstrap::connect_database,
+    config::RuntimeConfig,
+    workspace_upgrade::{self, Action},
+};
 use factory_core::identity::IdentityError;
 use factory_database::{identity::IdentityDatabase, schema::Readiness};
 use std::{
@@ -8,15 +12,26 @@ use std::{
     process::ExitCode,
 };
 
-const USAGE: &str =
-    "Usage: pnpm factory admin setup --provider github --username <GitHub username>";
+const USAGE: &str = "Usage: pnpm factory admin setup --provider github --username <GitHub username>\n       factory workspace upgrade <check|apply|rollback>";
 
 enum Command<'a> {
     Help,
     Admin(&'a str),
+    Upgrade(Action),
 }
 
 fn command(args: &[String]) -> Result<Command<'_>, &'static str> {
+    if let [workspace, upgrade, action] = args
+        && workspace == "workspace"
+        && upgrade == "upgrade"
+    {
+        return match action.as_str() {
+            "check" => Ok(Command::Upgrade(Action::Check)),
+            "apply" => Ok(Command::Upgrade(Action::Apply)),
+            "rollback" => Ok(Command::Upgrade(Action::Rollback)),
+            _ => Err("INVALID_ARGUMENTS"),
+        };
+    }
     Ok(match username(args)? {
         Some(name) => Command::Admin(name),
         None => Command::Help,
@@ -121,6 +136,10 @@ async fn run() -> Result<(), &'static str> {
     let database = connect_database(&config).await?;
     let result = match command {
         Command::Admin(username) => configure(&database, username).await,
+        Command::Upgrade(action) => {
+            ready(&database).await?;
+            workspace_upgrade::run(&config, &database, action).await
+        }
         Command::Help => unreachable!(),
     };
     database.close().await;
@@ -131,6 +150,12 @@ async fn run() -> Result<(), &'static str> {
 async fn main() -> ExitCode {
     match run().await {
         Ok(()) => ExitCode::SUCCESS,
+        Err("WORKSPACE_UPGRADE_ACTIVE_WORK") => {
+            eprintln!(
+                "Factory agent work is still active. Waiting for it to settle before upgrading."
+            );
+            ExitCode::from(75)
+        }
         Err(code) => {
             eprintln!("{code}\n{USAGE}");
             ExitCode::FAILURE

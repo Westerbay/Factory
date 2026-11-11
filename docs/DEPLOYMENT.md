@@ -39,10 +39,10 @@ Monitor these resources and test real workloads before increasing concurrency.
 [CI](../.github/workflows/ci.yml) builds the static frontend, publishes Linux
 amd64 candidate images to GHCR and tests the server bundle on a disposable
 installation of the previous stable version. Unchanged workspace and egress
-sources reuse their published images. The upgrade check verifies the existing
-workspace and its home volume. When a runtime image changes, it verifies safe
-refusal and then exercises the compatible application upgrade using the previous
-runtime in the fixture. The first release uses the candidate for both installs.
+sources reuse their published images. The upgrade check verifies that Factory
+reopens a running workspace, retains its home volume and keeps stopped workspaces
+stopped. A manual CI run can select an older published baseline with `upgrade_from`.
+The first release uses the candidate for both installs.
 
 Publish a stable GitHub Release tagged `vX.Y.Z` from a successful CI commit on
 `main`. The [release workflow](../.github/workflows/publish-release.yml)
@@ -83,18 +83,19 @@ Put host-specific Compose settings in `/opt/factory/compose.override.yml` when
 needed, such as custom DNS resolvers for the API. The deployment script merges
 this file with the Compose file bundled in each release.
 
-Finish active agent work and stop workspaces in Factory before upgrading.
-Deployments are serialized. The command pulls the exact images and refuses to
-stop the API while a workspace is active or the shared proxy is incompatible.
-An installed workspace image or policy must also match the prepared state. A
-release that changes it needs an explicit workspace migration before upgrade.
-If the proxy image or host addresses have changed, follow the
-[explicit proxy maintenance procedure](../infra/egress/README.md) before
-retrying. After a successful check, the command stops the API, rechecks the
-workspaces and proxy, records the verified images and starts Compose. If the
-second check fails, it restarts the previously running API. The command
-preserves the installation state, database and user volumes. PostgreSQL applies the repository
-schema during first initialization only and uses a separate non-superuser role
+Deployments are serialized. The updater verifies the exact release images and
+leaves workspaces running when the workspace and proxy preparations match. When
+either preparation changes, Factory waits up to five minutes for active agent work,
+pauses the API and rechecks for work before stopping the installation's workspaces.
+It verifies ownership before replacing containers, retains their home volumes and
+reopens workspaces with a running intent. Terminal processes exit if their
+workspace is stopped. A change to the workspace isolation policy version needs
+its own migration.
+
+Keep the previous release directory until the upgrade succeeds. If cutover fails,
+the updater attempts to restore the previous release. If rollback is interrupted,
+rerun the same version to recover the pending deployment. PostgreSQL applies the
+repository schema during first initialization only and uses a separate non-superuser role
 for the API. Future schema changes require an explicit, reviewed upgrade step
 before starting an API that expects them. `/health/ready` checks identity and the
 database schema. It does not exercise OAuth or the agent runtime.

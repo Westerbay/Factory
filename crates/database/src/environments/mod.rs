@@ -1,6 +1,7 @@
 mod mapping;
 mod requests;
 mod supervision;
+mod upgrade;
 
 #[cfg(test)]
 mod reconciliation_tests;
