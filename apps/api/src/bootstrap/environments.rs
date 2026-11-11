@@ -92,9 +92,11 @@ impl FeatureRepositoryVerifier for FeatureOrigin {
             | Err(
                 RepositoryAccessError::Conflict
                 | RepositoryAccessError::Forbidden
-                | RepositoryAccessError::ProviderUnauthorized
                 | RepositoryAccessError::ProviderForbidden,
             ) => Err(FeatureError::Conflict),
+            Err(RepositoryAccessError::ProviderUnauthorized) => {
+                Err(FeatureError::RepositoryAuthorizationRequired)
+            }
             Err(RepositoryAccessError::Unauthorized) => Err(FeatureError::Unauthorized),
             Err(_) => Err(FeatureError::Unavailable),
         }

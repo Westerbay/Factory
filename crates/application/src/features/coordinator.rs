@@ -692,6 +692,11 @@ impl FeatureCoordinator {
         let Ok(guard) = self.driver(feature)?.try_lock_owned() else {
             return Ok(state);
         };
+        if state.feature.stage == FeatureStage::Architecture && state.architecture.is_none() {
+            self.repository_verifier
+                .verify(actor, &env, &project)
+                .await?;
+        }
         if self
             .reconcile_pending_review_check(actor, &env, &project, &state)
             .await?

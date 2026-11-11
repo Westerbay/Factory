@@ -226,7 +226,7 @@ fn authorization_requests_identity_and_repository_access_with_state_and_s256() {
     assert_eq!(url.path(), "/login/oauth/authorize");
     assert_eq!(
         params["scope"],
-        "read:user repo write:public_key user:email"
+        "read:user repo write:public_key user:email offline_access"
     );
     assert_eq!(params["code_challenge_method"], "S256");
     assert_eq!(params["code_challenge"], challenge.as_str());

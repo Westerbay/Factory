@@ -58,7 +58,7 @@ cross-application abstractions in `packages/ui`.
 | ------------------- | -------------------------------------------------------------------------------------------------------------- |
 | Button / IconButton | Native semantics, primary/secondary/ghost/danger variants, accessible labels for icon actions                  |
 | Modal               | Native dialog, named heading, safe initial focus, Escape/cancel and focus restoration; shutdown and suspension |
-| LoadingState        | Concise status and reduced-motion-safe indicator; session, environment and provider preparation                |
+| LoadingState        | Concise status and reduced-motion-safe indicator for preparation, including the architecture proposal          |
 | Brand               | Terminal prompt symbol and wordmark with real home/workspace navigation                                        |
 | SplitPane           | Pointer and keyboard resizing, one terminal toggle, no separate width toolbar                                  |
 
@@ -202,7 +202,8 @@ Keep the shared shell and one page header. A feature opens directly in conversat
 with a stage panel for the brief, UML, agents, or result. On compact screens the
 discussion and stage panel are separate tabs. Use text and icons to distinguish
 running, failed, uncertain and verified attempts. Gate controls describe the current
-revision. Show publication next to the reviewed diff when the result is ready.
+revision. After brief approval, show when architecture preparation is running or needs
+recovery. Show publication next to the reviewed diff when the result is ready.
 
 UML previews have fit, zoom and source access. Completed assistant code fences can
 offer an explicit preview action. Authored HTML opens in an isolated frame. Keep the
@@ -210,7 +211,7 @@ conversation source readable and maintain focus when closing an expanded preview
 
 ## Privacy and delivery
 
-Initial admission and protected route changes require verification. An already verified,
+Initial admission and entry to administration require verification. An already verified,
 unexpired session keeps its workspace visible during background checks. Transient
 connection failure or offline state shows a compact status without discarding the
 chat; it never extends the fixed expiry. Expiry, authorization refusal, logout, remote

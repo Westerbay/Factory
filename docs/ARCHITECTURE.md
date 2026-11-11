@@ -110,12 +110,14 @@ return a conflict for explicit review, never an automatic retry.
 The [browser session controller](../apps/web/src/lib/auth/session-controller.ts) keeps
 verified session state in memory. Route changes, focus, reconnection and expiry trigger
 verification or invalidation. Unauthorized/forbidden responses, logout, account changes
-and expiry clear private query data. BroadcastChannel carries invalidation
-only, not session details. Locally observed authorization refusals notify other tabs;
-received invalidations hide private content and revalidate without broadcasting again.
-Initial admission and protected route entry require verification; an unconfirmed logout
-cannot silently restore the session. Routine local rechecks share one pending request
-and preserve the existing active snapshot until its fixed expiry. An unchanged response
+and expiry clear private query data. BroadcastChannel carries recheck and invalidation
+signals, never session details. An initial successful observation asks other tabs to
+recheck without hiding a verified workspace. Logout, observed authorization refusals
+and confirmed account switches invalidate other tabs; a received signal never echoes.
+Initial admission and administration entry require verification. Within the workspace,
+navigation rechecks the session in the background. Temporary failures are retried with
+a bounded delay, and an unconfirmed logout cannot silently restore the session.
+Routine rechecks share one pending request and preserve the active snapshot until its fixed expiry. An unchanged response
 does not notify resource consumers. The opaque presentation scope changes with user,
 session token or role, remounting private views when necessary. Network failure/offline
 state keeps an unexpired active view with a compact notice, without extending expiry;
@@ -245,12 +247,18 @@ status reads never start the proxy or user environment.
 [RepositoryAccessService](../crates/application/src/identity/repository_access.rs) owns
 the session-bound repository capability, including stable identity verification and
 idempotent public SSH key registration. The GitHub adapter requests repository, public-key
-and verified-email scopes; [authenticated encryption](../crates/adapters/src/identity/cipher.rs)
-protects the persisted token with an automatically generated, persistent installation key.
-The key is stored outside the database and user environments; if missing while encrypted
-credentials exist, repository access fails closed rather than silently replacing it. The browser never receives
-the token or SSH private key. Revoked OAuth access and a missing encryption key do not
-invalidate a Factory identity session.
+and verified-email scopes and opts into renewable tokens. The service rotates a token
+near expiry, under a per-user lock, and persists the new pair only when the session,
+environment generation and authorization epoch still match. The store also compares
+the previous encrypted token before replacing it.
+
+[Authenticated encryption](../crates/adapters/src/identity/cipher.rs) protects both tokens
+with an automatically generated, persistent installation key. Existing access-only
+records remain readable. An older API cannot read a renewable credential saved by the
+new API; after a rollback, affected users must reconnect GitHub. The key is stored outside
+the database and user environments. If it is missing, repository access fails closed.
+The browser never receives the tokens or SSH private key. Revoked OAuth access and
+a missing encryption key do not invalidate a Factory identity session.
 
 [Projects](../crates/core/src/projects/mod.rs) and their [store](../crates/database/src/projects/mod.rs)
 reserve a provider repository ID once per member and fence operations by session and

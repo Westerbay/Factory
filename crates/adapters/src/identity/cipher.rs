@@ -8,6 +8,9 @@ use ring::{
 };
 use uuid::Uuid;
 
+const RENEWABLE_PREFIX: &[u8] = b"\0factory-token-v2\0";
+const CIPHERTEXT_LIMIT: usize = 8192;
+
 pub struct RepositoryAeadCipher {
     key_id: String,
     key: LessSafeKey,
@@ -47,7 +50,19 @@ impl RepositoryTokenCipher for RepositoryAeadCipher {
         SystemRandom::new()
             .fill(&mut nonce)
             .map_err(|_| RepositoryAccessError::Unavailable)?;
-        let mut ciphertext = token.secret().as_bytes().to_vec();
+        let mut ciphertext = if let Some(renewal) = token.renewal() {
+            let mut payload = RENEWABLE_PREFIX.to_vec();
+            payload.extend_from_slice(&renewal.expires_at().to_be_bytes());
+            payload.extend_from_slice(token.secret().as_bytes());
+            payload.push(0);
+            payload.extend_from_slice(renewal.secret().as_bytes());
+            payload
+        } else {
+            token.secret().as_bytes().to_vec()
+        };
+        if ciphertext.len() + aead::AES_256_GCM.tag_len() > CIPHERTEXT_LIMIT {
+            return Err(RepositoryAccessError::InvalidLogin);
+        }
         self.key
             .seal_in_place_append_tag(
                 Nonce::assume_unique_for_key(nonce),
@@ -67,7 +82,10 @@ impl RepositoryTokenCipher for RepositoryAeadCipher {
         user_id: Uuid,
         token: &EncryptedRepositoryToken,
     ) -> Result<RepositoryAccessToken, RepositoryAccessError> {
-        if user_id.is_nil() || token.key_id != self.key_id || token.ciphertext.len() > 8192 {
+        if user_id.is_nil()
+            || token.key_id != self.key_id
+            || token.ciphertext.len() > CIPHERTEXT_LIMIT
+        {
             return Err(RepositoryAccessError::Unavailable);
         }
         let nonce: [u8; 12] = token
@@ -84,16 +102,48 @@ impl RepositoryTokenCipher for RepositoryAeadCipher {
                 &mut bytes,
             )
             .map_err(|_| RepositoryAccessError::Unavailable)?;
-        let secret = std::str::from_utf8(plaintext)
-            .map_err(|_| RepositoryAccessError::Unavailable)?
-            .to_owned();
-        RepositoryAccessToken::new(secret).map_err(|_| RepositoryAccessError::Unavailable)
+        decode_token(plaintext).ok_or(RepositoryAccessError::Unavailable)
+    }
+}
+
+fn decode_token(plaintext: &[u8]) -> Option<RepositoryAccessToken> {
+    if let Some(payload) = plaintext.strip_prefix(RENEWABLE_PREFIX) {
+        let (timestamp, secrets) = payload.split_at_checked(8)?;
+        let expires_at = i64::from_be_bytes(timestamp.try_into().ok()?);
+        let (access, refresh) = std::str::from_utf8(secrets).ok()?.split_once('\0')?;
+        RepositoryAccessToken::renewable(access.to_owned(), refresh.to_owned(), expires_at).ok()
+    } else {
+        RepositoryAccessToken::new(std::str::from_utf8(plaintext).ok()?.to_owned()).ok()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn token_cipher_preserves_renewal_without_exposing_secrets() {
+        let cipher = RepositoryAeadCipher::new("test-key".into(), &[7; 32]).unwrap();
+        let user = Uuid::new_v4();
+        let token = RepositoryAccessToken::renewable(
+            "synthetic-access".into(),
+            "synthetic-refresh".into(),
+            2_000_000_000,
+        )
+        .unwrap();
+        let sealed = cipher.seal(user, &token).unwrap();
+        assert!(
+            !sealed
+                .ciphertext
+                .windows(17)
+                .any(|window| window == b"synthetic-refresh")
+        );
+        let opened = cipher.open(user, &sealed).unwrap();
+        assert_eq!(opened.secret(), "synthetic-access");
+        let renewal = opened.renewal().unwrap();
+        assert_eq!(renewal.secret(), "synthetic-refresh");
+        assert_eq!(renewal.expires_at(), 2_000_000_000);
+    }
+
     #[test]
     fn token_cipher_authenticates_user_key_and_ciphertext() {
         let cipher = RepositoryAeadCipher::new("test-key".into(), &[7; 32]).unwrap();

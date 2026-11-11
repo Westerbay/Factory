@@ -9,8 +9,10 @@ use std::{
     pin::Pin,
     sync::{Arc, Mutex, Weak},
 };
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use uuid::Uuid;
+
+const TOKEN_RENEWAL_MARGIN_SECONDS: i64 = 60;
 
 struct AccessGuard {
     store: Arc<dyn RepositoryAccessStore>,
@@ -167,6 +169,73 @@ impl RepositoryAccessService {
         Ok(lock)
     }
 
+    async fn authorized_token(
+        &self,
+        actor: RepositoryActor,
+    ) -> Result<(RepositoryAccessToken, AccessGuard), RepositoryAccessError> {
+        let (_, token, guard) = self.read_authorized_token(actor).await?;
+        if !needs_renewal(&token) {
+            return Ok((token, guard));
+        }
+        let lock = self
+            .registration_lock(actor.actor.user_id)?
+            .lock_owned()
+            .await;
+        let (_lock, token, guard) = self.authorized_token_locked(actor, lock).await?;
+        Ok((token, guard))
+    }
+
+    async fn read_authorized_token(
+        &self,
+        actor: RepositoryActor,
+    ) -> Result<(EncryptedRepositoryToken, RepositoryAccessToken, AccessGuard), RepositoryAccessError>
+    {
+        let credential = self
+            .store
+            .repository_credential(actor)
+            .await?
+            .ok_or(RepositoryAccessError::ProviderUnauthorized)?;
+        let token = self
+            .cipher
+            .open(actor.actor.user_id, &credential.encrypted)?;
+        let guard = AccessGuard {
+            store: self.store.clone(),
+            actor,
+            epoch: credential.authorization_epoch,
+        };
+        guard.check().await?;
+        Ok((credential.encrypted, token, guard))
+    }
+
+    /// Serialize the rotation with other renewals and key registration for this user.
+    async fn authorized_token_locked(
+        &self,
+        actor: RepositoryActor,
+        lock: OwnedMutexGuard<()>,
+    ) -> Result<(OwnedMutexGuard<()>, RepositoryAccessToken, AccessGuard), RepositoryAccessError>
+    {
+        let (previous, token, guard) = self.read_authorized_token(actor).await?;
+        if !needs_renewal(&token) {
+            return Ok((lock, token, guard));
+        }
+        let provider = self.provider.clone();
+        let cipher = self.cipher.clone();
+        // GitHub consumes the previous refresh token on success. The caller
+        // can disconnect, but an in-flight rotation must reach the guarded save.
+        tokio::spawn(async move {
+            let renewal = token.renewal().ok_or(RepositoryAccessError::Unavailable)?;
+            let refreshed = provider.refresh(renewal).await?;
+            let next = cipher.seal(actor.actor.user_id, &refreshed)?;
+            guard
+                .store
+                .rotate_repository_token(actor, guard.epoch, &previous, next)
+                .await?;
+            Ok((lock, refreshed, guard))
+        })
+        .await
+        .map_err(|_| RepositoryAccessError::Unavailable)?
+    }
+
     /// Complete sign-in without requiring a running environment. Persistence
     /// rechecks the session after the read-only email request and encryption.
     pub async fn save_login(
@@ -203,22 +272,11 @@ impl RepositoryAccessService {
         &self,
         actor: RepositoryActor,
     ) -> Result<(), RepositoryAccessError> {
-        let credential = self
-            .store
-            .repository_credential(actor)
-            .await?
-            .ok_or(RepositoryAccessError::ProviderUnauthorized)?;
-        let token = self
-            .cipher
-            .open(actor.actor.user_id, &credential.encrypted)?;
-        let guard = AccessGuard {
-            store: self.store.clone(),
-            actor,
-            epoch: credential.authorization_epoch,
-        };
-        let lock = self.registration_lock(actor.actor.user_id)?;
-        let _registration = lock.lock().await;
-        guard.check().await?;
+        let lock = self
+            .registration_lock(actor.actor.user_id)?
+            .lock_owned()
+            .await;
+        let (_registration, token, guard) = self.authorized_token_locked(actor, lock).await?;
         let mut key = self.keys.public_key_status(actor).await?;
         let exists = self
             .provider
@@ -359,21 +417,9 @@ impl RepositoryAccessService {
         if page == 0 || page > 1000 {
             return Err(RepositoryAccessError::InvalidInput);
         }
-        let credential = self
-            .store
-            .repository_credential(actor)
-            .await?
-            .ok_or(RepositoryAccessError::ProviderUnauthorized)?;
-        let token = self
-            .cipher
-            .open(actor.actor.user_id, &credential.encrypted)?;
-        self.store
-            .validate_repository_epoch(actor, credential.authorization_epoch)
-            .await?;
+        let (token, guard) = self.authorized_token(actor).await?;
         let result = self.provider.repositories(&token, page).await?;
-        self.store
-            .validate_repository_epoch(actor, credential.authorization_epoch)
-            .await?;
+        guard.check().await?;
         Ok(result)
     }
 
@@ -385,24 +431,12 @@ impl RepositoryAccessService {
         project: &Project,
     ) -> Result<RepositoryOriginVerification, RepositoryAccessError> {
         check_project_binding(actor, project)?;
-        let credential = self
-            .store
-            .repository_credential(actor)
-            .await?
-            .ok_or(RepositoryAccessError::ProviderUnauthorized)?;
-        let token = self
-            .cipher
-            .open(actor.actor.user_id, &credential.encrypted)?;
-        self.store
-            .validate_repository_epoch(actor, credential.authorization_epoch)
-            .await?;
+        let (token, guard) = self.authorized_token(actor).await?;
         let result = self
             .provider
             .verify_clone_origin(&token, project.repository_id, &project.cloned_full_name)
             .await?;
-        self.store
-            .validate_repository_epoch(actor, credential.authorization_epoch)
-            .await?;
+        guard.check().await?;
         Ok(result)
     }
 
@@ -412,21 +446,11 @@ impl RepositoryAccessService {
         project: &'a Project,
     ) -> Result<RepositoryDraftAccess<'a>, RepositoryAccessError> {
         check_project_binding(actor, project)?;
-        let credential = self
-            .store
-            .repository_credential(actor)
-            .await?
-            .ok_or(RepositoryAccessError::ProviderUnauthorized)?;
+        let (token, guard) = self.authorized_token(actor).await?;
         let access = RepositoryDraftAccess {
             provider: self.provider.as_ref(),
-            token: self
-                .cipher
-                .open(actor.actor.user_id, &credential.encrypted)?,
-            guard: AccessGuard {
-                store: self.store.clone(),
-                actor,
-                epoch: credential.authorization_epoch,
-            },
+            token,
+            guard,
             project,
         };
         access.recheck().await?;
@@ -436,6 +460,12 @@ impl RepositoryAccessService {
     pub async fn disconnect(&self, actor: RepositoryActor) -> Result<(), RepositoryAccessError> {
         self.store.delete_repository_credential(actor).await
     }
+}
+
+fn needs_renewal(token: &RepositoryAccessToken) -> bool {
+    token.renewal().is_some_and(|renewal| {
+        renewal.expires_at() <= chrono::Utc::now().timestamp() + TOKEN_RENEWAL_MARGIN_SECONDS
+    })
 }
 
 fn check_project_binding(

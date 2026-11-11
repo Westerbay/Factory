@@ -19,6 +19,8 @@ pub enum FeatureError {
     Invalid,
     #[error("Feature state changed")]
     Conflict,
+    #[error("Reconnect GitHub repository access to continue")]
+    RepositoryAuthorizationRequired,
     #[error("Execution may still be active")]
     ExecutionUncertain,
     #[error("Review cannot proceed")]

@@ -213,6 +213,58 @@ describe("private session state", () => {
     expect(dependencies.clearPrivateData).toHaveBeenCalled()
   })
 
+  it("keeps an existing view mounted when another tab opens the same session", async () => {
+    const first = setup()
+    const second = setup()
+    await first.controller.refresh()
+    const snapshot = first.controller.getSnapshot()
+    let recheck: Promise<void> | undefined
+    second.dependencies.announceChange.mockImplementation((change) => {
+      if (change === "recheck") recheck = first.controller.refresh("remote")
+      else recheck = first.controller.invalidateRemote()
+      expect(first.controller.getSnapshot()).toBe(snapshot)
+    })
+    await second.controller.refresh()
+    await recheck
+    expect(second.dependencies.announceChange).toHaveBeenCalledWith("recheck")
+    expect(first.controller.getSnapshot().status).toBe("active")
+    expect(first.dependencies.announceChange).toHaveBeenCalledTimes(1)
+  })
+
+  it("recovers from a temporary verification failure without discarding the active session", async () => {
+    vi.useFakeTimers()
+    const { controller, dependencies } = setup()
+    await controller.refresh()
+    const snapshot = controller.getSnapshot()
+    const scope = controller.getScope()
+    dependencies.clearPrivateData.mockClear()
+    dependencies.read.mockRejectedValueOnce(new ApiFailure(503))
+    await controller.refresh()
+    expect(controller.getSnapshot()).toEqual({
+      ...snapshot,
+      verification: "unavailable",
+    })
+    await vi.advanceTimersByTimeAsync(750)
+    expect(controller.getSnapshot()).toEqual(snapshot)
+    expect(controller.getScope()).toBe(scope)
+    expect(dependencies.clearPrivateData).not.toHaveBeenCalled()
+  })
+
+  it("bounds temporary retries and stops when the server refuses access", async () => {
+    vi.useFakeTimers()
+    const { controller, dependencies } = setup()
+    dependencies.read.mockRejectedValue(new ApiFailure(503))
+    await controller.refresh()
+    await vi.advanceTimersByTimeAsync(12_000)
+    expect(dependencies.read).toHaveBeenCalledTimes(4)
+    expect(controller.getSnapshot()).toEqual({ status: "unavailable" })
+    dependencies.read.mockRejectedValueOnce(new ApiFailure(401))
+    await controller.refresh()
+    await vi.advanceTimersByTimeAsync(12_000)
+    expect(dependencies.read).toHaveBeenCalledTimes(5)
+    expect(controller.getSnapshot()).toEqual({ status: "anonymous" })
+  })
+
   it("clears cached private data when the verified account changes", async () => {
     const { controller, dependencies } = setup()
     await controller.refresh()
@@ -222,7 +274,10 @@ describe("private session state", () => {
     )
     await controller.refresh()
     expect(dependencies.clearPrivateData).toHaveBeenCalledOnce()
-    expect(dependencies.announceChange).toHaveBeenCalledTimes(2)
+    expect(dependencies.announceChange.mock.calls).toEqual([
+      ["recheck"],
+      ["invalidate"],
+    ])
   })
 
   it.each([401, 403])(
@@ -347,7 +402,7 @@ describe("private session state", () => {
       await vi.advanceTimersByTimeAsync(30_001)
       expect(controller.getSnapshot()).toEqual({ status: "anonymous" })
       expect(controller.getScope()).toBeUndefined()
-      expect(dependencies.read).toHaveBeenCalledTimes(2)
+      expect(dependencies.read).toHaveBeenCalledTimes(3)
       expect(dependencies.clearPrivateData).toHaveBeenCalledOnce()
     }
   )

@@ -127,6 +127,22 @@ impl RepositoryAccessStore for Store {
                 encrypted: c.encrypted.clone(),
             }))
     }
+    async fn rotate_repository_token(
+        &self,
+        actor: RepositoryActor,
+        epoch: i64,
+        previous: &EncryptedRepositoryToken,
+        next: EncryptedRepositoryToken,
+    ) -> Result<(), RepositoryAccessError> {
+        self.validate_repository_epoch(actor, epoch).await?;
+        let mut credential = self.credential.lock().unwrap();
+        let current = credential.as_mut().ok_or(RepositoryAccessError::Conflict)?;
+        if current.encrypted.ciphertext != previous.ciphertext {
+            return Err(RepositoryAccessError::Conflict);
+        }
+        current.encrypted = next;
+        Ok(())
+    }
     async fn delete_repository_credential(
         &self,
         actor: RepositoryActor,
@@ -155,6 +171,9 @@ struct Provider {
     exchange_gate: std::sync::Mutex<Option<Arc<Gate>>>,
     list_gate: std::sync::Mutex<Option<Arc<Gate>>>,
     origin_calls: AtomicUsize,
+    refresh_calls: AtomicUsize,
+    refresh_gate: std::sync::Mutex<Option<Arc<Gate>>>,
+    reject_refresh: AtomicBool,
     registered: AtomicUsize,
     store: Arc<Store>,
     revoke_on_list: AtomicBool,
@@ -186,6 +205,26 @@ impl RepositoryAccessProvider for Provider {
                 handle: "user".into(),
             },
         ))
+    }
+    async fn refresh(
+        &self,
+        renewal: &RepositoryTokenRenewal,
+    ) -> Result<RepositoryAccessToken, RepositoryAccessError> {
+        assert_eq!(renewal.secret(), "fixture-refresh");
+        self.refresh_calls.fetch_add(1, Ordering::SeqCst);
+        let gate = self.refresh_gate.lock().unwrap().clone();
+        if let Some(gate) = gate {
+            gate.entered.notify_one();
+            gate.release.notified().await;
+        }
+        if self.reject_refresh.load(Ordering::SeqCst) {
+            return Err(RepositoryAccessError::ProviderUnauthorized);
+        }
+        RepositoryAccessToken::renewable(
+            "refreshed-token".into(),
+            "refreshed-renewal".into(),
+            chrono::Utc::now().timestamp() + 3600,
+        )
     }
     async fn primary_email(
         &self,
@@ -259,20 +298,32 @@ impl RepositoryTokenCipher for Cipher {
     fn seal(
         &self,
         _: Uuid,
-        _: &RepositoryAccessToken,
+        token: &RepositoryAccessToken,
     ) -> Result<EncryptedRepositoryToken, RepositoryAccessError> {
         Ok(EncryptedRepositoryToken {
             key_id: "test".into(),
             nonce: vec![0; 12],
-            ciphertext: vec![0; 16],
+            ciphertext: token.secret().as_bytes().to_vec(),
         })
     }
     fn open(
         &self,
         _: Uuid,
-        _: &EncryptedRepositoryToken,
+        token: &EncryptedRepositoryToken,
     ) -> Result<RepositoryAccessToken, RepositoryAccessError> {
-        RepositoryAccessToken::new("fixture-token".into())
+        match token.ciphertext.as_slice() {
+            b"expired-token" => RepositoryAccessToken::renewable(
+                "expired-token".into(),
+                "fixture-refresh".into(),
+                chrono::Utc::now().timestamp() - 1,
+            ),
+            b"refreshed-token" => RepositoryAccessToken::renewable(
+                "refreshed-token".into(),
+                "refreshed-renewal".into(),
+                chrono::Utc::now().timestamp() + 3600,
+            ),
+            _ => RepositoryAccessToken::new("fixture-token".into()),
+        }
     }
 }
 struct Keys {
@@ -331,6 +382,9 @@ fn fixture() -> (
         exchange_gate: std::sync::Mutex::new(None),
         list_gate: std::sync::Mutex::new(None),
         origin_calls: AtomicUsize::new(0),
+        refresh_calls: AtomicUsize::new(0),
+        refresh_gate: std::sync::Mutex::new(None),
+        reject_refresh: AtomicBool::new(false),
         registered: AtomicUsize::new(0),
         store: store.clone(),
         revoke_on_list: AtomicBool::new(false),
@@ -374,6 +428,97 @@ async fn begin(service: &RepositoryAccessService, actor: RepositoryActor) {
         )
         .await
         .unwrap();
+}
+
+async fn save_expired_token(
+    service: &RepositoryAccessService,
+    provider: &Provider,
+    actor: RepositoryActor,
+) {
+    let (_, identity) = provider.exchange("code", "verifier").await.unwrap();
+    let token = RepositoryAccessToken::renewable(
+        "expired-token".into(),
+        "fixture-refresh".into(),
+        chrono::Utc::now().timestamp() - 1,
+    )
+    .unwrap();
+    service
+        .save_login(actor.actor, &identity, token)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn concurrent_repository_requests_share_one_renewal() {
+    let (service, store, provider, _, actor) = fixture();
+    save_expired_token(&service, &provider, actor).await;
+    let epoch = store.epoch.load(Ordering::SeqCst);
+    let (left, right) = tokio::join!(
+        service.repositories(actor, 1),
+        service.repositories(actor, 2),
+    );
+    assert!(left.is_ok() && right.is_ok());
+    assert_eq!(provider.refresh_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(store.epoch.load(Ordering::SeqCst), epoch);
+    assert_eq!(
+        store
+            .credential
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .encrypted
+            .ciphertext,
+        b"refreshed-token"
+    );
+}
+
+#[tokio::test]
+async fn disconnect_during_renewal_cannot_restore_the_grant() {
+    let (service, store, provider, _, actor) = fixture();
+    save_expired_token(&service, &provider, actor).await;
+    let gate = Arc::new(Gate::new());
+    *provider.refresh_gate.lock().unwrap() = Some(gate.clone());
+    let (result, ()) = tokio::join!(service.repositories(actor, 1), async {
+        gate.entered.notified().await;
+        service.disconnect(actor).await.unwrap();
+        gate.release.notify_one();
+    });
+    assert!(matches!(
+        result,
+        Err(RepositoryAccessError::ProviderUnauthorized)
+    ));
+    assert!(store.credential.lock().unwrap().is_none());
+}
+
+#[tokio::test]
+async fn canceled_request_does_not_lose_rotated_credentials() {
+    let (service, _, provider, _, actor) = fixture();
+    let service = Arc::new(service);
+    save_expired_token(&service, &provider, actor).await;
+    let gate = Arc::new(Gate::new());
+    *provider.refresh_gate.lock().unwrap() = Some(gate.clone());
+    let caller = tokio::spawn({
+        let service = service.clone();
+        async move { service.repositories(actor, 1).await }
+    });
+    gate.entered.notified().await;
+    caller.abort();
+    assert!(caller.await.unwrap_err().is_cancelled());
+    gate.release.notify_one();
+    service.repositories(actor, 2).await.unwrap();
+    assert_eq!(provider.refresh_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn rejected_renewal_requests_reconnection() {
+    let (service, _, provider, _, actor) = fixture();
+    save_expired_token(&service, &provider, actor).await;
+    provider.reject_refresh.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        service.repositories(actor, 1).await,
+        Err(RepositoryAccessError::ProviderUnauthorized)
+    ));
 }
 
 #[tokio::test]

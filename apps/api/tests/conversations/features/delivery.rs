@@ -193,6 +193,15 @@ impl RepositoryAccessStore for DraftFixture {
             authorization_epoch: 1,
         }))
     }
+    async fn rotate_repository_token(
+        &self,
+        _: RepositoryActor,
+        _: i64,
+        _: &EncryptedRepositoryToken,
+        _: EncryptedRepositoryToken,
+    ) -> Result<(), RepositoryAccessError> {
+        unreachable!()
+    }
     async fn delete_repository_credential(
         &self,
         _: RepositoryActor,

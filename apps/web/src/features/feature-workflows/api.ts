@@ -155,6 +155,7 @@ const errorCodeSchema = z.enum([
   "invalid-input",
   "feature-not-found",
   "feature-conflict",
+  "feature-repository-authorization-required",
   "feature-execution-uncertain",
   "feature-review-blocked",
   "feature-stale-snapshot",

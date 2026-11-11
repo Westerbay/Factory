@@ -51,16 +51,58 @@ pub enum RepositoryAccessError {
 }
 
 /// A token is passed only between trusted application components.
-pub struct RepositoryAccessToken(String);
+pub struct RepositoryAccessToken {
+    access: String,
+    renewal: Option<RepositoryTokenRenewal>,
+}
+
+pub struct RepositoryTokenRenewal {
+    refresh: String,
+    expires_at: i64,
+}
+
+impl RepositoryTokenRenewal {
+    pub fn secret(&self) -> &str {
+        &self.refresh
+    }
+
+    pub fn expires_at(&self) -> i64 {
+        self.expires_at
+    }
+}
+
 impl RepositoryAccessToken {
     pub fn new(value: String) -> Result<Self, RepositoryAccessError> {
         if value.is_empty() || value.len() > 4096 || value.chars().any(char::is_control) {
             return Err(RepositoryAccessError::InvalidLogin);
         }
-        Ok(Self(value))
+        Ok(Self {
+            access: value,
+            renewal: None,
+        })
+    }
+
+    pub fn renewable(
+        access: String,
+        refresh: String,
+        expires_at: i64,
+    ) -> Result<Self, RepositoryAccessError> {
+        if expires_at <= 0 {
+            return Err(RepositoryAccessError::InvalidLogin);
+        }
+        let mut token = Self::new(access)?;
+        token.renewal = Some(RepositoryTokenRenewal {
+            refresh: Self::new(refresh)?.access,
+            expires_at,
+        });
+        Ok(token)
     }
     pub fn secret(&self) -> &str {
-        &self.0
+        &self.access
+    }
+
+    pub fn renewal(&self) -> Option<&RepositoryTokenRenewal> {
+        self.renewal.as_ref()
     }
 }
 
@@ -191,6 +233,14 @@ pub trait RepositoryAccessStore: Send + Sync {
         &self,
         actor: RepositoryActor,
     ) -> Result<Option<RepositoryCredential>, RepositoryAccessError>;
+    /// Rotate the same authorization only if the session, epoch and previous token still match.
+    async fn rotate_repository_token(
+        &self,
+        actor: RepositoryActor,
+        epoch: i64,
+        previous: &EncryptedRepositoryToken,
+        next: EncryptedRepositoryToken,
+    ) -> Result<(), RepositoryAccessError>;
     async fn delete_repository_credential(
         &self,
         actor: RepositoryActor,
@@ -209,6 +259,12 @@ pub trait RepositoryAccessProvider: Send + Sync {
         code: &str,
         verifier: &str,
     ) -> Result<(RepositoryAccessToken, VerifiedIdentity), RepositoryAccessError>;
+    async fn refresh(
+        &self,
+        _renewal: &RepositoryTokenRenewal,
+    ) -> Result<RepositoryAccessToken, RepositoryAccessError> {
+        Err(RepositoryAccessError::ProviderUnauthorized)
+    }
     async fn primary_email(
         &self,
         token: &RepositoryAccessToken,

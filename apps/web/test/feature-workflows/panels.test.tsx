@@ -108,6 +108,54 @@ const reviewedDiff: FeatureDiff = {
   patchDigest: reviewedFeature.review!.patchDigest,
 }
 
+describe("architecture preparation", () => {
+  const preparing: Feature = {
+    ...feature,
+    feature: { ...feature.feature, stage: "architecture" },
+    architecture: undefined,
+  }
+
+  it("distinguishes a confirmed brief and in-progress generation from an unapproved brief", () => {
+    const active = render(preparing)
+    expect(active).toContain("Product brief approved")
+    expect(active).toContain("Preparing the architecture proposal")
+    expect(active).not.toContain("after the product brief is approved")
+
+    const waiting = render(
+      {
+        ...preparing,
+        feature: { ...preparing.feature, stage: "scope" },
+        scope: { ...feature.scope!, approvedAt: null },
+      },
+      { viewStage: "architecture" }
+    )
+    expect(waiting).toContain("after the product brief is approved")
+    expect(waiting).not.toContain("Preparing the architecture proposal")
+  })
+
+  it("offers recovery when architecture could not start or was interrupted", () => {
+    const notStarted = render({ ...preparing, canContinue: true })
+    expect(notStarted).toContain("Architecture preparation has not started")
+    expect(notStarted).not.toContain("Preparing the architecture proposal")
+
+    const interrupted = render({
+      ...preparing,
+      attempts: [
+        {
+          id: "architecture-attempt",
+          title: "Architecture",
+          assignedModel: "model",
+          role: "architecture",
+          status: "interrupted",
+          canResume: true,
+        },
+      ],
+    })
+    expect(interrupted).toContain("Architecture preparation was interrupted")
+    expect(interrupted).not.toContain("Preparing the architecture proposal")
+  })
+})
+
 describe("feature result actions", () => {
   it("keeps reconciliation available for a changed diff and disables it when commands are unavailable", () => {
     const value = { ...feature, delivery: receipt }

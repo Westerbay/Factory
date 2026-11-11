@@ -302,6 +302,35 @@ impl RepositoryAccessStore for PgIdentityStore {
         })).await
     }
 
+    async fn rotate_repository_token(
+        &self,
+        actor: RepositoryActor,
+        epoch: i64,
+        previous: &EncryptedRepositoryToken,
+        next: EncryptedRepositoryToken,
+    ) -> Result<(), AccessError> {
+        if !valid_actor(actor)
+            || epoch <= 0
+            || !valid_text(&next.key_id, 128)
+            || next.nonce.len() != 12
+            || !(16..=8192).contains(&next.ciphertext.len())
+        {
+            return Err(AccessError::InvalidInput);
+        }
+        let previous = previous.clone();
+        with_connection(&self.pool, || AccessError::Unavailable, |connection| Box::pin(async move {
+            let mut tx = connection.begin().await.map_err(unavailable)?;
+            authorize(&mut tx, actor).await?;
+            check_epoch(&mut tx, actor.actor.user_id, epoch).await?;
+            let result = sqlx::query("UPDATE factory_identity.github_credentials SET key_id=$5,nonce=$6,ciphertext=$7,updated_at=clock_timestamp() WHERE user_id=$1 AND authorization_epoch=$2 AND key_id=$3 AND nonce=$4")
+                .bind(actor.actor.user_id).bind(epoch).bind(previous.key_id).bind(previous.nonce)
+                .bind(next.key_id).bind(next.nonce).bind(next.ciphertext)
+                .execute(&mut *tx).await.map_err(unavailable)?;
+            if result.rows_affected() != 1 { return Err(AccessError::Conflict); }
+            tx.commit().await.map_err(unavailable)
+        })).await
+    }
+
     async fn delete_repository_credential(
         &self,
         actor: RepositoryActor,

@@ -16,13 +16,17 @@ export type SessionState =
       verification?: "offline" | "unavailable"
     }
 
+export type SessionChange = "invalidate" | "recheck"
+
 type SessionDependencies = {
   read: typeof readSession
   revoke: typeof revokeSession
   clearPrivateData: () => void
-  announceChange: () => void
+  announceChange: (change: SessionChange) => void
   online: () => boolean
 }
+
+const verificationRetryDelays = [750, 2_000, 5_000]
 
 export class SessionController {
   private state: SessionState = { status: "checking" }
@@ -31,6 +35,7 @@ export class SessionController {
   private request?: AbortController
   private pendingRefresh?: Promise<void>
   private expiry?: ReturnType<typeof setTimeout>
+  private retry?: ReturnType<typeof setTimeout>
   private lastUserId?: string
   private pendingLogout?: string
   private scope = 0
@@ -59,6 +64,7 @@ export class SessionController {
 
   private cancel(clearExpiry = true) {
     this.generation++
+    clearTimeout(this.retry)
     this.request?.abort()
     this.pendingRefresh = undefined
     if (clearExpiry) clearTimeout(this.expiry)
@@ -75,7 +81,7 @@ export class SessionController {
 
   authorizationFailed() {
     this.invalidate()
-    this.dependencies.announceChange()
+    this.dependencies.announceChange("invalidate")
   }
 
   async invalidateRemote(): Promise<void> {
@@ -93,8 +99,15 @@ export class SessionController {
     } else this.invalidate(status)
   }
 
-  // A received invalidation must never echo, including its verification result.
-  async refresh(source: "local" | "remote" = "local"): Promise<void> {
+  // Received signals must never echo, including their verification results.
+  refresh(source: "local" | "remote" = "local"): Promise<void> {
+    return this.recheck(source, 0)
+  }
+
+  private async recheck(
+    source: "local" | "remote",
+    retryIndex: number
+  ): Promise<void> {
     if (this.pendingLogout) return
     if (
       this.state.status === "active" &&
@@ -107,14 +120,19 @@ export class SessionController {
       return
     }
     if (this.pendingRefresh) return this.pendingRefresh
-    const background = source === "local" && this.state.status === "active"
-    // A local recheck leaves the verified session and its fixed expiry intact.
+    const background = this.state.status === "active"
+    // A background recheck leaves the verified session and its fixed expiry intact.
     this.cancel(!background)
     const generation = this.generation
     this.request = new AbortController()
-    if (!background && this.state.status !== "checking")
+    if (!background && retryIndex === 0 && this.state.status !== "checking")
       this.setState({ status: "checking" })
-    const pending = this.verify(source, generation, this.request.signal)
+    const pending = this.verify(
+      source,
+      generation,
+      this.request.signal,
+      retryIndex
+    )
     this.pendingRefresh = pending
     try {
       await pending
@@ -126,7 +144,8 @@ export class SessionController {
   private async verify(
     source: "local" | "remote",
     generation: number,
-    signal: AbortSignal
+    signal: AbortSignal,
+    retryIndex: number
   ): Promise<void> {
     try {
       const session = await this.dependencies.read(signal)
@@ -145,9 +164,12 @@ export class SessionController {
         (this.scopeIdentity && !sameScope)
       )
         this.dependencies.clearPrivateData()
-      if (session.user.id !== this.lastUserId) {
-        this.lastUserId = session.user.id
-        if (source === "local") this.dependencies.announceChange()
+      const previousUser = this.lastUserId
+      this.lastUserId = session.user.id
+      if (source === "local" && session.user.id !== previousUser) {
+        this.dependencies.announceChange(
+          previousUser ? "invalidate" : "recheck"
+        )
       }
       if (!sameScope) {
         this.scope++
@@ -181,9 +203,14 @@ export class SessionController {
         else this.invalidate()
         return
       }
-      this.verificationFailed(
-        this.dependencies.online() ? "unavailable" : "offline"
-      )
+      const status = this.dependencies.online() ? "unavailable" : "offline"
+      this.verificationFailed(status)
+      const delay = verificationRetryDelays[retryIndex]
+      if (status === "unavailable" && delay !== undefined) {
+        this.retry = setTimeout(() => {
+          void this.recheck(source, retryIndex + 1)
+        }, delay)
+      }
     }
   }
 
@@ -209,7 +236,7 @@ export class SessionController {
     }
     this.pendingLogout = undefined
     this.invalidate()
-    this.dependencies.announceChange()
+    this.dependencies.announceChange("invalidate")
   }
 
   dispose() {
