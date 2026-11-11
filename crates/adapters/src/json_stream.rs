@@ -14,6 +14,7 @@ pub(crate) struct JsonStream {
     input: ProcessInput,
     output: ProcessOutput,
     bytes: Vec<u8>,
+    read_failure: Option<&'static str>,
 }
 
 impl JsonStream {
@@ -22,6 +23,7 @@ impl JsonStream {
             input,
             output,
             bytes: Vec::new(),
+            read_failure: None,
         }
     }
 
@@ -48,17 +50,25 @@ impl JsonStream {
                 if bytes.iter().all(u8::is_ascii_whitespace) {
                     continue;
                 }
-                return parse(&bytes);
+                return parse(&bytes).inspect_err(|_| {
+                    self.read_failure = Some("invalid_json_frame");
+                });
             }
-            let chunk = self
-                .output
-                .next()
-                .await
-                .ok_or(ExecutionError::Unavailable)?
-                .map_err(|_| ExecutionError::Unavailable)?;
+            let chunk = match self.output.next().await {
+                Some(Ok(chunk)) => chunk,
+                Some(Err(_)) => {
+                    self.read_failure = Some("output_stream_error");
+                    return Err(ExecutionError::Unavailable);
+                }
+                None => {
+                    self.read_failure = Some("unexpected_eof");
+                    return Err(ExecutionError::Unavailable);
+                }
+            };
             match chunk {
                 LogOutput::StdOut { message } | LogOutput::Console { message } => {
                     if self.bytes.len() + message.len() > MAX_FRAME {
+                        self.read_failure = Some("output_frame_limit");
                         return Err(ExecutionError::Protocol);
                     }
                     self.bytes.extend_from_slice(&message);
@@ -67,12 +77,20 @@ impl JsonStream {
                 LogOutput::StdErr { message } => {
                     discarded_stderr = discarded_stderr.saturating_add(message.len());
                     if discarded_stderr > MAX_FRAME {
+                        self.read_failure = Some("stderr_limit");
                         return Err(ExecutionError::Protocol);
                     }
                 }
-                _ => return Err(ExecutionError::Protocol),
+                _ => {
+                    self.read_failure = Some("unexpected_output_stream");
+                    return Err(ExecutionError::Protocol);
+                }
             }
         }
+    }
+
+    pub(crate) fn read_failure(&self) -> Option<&'static str> {
+        self.read_failure
     }
 
     pub(crate) async fn close(mut self) -> Result<(), ExecutionError> {

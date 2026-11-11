@@ -5,6 +5,7 @@ use crate::environments::{
     feature_execution::WorkerExit,
     process::{DockerProcess, FixedProcess, ProcessStartError},
 };
+use crate::execution_diagnostics::ExecutionDiagnostics;
 use crate::projects::{DockerProjectRuntime, ProjectDirectory};
 use async_trait::async_trait;
 use factory_core::{
@@ -190,7 +191,7 @@ impl ExecutionRuntime for CodexExecutionAdapter {
                 input: input.to_owned(),
                 cwd,
                 thread: provider_thread.map(str::to_owned),
-                scoped: false,
+                attempt_id: None,
             },
             async move {
                 runtime
@@ -215,7 +216,7 @@ pub(crate) fn scoped_session(
             input: request.input.clone(),
             cwd: "/workspace".to_owned(),
             thread: None,
-            scoped: true,
+            attempt_id: Some(request.workspace.attempt_id),
         },
         exit.finish(),
     )
@@ -227,7 +228,7 @@ struct SessionStart {
     input: String,
     cwd: String,
     thread: Option<String>,
-    scoped: bool,
+    attempt_id: Option<Uuid>,
 }
 
 fn spawn_session(
@@ -247,15 +248,20 @@ fn spawn_session(
             start.input,
         )
         .with_cwd(start.cwd);
-        worker.scoped = start.scoped;
-        let result = worker.run(start.thread).await;
-        let terminal = match (result, exit.await) {
+        worker.scoped = start.attempt_id.is_some();
+        worker.diagnostics = ExecutionDiagnostics::new("codex", start.attempt_id);
+        let scoped = worker.scoped;
+        let (result, diagnostics) = worker.finish(start.thread).await;
+        let exit = exit.await;
+        let protocol_error = result.as_ref().err().copied();
+        let terminal = match (result, exit) {
             (Ok(event), Ok(0)) => event,
             // An isolated worker with a proven stop cannot mutate a checkout
             // later, even when its provider exited without a valid result.
-            (_, Ok(_) | Err(ExecutionError::Unavailable)) if start.scoped => ExecutionEvent::Failed,
+            (_, Ok(_) | Err(ExecutionError::Unavailable)) if scoped => ExecutionEvent::Failed,
             _ => ExecutionEvent::Uncertain,
         };
+        diagnostics.report(&terminal, protocol_error, None, exit);
         let _ = emit(&sender, terminal).await;
     });
     ExecutionSession {
@@ -355,6 +361,7 @@ struct Worker {
     outcome: Option<ExecutionEvent>,
     stopping: bool,
     scoped: bool,
+    diagnostics: ExecutionDiagnostics,
 }
 struct Child {
     parent: String,
@@ -386,14 +393,41 @@ impl Worker {
             outcome: None,
             stopping: false,
             scoped: false,
+            diagnostics: ExecutionDiagnostics::new("codex", None),
         }
     }
     fn with_cwd(mut self, cwd: String) -> Self {
         self.cwd = cwd;
         self
     }
-    async fn run(mut self, previous: Option<String>) -> Result<ExecutionEvent, ExecutionError> {
+    #[cfg(test)]
+    async fn run(self, previous: Option<String>) -> Result<ExecutionEvent, ExecutionError> {
+        self.finish(previous).await.0
+    }
+
+    async fn finish(
+        mut self,
+        previous: Option<String>,
+    ) -> (Result<ExecutionEvent, ExecutionError>, ExecutionDiagnostics) {
+        let result = self.work(previous).await;
+        self.diagnostics.rpc_error = self.transport.rpc_error();
+        self.diagnostics.stream_error = self.transport.read_failure();
+        let result = match result {
+            Ok(event) => match self.transport.close().await {
+                Ok(()) => Ok(event),
+                Err(error) => {
+                    self.diagnostics.phase = "close_transport";
+                    Err(error)
+                }
+            },
+            Err(error) => Err(error),
+        };
+        (result, self.diagnostics)
+    }
+
+    async fn work(&mut self, previous: Option<String>) -> Result<ExecutionEvent, ExecutionError> {
         self.transport.initialize().await?;
+        self.diagnostics.phase = "open_thread";
         let requested_thread = previous.clone();
         let (method, mut params) = if let Some(id) = previous {
             ("thread/resume", json!({"threadId":id,"cwd":&self.cwd}))
@@ -432,15 +466,14 @@ impl Worker {
             )
             .await?;
         }
+        self.diagnostics.phase = "start_turn";
         let mut deadline: Option<tokio::time::Instant> = None;
         loop {
             if self.outcome.is_some()
                 && self.children.values().all(|child| child.done)
                 && self.requests.is_empty()
             {
-                let event = self.outcome.take().ok_or(ExecutionError::Protocol)?;
-                self.transport.close().await?;
-                return Ok(event);
+                return self.outcome.take().ok_or(ExecutionError::Protocol);
             }
             if self.outcome.is_some()
                 && self.children.values().any(|child| !child.done)
@@ -455,6 +488,7 @@ impl Worker {
                         Command::Begin(reply) => {
                             let result=self.begin().await; let failed=result.is_err(); let _=reply.send(result);
                             if failed { return Err(ExecutionError::Protocol); }
+                            self.diagnostics.phase = "run_turn";
                         }
                         Command::Answer(id,answers,reply) => {
                             let result=self.answer(id,answers).await; let failed=matches!(result,Err(ExecutionError::Unavailable|ExecutionError::Protocol)); let _=reply.send(result);
@@ -652,7 +686,11 @@ impl Worker {
                 }
                 self.outcome = Some(match params["turn"]["status"].as_str() {
                     Some("completed") => ExecutionEvent::Completed,
-                    Some("failed") => ExecutionEvent::Failed,
+                    Some("failed") => {
+                        self.diagnostics.result_subtype = Some("turn_failed");
+                        self.observe_provider_error(&params["turn"]["error"]);
+                        ExecutionEvent::Failed
+                    }
                     Some("interrupted") => ExecutionEvent::Interrupted,
                     _ => return Err(ExecutionError::Protocol),
                 });
@@ -701,11 +739,51 @@ impl Worker {
                 None => return Err(ExecutionError::Protocol),
             }
         }
-        if method == "error" || method == "thread/closed" {
+        if method == "error" {
+            self.diagnostics.result_subtype = Some("error_notification");
+            self.observe_provider_error(&params["error"]);
+            return Err(ExecutionError::Unavailable);
+        }
+        if method == "thread/closed" {
+            self.diagnostics.result_subtype = Some("thread_closed");
             return Err(ExecutionError::Unavailable);
         }
         Ok(())
     }
+
+    fn observe_provider_error(&mut self, error: &Value) {
+        let info = &error["codexErrorInfo"];
+        if let Some(code) = info.as_str() {
+            self.diagnostics.provider_error = Some(match code {
+                "contextWindowExceeded" => "contextWindowExceeded",
+                "usageLimitExceeded" => "usageLimitExceeded",
+                "badRequest" => "badRequest",
+                "unauthorized" => "unauthorized",
+                "sandboxError" => "sandboxError",
+                "internalServerError" => "internalServerError",
+                "serverOverloaded" => "serverOverloaded",
+                _ => "unknown",
+            });
+        } else if let Some(info) = info.as_object().filter(|info| info.len() == 1) {
+            for code in [
+                "httpConnectionFailed",
+                "responseStreamConnectionFailed",
+                "responseStreamDisconnected",
+                "responseTooManyFailedAttempts",
+            ] {
+                if let Some(detail) = info.get(code) {
+                    self.diagnostics.provider_error = Some(code);
+                    self.diagnostics.http_status = detail["httpStatusCode"]
+                        .as_u64()
+                        .filter(|status| (400..=599).contains(status))
+                        .map(|status| status as u16);
+                    return;
+                }
+            }
+            self.diagnostics.provider_error = Some("unknown");
+        }
+    }
+
     fn observe_children(&mut self, parent: &str, item: &Value) -> Result<(), ExecutionError> {
         if item["senderThreadId"].as_str() != Some(parent) {
             return Err(ExecutionError::Protocol);
@@ -944,6 +1022,46 @@ mod protocol_tests {
             worker.abort();
             let _ = worker.await;
         }
+    }
+
+    #[tokio::test]
+    async fn failed_turn_records_codex_error_code_and_excludes_provider_text() {
+        let (logs, _subscriber) =
+            crate::execution_diagnostics::test_support::CapturedLogs::capture();
+        let output = stream::empty::<Result<LogOutput, bollard::errors::Error>>();
+        let transport = Transport::new(Box::pin(tokio::io::sink()), Box::pin(output));
+        let (_command_tx, command_rx) = mpsc::channel(8);
+        let (event_tx, _event_rx) = mpsc::channel(8);
+        let mut worker = Worker::new(
+            transport,
+            command_rx,
+            event_tx,
+            "model".into(),
+            None,
+            "private prompt".into(),
+        );
+        worker.thread = "root".into();
+        worker.turn = Some("turn".into());
+        worker
+            .frame(json!({
+                "method": "turn/completed",
+                "params": {"threadId":"root", "turn": {
+                    "id":"turn", "status":"failed", "error": {
+                        "message":"private message", "additionalDetails":"private details",
+                        "codexErrorInfo":{"httpConnectionFailed":{"httpStatusCode":503}}
+                    }
+                }}
+            }))
+            .await
+            .unwrap();
+        let terminal = worker.outcome.take().unwrap();
+        assert_eq!(terminal, ExecutionEvent::Failed);
+        worker.diagnostics.report(&terminal, None, None, Ok(0));
+        let output = logs.text();
+        let record: Value = serde_json::from_str(output.trim()).unwrap();
+        assert_eq!(record["fields"]["provider_error"], "httpConnectionFailed");
+        assert_eq!(record["fields"]["http_status"], 503);
+        assert!(!output.contains("private"));
     }
 
     #[tokio::test]

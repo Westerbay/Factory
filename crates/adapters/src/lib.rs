@@ -6,6 +6,7 @@ pub mod codex_account;
 pub mod codex_execution;
 pub mod egress;
 pub mod environments;
+mod execution_diagnostics;
 pub mod feature_codec;
 pub mod identity;
 mod json_stream;

@@ -5,6 +5,7 @@ use crate::{
         feature_execution::WorkerExit,
         process::{ClaudeLaunch, DockerProcess, FixedProcess, ProcessStartError},
     },
+    execution_diagnostics::ExecutionDiagnostics,
     json_stream::JsonStream,
     projects::{DockerProjectRuntime, ProjectDirectory},
 };
@@ -169,19 +170,71 @@ fn spawn_session(
     tokio::spawn(async move {
         let mut worker = Worker::new(stream, receiver, sender.clone(), session, input);
         worker.scoped = scoped;
-        let (result, stream) = worker.run().await;
+        worker.diagnostics = ExecutionDiagnostics::new("claude", scoped.then_some(session));
+        let (result, stream, diagnostics) = worker.run().await;
         let closed = stream.close().await;
-        let terminal = match (result, closed, exit.await) {
+        let exit = exit.await;
+        let protocol_error = result.as_ref().err().copied();
+        let terminal = match (result, closed, exit) {
             (Ok(event), Ok(()), Ok(0)) => event,
             (_, _, Ok(_) | Err(ExecutionError::Unavailable)) if scoped => ExecutionEvent::Failed,
             _ => ExecutionEvent::Uncertain,
         };
+        diagnostics.report(&terminal, protocol_error, closed.err(), exit);
         let _ = emit(&sender, terminal).await;
     });
     ExecutionSession {
         control: Box::new(Control { commands }),
         output: Box::new(Output { events }),
     }
+}
+
+fn assistant_error(error: &Value) -> Option<&'static str> {
+    Some(match error.as_str()? {
+        "authentication_failed" => "authentication_failed",
+        "oauth_org_not_allowed" => "oauth_org_not_allowed",
+        "account_on_hold" => "account_on_hold",
+        "billing_error" => "billing_error",
+        "rate_limit" => "rate_limit",
+        "overloaded" => "overloaded",
+        "invalid_request" => "invalid_request",
+        "model_not_found" => "model_not_found",
+        "server_error" => "server_error",
+        "max_output_tokens" => "max_output_tokens",
+        "cloud_credential_error" => "cloud_credential_error",
+        _ => "unknown",
+    })
+}
+
+fn result_subtype(subtype: &Value) -> Option<&'static str> {
+    Some(match subtype.as_str()? {
+        "success" => "success",
+        "error_during_execution" => "error_during_execution",
+        "error_max_turns" => "error_max_turns",
+        "error_max_budget_usd" => "error_max_budget_usd",
+        "error_max_structured_output_retries" => "error_max_structured_output_retries",
+        _ => "unknown",
+    })
+}
+
+fn result_http_status(frame: &Value) -> Option<u16> {
+    // Claude may only expose the HTTP status in a free-text error. Extract the
+    // numeric prefix of its API error format and discard the entire message.
+    let status = |text: &str| {
+        let prefix = text.strip_prefix("API Error: ")?;
+        let code = prefix.split_once(' ').map_or(prefix, |(code, _)| code);
+        (code.len() == 3)
+            .then(|| code.parse::<u16>().ok())
+            .flatten()
+            .filter(|code| (400..=599).contains(code))
+    };
+    frame["errors"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .find_map(status)
+        .or_else(|| frame["result"].as_str().and_then(status))
 }
 
 async fn initialize(stream: &mut JsonStream) -> Result<Value, ExecutionError> {
@@ -344,6 +397,7 @@ struct Worker {
     requests: HashMap<Uuid, PendingQuestion>,
     scoped: bool,
     observed_model: Option<String>,
+    diagnostics: ExecutionDiagnostics,
 }
 struct PendingQuestion {
     native_id: String,
@@ -374,14 +428,23 @@ impl Worker {
             requests: HashMap::new(),
             scoped: false,
             observed_model: None,
+            diagnostics: ExecutionDiagnostics::new("claude", None),
         }
     }
-    async fn run(mut self) -> (Result<ExecutionEvent, ExecutionError>, JsonStream) {
+    async fn run(
+        mut self,
+    ) -> (
+        Result<ExecutionEvent, ExecutionError>,
+        JsonStream,
+        ExecutionDiagnostics,
+    ) {
         let result = self.work().await;
-        (result, self.stream)
+        self.diagnostics.stream_error = self.stream.read_failure();
+        (result, self.stream, self.diagnostics)
     }
     async fn work(&mut self) -> Result<ExecutionEvent, ExecutionError> {
         initialize(&mut self.stream).await?;
+        self.diagnostics.phase = "start_turn";
         emit(
             &self.events,
             ExecutionEvent::ThreadReady {
@@ -400,6 +463,7 @@ impl Worker {
             }
             _ => return Err(ExecutionError::Unavailable),
         }
+        self.diagnostics.phase = "run_turn";
         loop {
             if self.result.is_some() && self.tasks.is_empty() {
                 return Ok(self.result.take().expect("result checked"));
@@ -519,6 +583,7 @@ impl Worker {
                 }
             }
             "assistant" if frame["parent_tool_use_id"].is_null() => {
+                self.diagnostics.provider_error = assistant_error(&frame["error"]);
                 self.observe_model(frame["message"].get("model")).await?;
                 // Claude can emit several assistant frames with the same message ID.
                 let item = text(&frame["uuid"], 512)?.to_owned();
@@ -547,18 +612,23 @@ impl Worker {
                 }
             }
             "result" => {
+                let succeeded = frame["subtype"] == "success" && frame["is_error"] == false;
+                self.diagnostics.result_subtype = result_subtype(&frame["subtype"]);
+                if succeeded {
+                    self.diagnostics.provider_error = None;
+                } else {
+                    self.diagnostics.http_status = result_http_status(&frame);
+                }
                 if !self.requests.is_empty() {
                     return Err(ExecutionError::Protocol);
                 }
-                self.result = Some(
-                    if frame["subtype"] == "success" && frame["is_error"] == false {
-                        ExecutionEvent::Completed
-                    } else if self.stopping {
-                        ExecutionEvent::Uncertain
-                    } else {
-                        ExecutionEvent::Failed
-                    },
-                );
+                self.result = Some(if succeeded {
+                    ExecutionEvent::Completed
+                } else if self.stopping {
+                    ExecutionEvent::Uncertain
+                } else {
+                    ExecutionEvent::Failed
+                });
             }
             "control_request" => self.question(&frame).await?,
             "user" => self.delivered(&frame).await?,
@@ -736,6 +806,61 @@ mod tests {
         .unwrap();
     }
 
+    #[tokio::test]
+    async fn failed_feature_logs_claude_diagnostics_without_private_output() {
+        let (logs, _subscriber) =
+            crate::execution_diagnostics::test_support::CapturedLogs::capture();
+        let attempt = Uuid::new_v4();
+        let (client, server) = tokio::io::duplex(65536);
+        let (output_tx, output_rx) = mpsc::channel(16);
+        let output = stream::unfold(output_rx, |mut rx| async move {
+            rx.recv().await.map(|value| (value, rx))
+        });
+        let mut session = spawn_session(
+            JsonStream::new(Box::pin(client), Box::pin(output)),
+            attempt,
+            "private fixture prompt".into(),
+            true,
+            async { Ok(1) },
+        );
+        let peer = tokio::spawn(async move {
+            let mut input = BufReader::new(server);
+            read_request(&mut input).await;
+            frame(&output_tx, json!({"type":"control_response","response":{"request_id":"factory-init","subtype":"success","response":{}}})).await;
+            read_request(&mut input).await;
+            output_tx
+                .send(Ok(LogOutput::StdErr {
+                    message: "private fixture stderr".into(),
+                }))
+                .await
+                .unwrap();
+            frame(&output_tx, json!({"type":"assistant","uuid":"frame","error":"rate_limit","message":{"content":[]}})).await;
+            frame(&output_tx, json!({"type":"result","subtype":"error_during_execution","is_error":true,"errors":["API Error: 429 private fixture detail"]})).await;
+            let mut tail = String::new();
+            assert_eq!(input.read_line(&mut tail).await.unwrap(), 0);
+        });
+        assert!(matches!(
+            session.output.next().await.unwrap(),
+            Some(ExecutionEvent::ThreadReady { .. })
+        ));
+        session.control.begin_turn().await.unwrap();
+        assert_eq!(
+            session.output.next().await.unwrap(),
+            Some(ExecutionEvent::Failed)
+        );
+        peer.await.unwrap();
+        let output = logs.text();
+        let record: Value = serde_json::from_str(output.trim()).unwrap();
+        let fields = &record["fields"];
+        assert_eq!(fields["event"], "agent.execution.failed");
+        assert_eq!(fields["attempt_id"], attempt.to_string());
+        assert_eq!(fields["provider_error"], "rate_limit");
+        assert_eq!(fields["result_subtype"], "error_during_execution");
+        assert_eq!(fields["http_status"], 429);
+        assert_eq!(fields["exit_code"], 1);
+        assert!(!output.contains("private fixture"));
+    }
+
     #[test]
     fn catalog_rejects_invalid_models_and_deduplicates() {
         let models = parse_models(&json!({"models":[{"value":"sonnet","displayName":"Sonnet"},{"value":"sonnet","displayName":"Duplicate"},{"value":"opus[1m]","displayName":"Opus","resolvedModel":"claude-opus-5-5","supportedEffortLevels":["low","high","max"]}]})).unwrap();
@@ -812,7 +937,7 @@ mod tests {
                 .is_err()
         );
         release.send(()).unwrap();
-        let (outcome, _stream) = worker.await.unwrap();
+        let (outcome, _stream, _) = worker.await.unwrap();
         assert_eq!(outcome.unwrap(), ExecutionEvent::Completed);
         peer.await.unwrap();
     }
@@ -889,7 +1014,7 @@ mod tests {
             event_rx.recv().await,
             Some(ExecutionEvent::ResponseDelivered { request_id })
         );
-        let (outcome, _stream) = worker.await.unwrap();
+        let (outcome, _stream, _) = worker.await.unwrap();
         assert_eq!(outcome.unwrap(), ExecutionEvent::Completed);
         peer.await.unwrap();
     }
@@ -940,7 +1065,7 @@ mod tests {
                 .is_err()
         );
         release.send(()).unwrap();
-        let (outcome, _stream) = worker.await.unwrap();
+        let (outcome, _stream, _) = worker.await.unwrap();
         assert!(outcome.is_err());
         peer.await.unwrap();
     }
