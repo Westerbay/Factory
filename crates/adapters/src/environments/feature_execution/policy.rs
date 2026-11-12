@@ -86,10 +86,7 @@ impl WorkerIdentity {
                 Role::Check => None,
             },
             readonly: role == Role::Prepare || workspace.access == WorkspaceAccess::ReadOnly,
-            tooling: format!(
-                ".factory/features/{}/{}/tooling",
-                project.id, workspace.feature_id
-            ),
+            tooling: format!(".factory/features/{}/.tooling", project.id),
             role,
         })
     }
