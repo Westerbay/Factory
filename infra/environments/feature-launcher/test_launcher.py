@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from launcher import (
     PROVIDERS,
+    REPOSITORY_HTTPS,
     WORKSPACE_HTTPS,
     access_only,
     checkout_proof,
@@ -31,6 +32,17 @@ class ConnectTargetTest(unittest.TestCase):
         )
         for _, _, provider_hosts in PROVIDERS.values():
             self.assertLessEqual(set(provider_hosts + WORKSPACE_HTTPS), set(proxy_hosts))
+
+    def test_repository_downloads_use_the_setup_relay(self):
+        squid = Path(__file__).resolve().parents[2] / "egress/squid.conf"
+        allowed = set()
+        for line in squid.read_text().splitlines():
+            if line.startswith(("acl providers dstdomain -n ", "acl tooling dstdomain -n ")):
+                allowed.update(line.split()[4:])
+        self.assertLessEqual(set(REPOSITORY_HTTPS), allowed)
+        for _, _, provider_hosts in PROVIDERS.values():
+            self.assertTrue(set(REPOSITORY_HTTPS).isdisjoint(provider_hosts))
+            self.assertNotIn("static.rust-lang.org", provider_hosts + WORKSPACE_HTTPS)
 
     def test_allows_exact_provider_and_workspace_hosts(self):
         for _, _, provider_hosts in PROVIDERS.values():

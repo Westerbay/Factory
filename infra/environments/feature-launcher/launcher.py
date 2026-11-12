@@ -21,6 +21,13 @@ WORKSPACE_HTTPS = (
     "github.com", "api.github.com", "raw.githubusercontent.com", "codeload.github.com",
     "registry.npmjs.org",
 )
+REPOSITORY_HTTPS = (
+    "github.com", "api.github.com", "raw.githubusercontent.com", "codeload.github.com",
+    "release-assets.githubusercontent.com", "registry.npmjs.org", "nodejs.org", "mise-versions.jdx.dev",
+    "index.crates.io", "static.crates.io", "static.rust-lang.org", "pypi.org",
+    "files.pythonhosted.org", "api.adoptium.net", "go.dev", "dl.google.com",
+    "cache.ruby-lang.org", "repo.maven.apache.org", "services.gradle.org", "downloads.gradle.org",
+)
 GITHUB_READ = re.compile(
     rb"FACTORY-GIT git-upload-pack '/?([A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}\.git)'\r\n"
 )
@@ -207,14 +214,14 @@ def serve(listener, data, hosts):
             with connection, connection.makefile("rb", buffering=0) as request:
                 connection.settimeout(10)
                 line = request.readline(512)
-                if line == b"FACTORY-AUTH\r\n":
+                if data is not None and line == b"FACTORY-AUTH\r\n":
                     with auth_lock:
                         value = bytes(data)
                         data.clear()
                         auth_served.set()
                     connection.sendall(len(value).to_bytes(4, "big") + value)
                     return
-                if line.startswith(b"FACTORY-GIT "):
+                if data is not None and line.startswith(b"FACTORY-GIT "):
                     github_read(connection, line)
                     return
                 authority = connect_target(line, request, hosts)
@@ -238,7 +245,7 @@ def serve(listener, data, hosts):
     expires = time.monotonic() + 86400
     auth_expires = time.monotonic() + 35
     while time.monotonic() < expires:
-        if not auth_served.is_set() and time.monotonic() >= auth_expires:
+        if data is not None and not auth_served.is_set() and time.monotonic() >= auth_expires:
             return
         readable, _, _ = select.select([listener, sys.stdin], [], [], 1)
         if not readable:
@@ -255,10 +262,12 @@ def serve(listener, data, hosts):
 def relay_main(attempt, provider):
     if str(uuid.UUID(attempt)) != attempt or uuid.UUID(attempt).int == 0:
         return 1
+    if provider == "repository":
+        attempt += "-repository"
     with socket.socket(socket.AF_UNIX) as listener:
         home = os.open("/home/factory", DIRECTORY)
         try:
-            data = bytearray(credential(home, provider))
+            data = None if provider == "repository" else bytearray(credential(home, provider))
             factory = owned_directory(home, ".factory", create=True)
             try:
                 relays = owned_directory(factory, "feature-relays", create=True)
@@ -275,7 +284,8 @@ def relay_main(attempt, provider):
                 listener.listen(16)
                 info = os.fstat(private)
                 print(f"ready {info.st_dev}:{info.st_ino}", flush=True)
-                serve(listener, data, PROVIDERS[provider][2] + WORKSPACE_HTTPS)
+                hosts = REPOSITORY_HTTPS if data is None else PROVIDERS[provider][2] + WORKSPACE_HTTPS
+                serve(listener, data, hosts)
             finally:
                 try:
                     os.unlink("relay.sock", dir_fd=private)
@@ -389,6 +399,16 @@ def serve_loop(listener):
         threading.Thread(target=proxy, args=(connection,), daemon=True).start()
 
 
+def repository_main(*command):
+    with socket.socket(socket.AF_INET) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(16)
+        threading.Thread(target=serve_loop, args=(listener,), daemon=True).start()
+        proxy = f"http://127.0.0.1:{listener.getsockname()[1]}"
+        env = dict(os.environ, HTTP_PROXY=proxy, HTTPS_PROXY=proxy, http_proxy=proxy, https_proxy=proxy)
+        return subprocess.call(command, env=env)
+
+
 def worker_main(provider, git_ssh_source, *args):
     os.umask(0o077)
     seed_credentials(provider)
@@ -419,6 +439,7 @@ if __name__ == "__main__":
         role, *args = sys.argv[1:]
         sys.exit({
             "relay": relay_main, "worker": worker_main, "proof": proof_main, "guard": guarded_main,
+            "repository": repository_main,
         }[role](*args))
     except (OSError, ValueError, KeyError, TypeError):
         sys.exit(1)

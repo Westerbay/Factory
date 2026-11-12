@@ -96,6 +96,8 @@ pub fn validate_answers(
 pub enum ExecutionError {
     #[error("Execution is unavailable before a process was started")]
     PreflightUnavailable,
+    #[error("Factory could not prepare the repository environment ({0})")]
+    RepositoryPreparationFailed(&'static str),
     #[error("Execution is unavailable")]
     Unavailable,
     #[error("Execution protocol failed")]

@@ -1,5 +1,5 @@
 use super::super::policy::{empty, labels};
-use super::CHECKOUT;
+use super::{CHECKOUT, TOOLING};
 use bollard::models::ContainerCreateBody;
 use factory_core::{
     conversations::execution::ExecutionError,
@@ -17,10 +17,11 @@ const FEATURE: &str = "io.factory.feature.id";
 const PROJECT: &str = "io.factory.feature.project";
 const GENERATION: &str = "io.factory.feature.generation";
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Role {
     Agent,
     Check,
+    Prepare,
 }
 
 impl Role {
@@ -28,6 +29,7 @@ impl Role {
         match self {
             Self::Agent => "agent",
             Self::Check => "check",
+            Self::Prepare => "prepare",
         }
     }
 }
@@ -37,7 +39,9 @@ pub(super) struct WorkerIdentity {
     labels: HashMap<String, String>,
     pub(super) checkout: String,
     relay: Option<String>,
-    readonly: bool,
+    pub(super) readonly: bool,
+    pub(super) tooling: String,
+    role: Role,
 }
 
 impl WorkerIdentity {
@@ -73,9 +77,20 @@ impl WorkerIdentity {
                 ".factory/features/{}/{}/attempts/{}/checkout",
                 project.id, workspace.feature_id, workspace.attempt_id
             ),
-            relay: matches!(role, Role::Agent)
-                .then(|| format!(".factory/feature-relays/{}", workspace.attempt_id)),
-            readonly: workspace.access == WorkspaceAccess::ReadOnly,
+            relay: match role {
+                Role::Agent => Some(format!(".factory/feature-relays/{}", workspace.attempt_id)),
+                Role::Prepare => Some(format!(
+                    ".factory/feature-relays/{}-repository",
+                    workspace.attempt_id
+                )),
+                Role::Check => None,
+            },
+            readonly: role == Role::Prepare || workspace.access == WorkspaceAccess::ReadOnly,
+            tooling: format!(
+                ".factory/features/{}/{}/tooling",
+                project.id, workspace.feature_id
+            ),
+            role,
         })
     }
 
@@ -85,7 +100,10 @@ impl WorkerIdentity {
         cwd: &str,
         command: Vec<String>,
     ) -> Result<ContainerCreateBody, ExecutionError> {
-        let mut mounts = vec![mount(env, CHECKOUT, &self.checkout, self.readonly)];
+        let mut mounts = vec![
+            mount(env, CHECKOUT, &self.checkout, self.readonly),
+            mount(env, TOOLING, &self.tooling, self.role != Role::Prepare),
+        ];
         let mut scratch_mib = 256;
         if let Some(relay) = &self.relay {
             mounts.push(mount(env, "/run/factory-relay", relay, true));
@@ -100,6 +118,7 @@ impl WorkerIdentity {
             "Env": ["HOME=/home/factory", "CODEX_HOME=/home/factory/.codex",
                 "CLAUDE_CONFIG_DIR=/home/factory/.claude", "GIT_CONFIG_NOSYSTEM=1",
                 "PATH=/usr/local/bin:/usr/bin:/bin",
+                format!("FACTORY_WORKSPACE_IMAGE_ID={}", env.image_id),
                 "NO_PROXY=localhost,127.0.0.1,::1", "no_proxy=localhost,127.0.0.1,::1"],
             "HostConfig": {
                 "NetworkMode": "none", "ReadonlyRootfs": true, "CapDrop": ["ALL"],
@@ -255,7 +274,7 @@ pub(super) fn verify_worker_owner(
     let labels = &value["Config"]["Labels"];
     let role = labels[ROLE]
         .as_str()
-        .filter(|s| matches!(*s, "agent" | "check"))
+        .filter(|s| matches!(*s, "agent" | "check" | "prepare"))
         .ok_or(EnvironmentError::OwnershipConflict)?;
     let attempt = labels[ATTEMPT]
         .as_str()

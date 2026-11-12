@@ -536,7 +536,11 @@ impl FeatureCoordinator {
                 .await
             {
                 Ok(result) => result.exit_code == 0,
-                Err(ExecutionError::PreflightUnavailable | ExecutionError::Invalid) => false,
+                Err(
+                    ExecutionError::PreflightUnavailable
+                    | ExecutionError::RepositoryPreparationFailed(_)
+                    | ExecutionError::Invalid,
+                ) => false,
                 Err(_) => return Err(FeatureError::ExecutionUncertain),
             }
         } else {

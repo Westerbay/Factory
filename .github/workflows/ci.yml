@@ -152,6 +152,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: Repository environment and relay tests
+        run: |
+          python3 -B -m unittest discover -s infra/environments -p test_repository_environment.py
+          python3 -B -m unittest discover -s infra/environments/feature-launcher
       - name: Environment integration and image preparation
         run: node scripts/environments/integration.mjs
       - name: Egress integration

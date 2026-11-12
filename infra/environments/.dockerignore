@@ -9,3 +9,4 @@
 !web-tools/package.json
 !web-tools/package-lock.json
 !web-tools/playwright
+!repository-environment.py
