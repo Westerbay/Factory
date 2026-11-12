@@ -224,6 +224,9 @@ Connection patterns were checked against the official
 - [Feature contracts](../crates/core/src/features/ports.rs) define the application-owned
   execution, Git, storage, and codec capabilities. Keep provider messages and concrete
   persistence out of workflow transitions.
+- The [feature API client](../apps/web/src/features/feature-workflows/api.ts) treats
+  workflow IDs as opaque hexadecimal GUIDs. Persisted revisions and review attempts
+  may use hash-derived IDs without standard UUID version or variant bits.
 - [ArtifactPreview](../apps/web/src/features/artifacts/artifact-preview.tsx) owns the
   shared isolated Mermaid and HTML presentation used by feature architecture and
   explicit conversation previews. Its labels come from the consuming interface.

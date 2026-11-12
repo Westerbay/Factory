@@ -55,6 +55,43 @@ describe("feature API", () => {
     await expect(api.list({}, signal)).rejects.toThrow()
   })
 
+  it("loads saved architecture and review attempts with hash-derived IDs", async () => {
+    const architectureId = "01234567-89ab-82cd-1ef0-123456789abc"
+    const reviewAttemptId = "98765432-10ab-e2cd-3ef0-abcdef012345"
+    const response: api.Feature = {
+      ...feature,
+      feature: { ...feature.feature, stage: "architecture" },
+      architecture: {
+        id: architectureId,
+        digest: "architecture-digest",
+        summary: "Approved scope translated into an architecture proposal.",
+        diagrams: [],
+        canApprove: true,
+      },
+      attempts: [
+        {
+          id: reviewAttemptId,
+          title: "Review architecture",
+          role: "architectureReview",
+          assignedModel: "codex",
+          status: "validated",
+          canResume: false,
+        },
+      ],
+    }
+    vi.spyOn(apiClient, "GET")
+      .mockResolvedValueOnce(ok(response))
+      .mockResolvedValueOnce(
+        ok({
+          ...response,
+          architecture: { ...response.architecture, id: "bad" },
+        })
+      )
+    const signal = new AbortController().signal
+    expect(await api.get(featureId, signal)).toEqual(response)
+    await expect(api.get(featureId, signal)).rejects.toThrow()
+  })
+
   it("creates with the caller's operation, account, locale and CSRF while preserving the conversation identity", async () => {
     const post = vi.spyOn(apiClient, "POST").mockResolvedValueOnce(ok(feature))
     const signal = new AbortController().signal

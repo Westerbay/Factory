@@ -23,7 +23,9 @@ export type FeatureResumeBody = components["schemas"]["FeatureResumeBody"]
 export type FeatureSnapshotBody = components["schemas"]["FeatureSnapshotBody"]
 export type FeatureTurnBody = components["schemas"]["FeatureTurnBody"]
 
-const id = z.uuid()
+// Feature revisions and review attempts can use persisted hash-derived IDs
+// without RFC UUID version or variant bits.
+const id = z.guid()
 const text = z.string()
 const stageSchema = z.enum([
   "scope",
