@@ -121,8 +121,9 @@ async fn isolated_workers_initialize_without_direct_network() {
         ] {
             let workspace = TaskWorkspace { feature_id, attempt_id: Uuid::new_v4(), base_oid: "a".repeat(40), access };
             let identity = WorkerIdentity::new(&env, &project, &workspace, env.generation, Role::Agent).unwrap();
+            let tooling = &identity.tooling;
             let setup = format!(r#"umask 077
-mkdir -p /home/factory/.codex /home/factory/.claude /home/factory/.ssh /home/factory/{}
+mkdir -p /home/factory/.codex /home/factory/.claude /home/factory/.ssh /home/factory/{tooling} /home/factory/{}
 printf '%s' '{{"auth_mode":"chatgpt","last_refresh":"2099-11-07T00:00:00Z","tokens":{{"id_token":"{fixture_jwt}","access_token":"{fixture_jwt}","refresh_token":"must-not-copy","account_id":"fixture-account"}}}}' >/home/factory/.codex/auth.json
 printf '%s' '{{"claudeAiOauth":{{"accessToken":"synthetic-fixture-not-a-real-key","refreshToken":"must-not-copy","expiresAt":4102444800000,"scopes":["user:inference","user:profile"],"subscriptionType":"max","rateLimitTier":"default_claude_max_5x"}}}}' >/home/factory/.claude/.credentials.json
 printf witness >/home/factory/.ssh/witness
@@ -137,7 +138,7 @@ python3 -c 'import json, os, sys; path=sys.argv[1]; info=os.stat(path); json.dum
             let request = FeatureRun { workspace: workspace.clone(), provider: provider.into(), model: model.into(), effort: None, input: "Fixture never begins a provider turn".into() };
             let provider = ScopedProvider::from_request(&request).unwrap();
             let relay = runtime.docker.create_exec(main_id, CreateExecOptions {
-                cmd: Some(relay_command(provider, workspace.attempt_id)), user: Some("10000:10000".to_owned()),
+                cmd: Some(relay_command(RelayAccess::Provider(provider), workspace.attempt_id)), user: Some("10000:10000".to_owned()),
                 attach_stdin:Some(true), attach_stdout:Some(true), attach_stderr:Some(true), ..Default::default()
             }).await.unwrap();
             let StartExecResults::Attached { input, mut output } = runtime.docker.start_exec(&relay.id, None).await.unwrap() else {
@@ -149,7 +150,7 @@ python3 -c 'import json, os, sys; path=sys.argv[1]; info=os.stat(path); json.dum
                 panic!("relay fixture did not provide mount identity");
             };
             let relay_identity = relay_proof(&message).unwrap().to_owned();
-            let body = identity.body(&env, match provider { ScopedProvider::Codex => "/workspace", ScopedProvider::Claude => CHECKOUT }, provider.command(&request)).unwrap();
+            let body = identity.body(&env, match provider { ScopedProvider::Codex => "/workspace", ScopedProvider::Claude => CHECKOUT }, prepared_command(identity.readonly, provider.command(&request))).unwrap();
             let (process, exit) = runtime.create_feature_worker(&env, &identity, body, Some((DockerProcess { id: relay.id, input, output }, relay_identity)), proof).await.unwrap();
             let process_receipt = process.id.clone();
             let mut session = match provider {
@@ -301,6 +302,128 @@ except OSError as error:
             }
         }
     }).catch_unwind().await;
+    runtime.stop_feature_workers(&env).await.unwrap();
+    for id in runtime.list_feature_worker_ids(&env).await.unwrap() {
+        if let Some(value) = runtime.inspect_feature_worker(&id).await.unwrap() {
+            verify_worker_owner(&env, &value, &id).unwrap();
+            runtime.remove_feature_worker(&id).await.unwrap();
+        }
+    }
+    fixture::cleanup(&runtime, &[&env]).await;
+    outcome.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "explicit local Docker fixture: prepared images and access to public Node and npm downloads"]
+async fn repository_runtime_is_shared_by_agent_and_offline_check() {
+    let (metadata, env, project) = environment();
+    let egress = fixture::egress_metadata(metadata.installation_id());
+    let runtime =
+        Arc::new(DockerEnvironmentRuntime::connect(metadata, egress, Arc::new(|| true)).unwrap());
+    let outcome = std::panic::AssertUnwindSafe(async {
+        runtime.create_volume(&env).await.unwrap();
+        runtime.egress.prepare_user_network(&env).await.expect("fixture egress");
+        if let Err(error) = runtime.start(&env).await {
+            let state = runtime.container(&env).await.unwrap().map(|container| container["State"].clone());
+            panic!("fixture workspace start: {error:?}; container state: {state:?}");
+        }
+        let main = runtime.container(&env).await.unwrap().unwrap();
+        let main_id = inspect_id(&main).unwrap();
+        let feature = Uuid::new_v4();
+        let feature_runtime = DockerFeatureExecutionRuntime::new(Arc::clone(&runtime));
+        let workspace = TaskWorkspace {
+            feature_id: feature,
+            attempt_id: Uuid::new_v4(),
+            base_oid: "a".repeat(40),
+            access: WorkspaceAccess::Write,
+        };
+        let identity =
+            WorkerIdentity::new(&env, &project, &workspace, env.generation, Role::Agent).unwrap();
+        let tooling = &identity.tooling;
+        let setup = format!(
+            r#"umask 077
+checkout=/home/factory/{checkout}
+mkdir -p "$checkout" /home/factory/{tooling} /home/factory/.codex
+printf '%s' '{{"auth_mode":"chatgpt","last_refresh":"2099-11-07T00:00:00Z","tokens":{{"id_token":"{fixture_jwt}","access_token":"{fixture_jwt}","refresh_token":"unused","account_id":"fixture-account"}}}}' > /home/factory/.codex/auth.json
+printf '%s\n' 22.16.0 > "$checkout/.node-version"
+printf '%s\n' '{{"name":"node-fixture","version":"1.0.0","scripts":{{"test":"node test.cjs"}}}}' > "$checkout/package.json"
+printf '%s\n' '{{"name":"node-fixture","version":"1.0.0","lockfileVersion":3,"packages":{{"":{{"name":"node-fixture","version":"1.0.0"}}}}}}' > "$checkout/package-lock.json"
+printf '%s\n' 'require("node:assert/strict").equal(process.version, "v22.16.0")' > "$checkout/test.cjs"
+python3 -c 'import json, os, sys; path=sys.argv[1]; info=os.stat(path); json.dump(dict(device=info.st_dev, inode=info.st_ino), open(os.path.join(os.path.dirname(path), "ready"), "w"))' "$checkout"
+"#,
+            checkout = identity.checkout,
+            fixture_jwt = FIXTURE_JWT,
+        );
+        let (code, output) = execute(&runtime, main_id, &["/bin/sh", "-ec", &setup]).await;
+        assert_eq!(code, 0, "{output}");
+
+        let mut agent = feature_runtime.open_task(&env, &project, &FeatureRun {
+            workspace: workspace.clone(),
+            provider: "codex".into(),
+            model: "gpt-5.4".into(),
+            effort: None,
+            input: "Fixture stops before a provider turn".into(),
+        }).await.unwrap();
+        let ready = tokio::time::timeout(Duration::from_secs(35), agent.session.output.next()).await;
+        assert!(matches!(ready, Ok(Ok(Some(ExecutionEvent::ThreadReady { .. })))), "{ready:?}");
+        let (code, output) = execute(&runtime, &agent.process_receipt, &[
+            "/usr/bin/python3", "-I", "-c", r#"
+from pathlib import Path
+import os
+import subprocess
+for process in Path('/proc').glob('[0-9]*'):
+    try:
+        executable = os.readlink(process / 'exe')
+    except (FileNotFoundError, PermissionError):
+        continue
+    if executable != '/opt/codex/bin/codex':
+        continue
+    fields = (process / 'environ').read_bytes().split(b'\0')
+    path = next(field[5:].decode() for field in fields if field.startswith(b'PATH='))
+    assert subprocess.check_output(['node', '--version'], env={'PATH': path}).strip() == b'v22.16.0'
+    break
+else:
+    raise AssertionError('native agent process not found')
+"#,
+        ]).await;
+        assert_eq!(code, 0, "{output}");
+        drop(agent.session.control);
+        let terminal = tokio::time::timeout(Duration::from_secs(35), agent.session.output.next()).await;
+        assert!(terminal.is_ok(), "{terminal:?}");
+
+        // A different Feature in the same project reuses the prepared data with the proxy stopped.
+        let check = TaskWorkspace {
+            feature_id: Uuid::new_v4(),
+            attempt_id: Uuid::new_v4(),
+            ..workspace.clone()
+        };
+        let check_identity =
+            WorkerIdentity::new(&env, &project, &check, env.generation, Role::Check).unwrap();
+        let setup = format!(
+            r#"umask 077
+source=/home/factory/{}
+target=/home/factory/{}
+mkdir -p "$target"
+cp "$source/.node-version" "$source/package.json" "$source/package-lock.json" "$source/test.cjs" "$target"
+python3 -c 'import json, os, sys; path=sys.argv[1]; info=os.stat(path); json.dump(dict(device=info.st_dev, inode=info.st_ino), open(os.path.join(os.path.dirname(path), "ready"), "w"))' "$target"
+"#, identity.checkout, check_identity.checkout);
+        let (code, output) = execute(&runtime, main_id, &["/bin/sh", "-ec", &setup]).await;
+        assert_eq!(code, 0, "{output}");
+        fixture::stop_proxy(&runtime).await;
+        let output = feature_runtime
+            .run_check(&env, &project, &check, "npm test && node --version")
+            .await
+            .unwrap();
+        assert_eq!(output.exit_code, 0, "{:?}", output.output);
+        assert!(output.output.contains("v22.16.0"));
+        feature_runtime
+            .acknowledge_check(&env, &project, &check, env.generation)
+            .await
+            .unwrap();
+
+    })
+    .catch_unwind()
+    .await;
     runtime.stop_feature_workers(&env).await.unwrap();
     for id in runtime.list_feature_worker_ids(&env).await.unwrap() {
         if let Some(value) = runtime.inspect_feature_worker(&id).await.unwrap() {

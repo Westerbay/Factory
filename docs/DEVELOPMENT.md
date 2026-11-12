@@ -272,12 +272,34 @@ port `127.0.0.1:55432` and volume `factory-local_postgres_data`. The password
 Repeated setup preserves an initialized database. The explicit v4 upgrade is the
 supported migration to the current schema.
 
-Feature verification commands run in disposable copies of the reviewed checkout.
-They can use the prepared workspace image's tools and project files. The standard
-image includes Git, Python and the Web profile. Operators who need additional tools
-such as Cargo must include them in their prepared image. Verification has no package
-download access. A missing tool or offline dependency is reported as a failed or
-unavailable verification.
+Before a Feature agent or verification command starts, Factory prepares the checked-out
+repository's tool versions and dependencies in a disposable container. The workspace image
+provides Git, Node.js, npm, pnpm, Python, Java, Maven, Rust, native build tools and Playwright.
+Factory selects alternate versions from `.node-version`, `.nvmrc`, `.python-version`,
+`.java-version`, `.go-version`, `go.mod`, `.ruby-version`, the Rust toolchain file and the
+Node `packageManager` field. The root `.factory-tools.toml` file can declare a version
+that overrides detection, for example:
+
+```toml
+[tools]
+node = "22.16.0"
+java = "temurin-21"
+```
+
+The supported tool keys are `node`, `npm`, `pnpm`, `yarn`, `python`, `uv`, `java`,
+`maven`, `gradle`, `rust`, `go`, `ruby`, `jq` and `ripgrep`. Preparation downloads
+missing versions and dependencies from the installation's allowed public sources.
+It populates npm and pnpm lockfile caches, vendors dependencies in `Cargo.lock`, and
+installs wheels from `requirements.txt`. Node package lifecycle scripts are skipped
+during automatic installation. Other package managers, private registries, system
+packages outside the base image and project services may require an operator-prepared
+image or project-specific setup.
+
+Agent workers and disposable verification checkouts use the same prepared tools.
+Writable checkouts materialize Node dependencies from the cache. A read-only agent
+can make a writable copy to run an offline package install. Verification runs with
+loopback only. Preparation failures identify the step that blocked launch. The per-project
+cache is scoped to the tool and dependency declarations and the workspace image.
 
 Every target is checked against Docker project, owner and checkout labels, container,
 database identity, credentials, volume and exact loopback port before SQL. Docker is

@@ -227,6 +227,10 @@ Connection patterns were checked against the official
 - The [feature API client](../apps/web/src/features/feature-workflows/api.ts) treats
   workflow IDs as opaque hexadecimal GUIDs. Persisted revisions and review attempts
   may use hash-derived IDs without standard UUID version or variant bits.
+- The [repository environment launcher](../infra/environments/repository-environment.py)
+  applies one tool and dependency selection to the agent and verification containers.
+  The [Feature runtime](../crates/adapters/src/environments/feature_execution/mod.rs)
+  owns worker creation and mounts prepared data read-only for both consumers.
 - [ArtifactPreview](../apps/web/src/features/artifacts/artifact-preview.tsx) owns the
   shared isolated Mermaid and HTML presentation used by feature architecture and
   explicit conversation previews. Its labels come from the consuming interface.

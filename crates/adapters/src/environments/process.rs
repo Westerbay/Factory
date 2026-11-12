@@ -1,7 +1,7 @@
 //! Internal, fixed-command Docker streams shared by terminal and account adapters.
 use super::{
     DockerEnvironmentRuntime,
-    feature_execution::{ScopedProvider, proof_command, relay_command},
+    feature_execution::{RelayAccess, proof_command, relay_command},
     policy::{require_current_policy, validate_record},
 };
 use bollard::{
@@ -67,7 +67,7 @@ pub(crate) enum FixedProcess {
         checkout: String,
     },
     FeatureRelay {
-        provider: ScopedProvider,
+        access: RelayAccess,
         attempt: Uuid,
     },
     #[cfg(test)]
@@ -194,7 +194,7 @@ impl FixedProcess {
             ],
             Self::CodexAccount => vec!["/usr/local/bin/factory-auth-controller"],
             Self::FeatureProof { checkout } => return feature_helper(proof_command(checkout)),
-            Self::FeatureRelay { provider, attempt } => return feature_helper(relay_command(*provider, *attempt)),
+            Self::FeatureRelay { access, attempt } => return feature_helper(relay_command(*access, *attempt)),
             Self::ProjectController => vec!["/usr/local/bin/factory-project-controller"],
             // The fixed executable and fixed arguments are never selected by the browser.
             // A watchdog bounds orphan lifetime; it does not prove descendant cleanup.

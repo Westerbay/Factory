@@ -590,16 +590,26 @@ def clone(factory, documents, project_id, operation, full_name, name):
 
 
 
+def tooling_marker(project_id, operation):
+    return {'version': 1, 'project': project_id, 'operation': operation, 'kind': 'tooling'}
+
+
 def verify_feature_group(group, project_id, operation):
     for entry in os.listdir(group):
         try:
             pending = entry.startswith('.pending-')
-            feature_id = parse_uuid(entry.removeprefix('.pending-'))
             feature = directory(group, entry, private=True)
             try:
                 receipt = read_json_file(feature, 'feature', private=True)
             finally:
                 os.close(feature)
+            if entry == '.tooling' or pending and receipt == tooling_marker(project_id, operation):
+                if receipt != tooling_marker(project_id, operation):
+                    raise Problem('conflict')
+                if pending:
+                    parse_uuid(entry.removeprefix('.pending-'))
+                continue
+            feature_id = parse_uuid(entry.removeprefix('.pending-'))
             if (not isinstance(receipt, dict)
                     or set(receipt) != {'version', 'project', 'operation', 'feature', 'repository'}
                     or type(receipt['version']) is not int or receipt['version'] != 1
@@ -1541,6 +1551,8 @@ def execute_feature(request, root):
                                    {key: request[key] for key in ('base_oid', 'head_oid', 'patch_digest')})
         slot, attempt, base = record_attempt(stack, record, request, op == 'feature_prepare')
         if op == 'feature_prepare':
+            tooling = feature_record(group, '.tooling', 'feature', tooling_marker(project, operation), True)
+            os.close(tooling)
             prepare_feature_task(repo, slot, base)
             return 'ready'
         scope = request['scope']

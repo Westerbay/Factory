@@ -280,7 +280,9 @@ impl FeatureCoordinator {
             }
             Err(error) => {
                 let result = match error {
-                    ExecutionError::PreflightUnavailable | ExecutionError::Invalid => {
+                    ExecutionError::PreflightUnavailable
+                    | ExecutionError::RepositoryPreparationFailed(_)
+                    | ExecutionError::Invalid => {
                         self.fail_before_launch(task, &error.to_string()).await
                     }
                     ExecutionError::CleanupUncertain => {

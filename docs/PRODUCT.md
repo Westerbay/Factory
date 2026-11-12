@@ -187,9 +187,12 @@ repositories that the member's connected GitHub SSH key can read. For example,
 `git clone --depth 1 git@github.com:owner/repo.git /tmp/repo` reads a private repository
 without a separate login. Temporary research files are discarded after each attempt.
 The project checkout is writable for implementation and correction tasks.
-The workspace Web profile includes Node.js, npm, pnpm and Playwright with headless
-Chromium. Agents can install dependencies from the public npm registry, start an app
-on localhost in their workspace, and capture screenshots for verification.
+The workspace includes Node.js, Python, Java, Rust and Playwright with headless Chromium.
+Factory prepares supported tool versions and dependencies from the repository before
+starting Feature work. Agents and verification commands use that preparation, so a project
+can use a different tool version from the workspace default. A failed preparation is
+reported with the step that could not complete. Agents can start an app on localhost
+and capture screenshots for verification.
 
 The member first approves the current product brief, then the current architecture
 proposal and UML. A new product decision invalidates dependent architecture approval.

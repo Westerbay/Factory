@@ -32,8 +32,10 @@ use futures_util::StreamExt;
 use policy::{
     ROLE, Role, WorkerIdentity, inspect_id, verify_identity, verify_worker, verify_worker_owner,
 };
-use provider::guarded_command;
-pub(crate) use provider::{AGENT_INSTRUCTIONS, ScopedProvider, proof_command, relay_command};
+pub(crate) use provider::{
+    AGENT_INSTRUCTIONS, RelayAccess, ScopedProvider, proof_command, relay_command,
+};
+use provider::{guarded_command, prepare_command, prepared_command};
 use serde_json::Value;
 use std::{
     collections::HashMap,
@@ -49,6 +51,27 @@ use uuid::Uuid;
 const MAX_CHECK_OUTPUT: usize = 32 * 1024;
 const CHECK_TIMEOUT: Duration = Duration::from_secs(600);
 pub(crate) const CHECKOUT: &str = "/workspace/checkout";
+const TOOLING: &str = "/workspace/tooling";
+const PREPARATION_STEPS: &[&str] = &[
+    "configuration",
+    "node",
+    "npm",
+    "pnpm",
+    "yarn",
+    "rust",
+    "python",
+    "java",
+    "go",
+    "ruby",
+    "uv",
+    "maven",
+    "gradle",
+    "jq",
+    "ripgrep",
+    "python-dependencies",
+    "cargo-dependencies",
+    "node-dependencies",
+];
 
 type LaunchLocks = HashMap<Uuid, Weak<AsyncMutex<()>>>;
 static LAUNCH_LOCKS: OnceLock<Mutex<LaunchLocks>> = OnceLock::new();
@@ -83,6 +106,51 @@ impl DockerFeatureExecutionRuntime {
         Self { runtime }
     }
 
+    async fn prepare_repository(
+        &self,
+        env: &Environment,
+        project: &Project,
+        workspace: &TaskWorkspace,
+    ) -> Result<(), ExecutionError> {
+        let identity = WorkerIdentity::new(env, project, workspace, env.generation, Role::Prepare)?;
+        let body = identity.body(env, CHECKOUT, prepare_command())?;
+        let (process, exit) = self
+            .start(
+                env,
+                &identity,
+                body,
+                Some((RelayAccess::Repository, workspace.attempt_id)),
+            )
+            .await
+            .map_err(|error| {
+                tracing::warn!(event = "repository.environment.prepare_failed",
+                    attempt_id = %workspace.attempt_id, execution_error = %error, step = "worker");
+                ExecutionError::RepositoryPreparationFailed("worker")
+            })?;
+        // No application receipt is needed for this disposable, idempotent setup.
+        exit.launch_ack.store(true, Ordering::Release);
+        let result = collect_check(process, exit).await.map_err(|error| {
+            tracing::warn!(event = "repository.environment.prepare_failed",
+                attempt_id = %workspace.attempt_id, execution_error = %error, step = "worker");
+            ExecutionError::RepositoryPreparationFailed("worker")
+        })?;
+        if result.exit_code != 0 {
+            let reported_step = result
+                .output
+                .trim()
+                .strip_prefix("Repository environment: ");
+            let step = PREPARATION_STEPS
+                .iter()
+                .copied()
+                .find(|step| Some(*step) == reported_step)
+                .unwrap_or("setup");
+            tracing::warn!(event = "repository.environment.prepare_failed",
+                attempt_id = %workspace.attempt_id, step, exit_code = result.exit_code);
+            return Err(ExecutionError::RepositoryPreparationFailed(step));
+        }
+        Ok(())
+    }
+
     /// Call with the environment launch lock held. Missing containers do not
     /// establish whether an earlier Docker request reached the daemon.
     async fn inspect_check(
@@ -110,15 +178,15 @@ impl DockerFeatureExecutionRuntime {
         env: &Environment,
         identity: &WorkerIdentity,
         body: ContainerCreateBody,
-        relay: Option<(ScopedProvider, Uuid)>,
+        relay: Option<(RelayAccess, Uuid)>,
     ) -> Result<(DockerProcess, WorkerExit), ExecutionError> {
         tokio::time::timeout(self.runtime.timeout, async {
             let _gate = launch_lock(env).await.map_err(preflight)?;
             self.runtime.feature_preflight(env).await?;
             let proof = self.runtime.checkout_proof(env, identity).await?;
             let relay = match relay {
-                Some((provider, attempt)) => {
-                    Some(self.runtime.feature_relay(env, provider, attempt).await?)
+                Some((access, attempt)) => {
+                    Some(self.runtime.feature_relay(env, access, attempt).await?)
                 }
                 None => None,
             };
@@ -154,13 +222,22 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
             ScopedProvider::Codex => "/workspace",
             ScopedProvider::Claude => CHECKOUT,
         };
-        let body = identity.body(env, cwd, provider.command(request))?;
+        self.prepare_repository(env, project, &request.workspace)
+            .await?;
+        let body = identity.body(
+            env,
+            cwd,
+            prepared_command(identity.readonly, provider.command(request)),
+        )?;
         let (process, exit) = self
             .start(
                 env,
                 &identity,
                 body,
-                Some((provider, request.workspace.attempt_id)),
+                Some((
+                    RelayAccess::Provider(provider),
+                    request.workspace.attempt_id,
+                )),
             )
             .await
             .inspect_err(|error| {
@@ -204,6 +281,7 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
             return Err(ExecutionError::Invalid);
         }
         let identity = WorkerIdentity::new(env, project, workspace, env.generation, Role::Check)?;
+        self.prepare_repository(env, project, workspace).await?;
         let body = check_body(&identity, env, command)?;
         let (process, exit) = self.start(env, &identity, body, None).await?;
         collect_check(process, exit).await
@@ -285,7 +363,7 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
             let mut running = false;
             let mut unknown = false;
             let mut stopped = Vec::new();
-            for role in [Role::Agent, Role::Check] {
+            for role in [Role::Agent, Role::Check, Role::Prepare] {
                 let identity = WorkerIdentity::new(
                     env,
                     project,
@@ -334,7 +412,7 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
             // An old agent cannot prove a subsequently uncertain check stopped.
             let proof = stopped
                 .into_iter()
-                .find(|(role, _)| matches!(role, Role::Check) == checking);
+                .find(|(role, _)| *role == if checking { Role::Check } else { Role::Agent });
             // Keep the exited object until its exact identity is durably recorded.
             Ok(proof.map_or(TaskObservation::Unknown, |(_, worker_id)| {
                 TaskObservation::StoppedWithWorkerProof { worker_id }
@@ -353,18 +431,21 @@ fn check_body(
     identity.body(
         env,
         CHECKOUT,
-        [
-            "/usr/bin/timeout",
-            "--signal=TERM",
-            "--kill-after=5s",
-            "590s",
-            "/bin/sh",
-            "-c",
-            command,
-        ]
-        .into_iter()
-        .map(str::to_owned)
-        .collect(),
+        prepared_command(
+            identity.readonly,
+            [
+                "/usr/bin/timeout",
+                "--signal=TERM",
+                "--kill-after=5s",
+                "590s",
+                "/bin/sh",
+                "-c",
+                command,
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        ),
     )
 }
 
@@ -640,14 +721,16 @@ impl DockerEnvironmentRuntime {
     async fn feature_relay(
         &self,
         env: &Environment,
-        provider: ScopedProvider,
+        access: RelayAccess,
         attempt: Uuid,
     ) -> Result<(DockerProcess, String), ExecutionError> {
-        if !self.egress.available().await.map_err(preflight)? {
+        if matches!(access, RelayAccess::Provider(_))
+            && !self.egress.available().await.map_err(preflight)?
+        {
             return Err(ExecutionError::PreflightUnavailable);
         }
         let mut relay = self
-            .start_process_checked(env, FixedProcess::FeatureRelay { provider, attempt })
+            .start_process_checked(env, FixedProcess::FeatureRelay { access, attempt })
             .await
             .map_err(|error| match error {
                 ProcessStartError::PreSubmission(_) => ExecutionError::PreflightUnavailable,
@@ -830,6 +913,9 @@ impl DockerEnvironmentRuntime {
                 stopped["State"]["Status"].as_str(),
                 stopped["State"]["Running"].as_bool(),
             ) {
+                (Some("exited"), Some(false)) if stopped["Config"]["Labels"][ROLE] == "prepare" => {
+                    self.remove_feature_worker(&id).await?;
+                }
                 (Some("exited"), Some(false)) => (),
                 (Some("created"), Some(false)) => {
                     // A created worker provides no proof that Start settled. Fence

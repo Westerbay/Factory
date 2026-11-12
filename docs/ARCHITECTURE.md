@@ -420,8 +420,12 @@ agent replies and computes revision fingerprints outside application policy.
 The [project controller](../infra/environments/project-controller.py) uses owned Git
 checkouts and validates a writer's paths and the cumulative diff before moving the
 integration branch. The [feature execution adapter](../crates/adapters/src/environments/feature_execution/mod.rs)
-mounts only the verified attempt checkout. Agent checkouts are writable for implementation
-and correction. Both provider CLIs run without command approval prompts inside the isolated
+mounts the verified attempt checkout and the project's tooling directory. A disposable
+preparation worker reads the repository manifests, installs supported tools and downloads
+dependencies into a cache scoped to those inputs and the workspace image. It mounts the
+checkout read-only and uses a separate package-download relay without provider or GitHub
+credentials. Agent and check workers mount the cache read-only. Agent checkouts are
+writable for implementation and correction. Both provider CLIs run without command approval prompts inside the isolated
 worker.
 Workers use the relay for the selected provider, public GitHub HTTPS and the public
 npm registry. Loopback requests stay inside the worker so Playwright can reach a local

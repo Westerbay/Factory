@@ -1,4 +1,7 @@
 FROM node:24.22.1-bookworm-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c AS node
+FROM jdxcode/mise:2026.11.2@sha256:39cd8aad519a3dbc860eceb64dfd8cb5efe4cdbb8ad741a6867b544b2787b79c AS mise
+FROM rust:1.90.0-slim-bookworm@sha256:64232e656c058f4468e8d024e990acff04f0fd5a5c0a88a574dc37773d7325c9 AS rust
+RUN rustup component add clippy rustfmt
 FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS codex
 # Immutable Debian snapshot and official artifact checksums make rebuilds explicit.
 RUN printf '%s\n' 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261027T000000Z bookworm main' > /etc/apt/sources.list \
@@ -63,7 +66,7 @@ LABEL io.factory.claude.version="2.1.284"
 RUN printf '%s\n' 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261027T000000Z bookworm main' \
       'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20261027T000000Z bookworm-security main' > /etc/apt/sources.list \
     && rm /etc/apt/sources.list.d/debian.sources \
-    && apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update && apt-get -o Acquire::Retries=3 install -y --no-install-recommends bash zsh tmux git curl gh neofetch ca-certificates util-linux openssh-client netcat-openbsd python3 \
+    && apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update && apt-get -o Acquire::Retries=3 install -y --no-install-recommends bash zsh tmux git curl gh neofetch ca-certificates util-linux openssh-client netcat-openbsd python3 python3-venv python-is-python3 default-jdk-headless maven build-essential pkg-config libssl-dev ripgrep unzip xz-utils \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 10000 factory \
     && useradd -u 10000 -g factory -d /home/factory -s /bin/zsh factory \
@@ -86,6 +89,17 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/*
 
+COPY --from=mise /usr/local/bin/mise /usr/local/bin/mise
+COPY --from=rust /usr/local/rustup /opt/factory/rustup
+COPY --from=rust /usr/local/cargo/bin/rustup /opt/factory/rustup-bin/rustup
+COPY repository-environment.py /usr/local/lib/factory/repository-environment.py
+RUN printf '%s\n' '#!/bin/sh' 'export RUSTUP_HOME="${RUSTUP_HOME:-/opt/factory/rustup}"' \
+      'exec "/opt/factory/rustup-bin/${0##*/}" "$@"' > /opt/factory/rust-tool \
+    && chmod 0555 /opt/factory/rust-tool \
+    && for tool in cargo rustc rustdoc rustup cargo-clippy cargo-fmt clippy-driver rustfmt; do \
+      if [ "$tool" != rustup ]; then ln -s rustup "/opt/factory/rustup-bin/$tool"; fi; \
+      ln -s /opt/factory/rust-tool "/usr/local/bin/$tool"; \
+    done
 COPY --from=codex /opt/codex /opt/codex
 COPY --from=codex /opt/claude /opt/claude
 COPY --from=codex /opt/oh-my-zsh /opt/oh-my-zsh

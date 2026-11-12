@@ -120,9 +120,55 @@ impl ScopedProvider {
     }
 }
 
-pub(crate) fn relay_command(provider: ScopedProvider, attempt: Uuid) -> Vec<String> {
+#[derive(Clone, Copy)]
+pub(crate) enum RelayAccess {
+    Provider(ScopedProvider),
+    Repository,
+}
+
+pub(crate) fn relay_command(access: RelayAccess, attempt: Uuid) -> Vec<String> {
     let mut args = launcher_args("relay", &attempt.to_string());
-    args.push(provider.as_str().into());
+    args.push(
+        match access {
+            RelayAccess::Provider(provider) => provider.as_str(),
+            RelayAccess::Repository => "repository",
+        }
+        .into(),
+    );
+    args
+}
+
+const REPOSITORY_ENVIRONMENT: &str = "/usr/local/lib/factory/repository-environment.py";
+
+pub(super) fn prepare_command() -> Vec<String> {
+    let mut args = launcher_args("repository", "/usr/bin/timeout");
+    args.extend(
+        [
+            "--kill-after=5s",
+            "590s",
+            "/usr/bin/python3",
+            "-I",
+            REPOSITORY_ENVIRONMENT,
+            "prepare",
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    );
+    args
+}
+
+pub(super) fn prepared_command(readonly: bool, command: Vec<String>) -> Vec<String> {
+    let mut args: Vec<_> = [
+        "/usr/bin/python3",
+        "-I",
+        REPOSITORY_ENVIRONMENT,
+        "run",
+        if readonly { "read" } else { "write" },
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    args.extend(command);
     args
 }
 
