@@ -1,7 +1,7 @@
 # Only Factory PostgreSQL. Scripts supply sanitized variables explicitly.
 services:
   postgres:
-    image: postgres:17.11-bookworm@sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27
+    image: postgres:17.12-bookworm@sha256:40865bc877a289da75963d97d72b59633f639fc5af7a4e856bfa3714cae5b536
     environment:
       POSTGRES_DB: ${FACTORY_DB_NAME:?Use pnpm db:setup}
       POSTGRES_USER: factory
