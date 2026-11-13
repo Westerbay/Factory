@@ -263,12 +263,14 @@ except OSError as error:
                 assert_eq!(rejected.exit_code, 1);
                 assert!(rejected.output.is_empty());
                 feature_runtime.acknowledge_check(&env, &project, &workspace, env.generation).await.unwrap();
-                let body = check_body(&check, &env, "printf observed; exit 7").unwrap();
+                let body = check_body(&check, &env, "printf discarded; head -c 65536 /dev/zero | tr '\\000' x; printf observed >&2; exit 7").unwrap();
                 let (process, exit) = runtime.create_feature_worker(&env, &check, body, None, proof).await.unwrap();
                 let check_id = process.id.clone();
                 let output = collect_check(process, exit).await.unwrap();
                 assert_eq!(output.exit_code, 7);
-                assert_eq!(output.output, "observed");
+                assert_eq!(output.output.len(), MAX_CHECK_OUTPUT);
+                assert!(output.output.ends_with("observed"));
+                assert!(!output.output.contains("discarded"));
                 prior.pending_verification = Some(workspace.attempt_id);
                 assert_eq!(
                     feature_runtime.reconcile_task(&env, &project, &prior).await.unwrap(),

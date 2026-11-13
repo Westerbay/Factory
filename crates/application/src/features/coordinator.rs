@@ -560,14 +560,17 @@ impl FeatureCoordinator {
             match result {
                 Ok(result) if result.exit_code == 0 => {}
                 Ok(result) => {
+                    let header = bounded(
+                        &format!("Check exited with {}: {command}", result.exit_code),
+                        1023,
+                    );
+                    let mut start = result.output.len().saturating_sub(4095 - header.len());
+                    while !result.output.is_char_boundary(start) {
+                        start += 1;
+                    }
+                    let output = result.output[start..].replace('\0', "");
                     return Err(AttemptUpdate::Failed {
-                        reason: bounded(
-                            &format!(
-                                "Check exited with {}: {command}\n{}",
-                                result.exit_code, result.output
-                            ),
-                            4096,
-                        ),
+                        reason: format!("{header}\n{output}"),
                     });
                 }
                 Err(error) => {

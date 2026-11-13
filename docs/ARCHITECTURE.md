@@ -419,7 +419,8 @@ agent replies and computes revision fingerprints outside application policy.
 
 The [project controller](../infra/environments/project-controller.py) uses owned Git
 checkouts and validates a writer's paths and the cumulative diff before moving the
-integration branch. The [feature execution adapter](../crates/adapters/src/environments/feature_execution/mod.rs)
+integration branch. The full patch is bounded to 512 KiB within a 1 MiB controller
+response. The [feature execution adapter](../crates/adapters/src/environments/feature_execution/mod.rs)
 mounts the verified attempt checkout and the project's tooling directory. A disposable
 preparation worker reads the repository manifests, installs supported tools and downloads
 dependencies into a cache scoped to those inputs and the workspace image. It mounts the
@@ -434,7 +435,9 @@ The relay also runs Git upload-pack through the member environment's existing SS
 for repository reads. The worker receives neither the SSH key nor the GitHub OAuth token.
 The selected provider receives an access-only credential seed, so an expired connection
 must be renewed before retrying. Verification commands run with loopback only and
-without provider credentials. The main environment owns the trusted Git push.
+without provider credentials. Failed task checks retain the exit code, command and
+bounded tail of the output in the task activity. The main environment owns the
+trusted Git push.
 
 Factory verifies the stable GitHub repository identity before fetching and again
 before promoting a provisional repository into the owned feature checkout. Initial
