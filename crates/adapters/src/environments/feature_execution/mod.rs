@@ -464,8 +464,14 @@ async fn collect_check(
                 LogOutput::StdOut { message } | LogOutput::StdErr { message } => message,
                 _ => continue,
             };
-            let remaining = MAX_CHECK_OUTPUT.saturating_sub(log.len());
-            log.extend_from_slice(&bytes[..bytes.len().min(remaining)]);
+            if bytes.len() >= MAX_CHECK_OUTPUT {
+                log.clear();
+                log.extend_from_slice(&bytes[bytes.len() - MAX_CHECK_OUTPUT..]);
+            } else {
+                let discarded = (log.len() + bytes.len()).saturating_sub(MAX_CHECK_OUTPUT);
+                log.drain(..discarded);
+                log.extend_from_slice(&bytes);
+            }
         }
         Ok::<_, ExecutionError>(log)
     })

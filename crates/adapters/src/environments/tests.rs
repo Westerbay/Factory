@@ -358,6 +358,31 @@ fn egress_metadata_cannot_select_another_installation() {
 }
 
 #[tokio::test]
+async fn stopped_or_foreign_records_cannot_open_docker_processes() {
+    let metadata = metadata();
+    let mut env = environment(&metadata);
+    let fixture = fixture(metadata, vec![], Duration::from_secs(2)).await;
+    env.desired_state = DesiredState::Stopped;
+    assert!(matches!(
+        fixture
+            .runtime
+            .start_process(&env, super::process::FixedProcess::TerminalAttach)
+            .await,
+        Err(EnvironmentError::Conflict)
+    ));
+    env.desired_state = DesiredState::Running;
+    env.user_id = Uuid::nil();
+    assert!(matches!(
+        fixture
+            .runtime
+            .start_process(&env, super::process::FixedProcess::CodexAccount)
+            .await,
+        Err(EnvironmentError::OwnershipConflict)
+    ));
+    assert_eq!(fixture.requests.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn operation_deadline_covers_negotiation_and_never_reports_success() {
     let metadata = metadata();
     let env = environment(&metadata);

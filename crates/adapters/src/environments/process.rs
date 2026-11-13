@@ -549,30 +549,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn stopped_or_foreign_records_cannot_open_docker_processes() {
-        let (metadata, mut env) = environment(&format!("sha256:{}", "a".repeat(64)));
-        // No daemon is contacted: both refusals must occur before any Docker operation.
-        let egress = crate::environments::fixture::synthetic_egress(metadata.installation_id());
-        let runtime =
-            DockerEnvironmentRuntime::connect(metadata, egress, Arc::new(|| true)).unwrap();
-        env.desired_state = DesiredState::Stopped;
-        assert!(matches!(
-            runtime
-                .start_process(&env, FixedProcess::TerminalAttach)
-                .await,
-            Err(EnvironmentError::Conflict)
-        ));
-        env.desired_state = DesiredState::Running;
-        env.user_id = Uuid::nil();
-        assert!(matches!(
-            runtime
-                .start_process(&env, FixedProcess::CodexAccount)
-                .await,
-            Err(EnvironmentError::OwnershipConflict)
-        ));
-    }
-
     async fn until(
         output: &mut ProcessOutput,
         marker: &str,

@@ -779,6 +779,24 @@ class ProjectControllerTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'conflict')
         self.assertEqual(self.execute('delete', **request), 'deleted')
 
+    def test_integration_keeps_a_complete_preview_above_128_kib(self):
+        origin = self.origin()
+        self.clone(origin)
+        feature = str(uuid.uuid4())
+        base = self.feature(origin, feature, 'initialize')['base_oid']
+        current = base
+        for path in ('first.txt', 'second.txt'):
+            fields = {'attempt': str(uuid.uuid4()), 'base_oid': base, 'writable': True}
+            self.feature(origin, feature, 'prepare', **fields)
+            (self.feature_checkout(feature, fields['attempt']) / path).write_text(('x' * 80 + '\n') * 1024)
+            self.feature(origin, feature, 'checkpoint', scope=[path], **fields)
+            current = self.feature(origin, feature, 'integrate', expected_head=current,
+                                   scope=[path], **fields)
+        snapshot = self.feature(origin, feature, 'snapshot')
+        self.assertEqual(snapshot['git']['head_oid'], current)
+        self.assertEqual(snapshot['changed_paths'], ['first.txt', 'second.txt'])
+        self.assertGreater(len(snapshot['patch'].encode()), 128 * 1024)
+
     def test_integration_keeps_previous_result_when_cumulative_diff_cannot_be_displayed(self):
         origin = self.origin()
         self.clone(origin)
