@@ -647,7 +647,8 @@ impl Worker {
                     return Err(ExecutionError::Protocol);
                 }
             }
-            "rate_limit_event" | "command_lifecycle" | "stream_event" | "assistant" => {}
+            "rate_limit_event" | "command_lifecycle" | "tool_progress" | "stream_event"
+            | "assistant" => {}
             _ => return Err(ExecutionError::Protocol),
         }
         Ok(())
@@ -984,6 +985,7 @@ mod tests {
             frame(&output_tx, json!({"type":"stream_event","session_id":session.to_string(),"parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"text_delta","text":" "}}})).await;
             frame(&output_tx, json!({"type":"assistant","uuid":"frame-1","session_id":session.to_string(),"parent_tool_use_id":null,"message":{"id":"message","content":[{"type":"text","text":"hello"}]}})).await;
             frame(&output_tx, json!({"type":"system","subtype":"task_started","session_id":session.to_string(),"task_id":"child"})).await;
+            frame(&output_tx, json!({"type":"tool_progress","session_id":session.to_string(),"tool_use_id":"tool-1","tool_name":"Bash","elapsed_time_seconds":30,"parent_tool_use_id":null})).await;
             frame(
                 &output_tx,
                 json!({"type":"result","subtype":"success","is_error":false,"session_id":session.to_string()}),
