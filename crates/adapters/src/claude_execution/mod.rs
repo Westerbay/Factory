@@ -497,7 +497,15 @@ impl Worker {
                     Some(Command::Begin(reply)) => { let _ = reply.send(Err(ExecutionError::Conflict)); },
                     None => return Err(ExecutionError::Unavailable),
                 },
-                frame = self.stream.read() => self.frame(frame?).await?,
+                frame = self.stream.read() => {
+                    let frame = frame?;
+                    if let Err(error) = self.frame(&frame).await {
+                        if error == ExecutionError::Protocol {
+                            self.diagnostics.protocol_frame = Some(protocol_frame(&frame, self.session));
+                        }
+                        return Err(error);
+                    }
+                }
             }
         }
     }
@@ -520,7 +528,7 @@ impl Worker {
         Ok(())
     }
 
-    async fn frame(&mut self, frame: Value) -> Result<(), ExecutionError> {
+    async fn frame(&mut self, frame: &Value) -> Result<(), ExecutionError> {
         let kind = text(&frame["type"], 80)?;
         if let Some(session) = frame.get("session_id").and_then(Value::as_str)
             && session != self.session.to_string()
@@ -617,7 +625,7 @@ impl Worker {
                 if succeeded {
                     self.diagnostics.provider_error = None;
                 } else {
-                    self.diagnostics.http_status = result_http_status(&frame);
+                    self.diagnostics.http_status = result_http_status(frame);
                 }
                 if !self.requests.is_empty() {
                     return Err(ExecutionError::Protocol);
@@ -630,8 +638,8 @@ impl Worker {
                     ExecutionEvent::Failed
                 });
             }
-            "control_request" => self.question(&frame).await?,
-            "user" => self.delivered(&frame).await?,
+            "control_request" => self.question(frame).await?,
+            "user" => self.delivered(frame).await?,
             "control_response"
                 if frame["response"]["request_id"] == "factory-interrupt" && self.stopping =>
             {
@@ -784,6 +792,33 @@ impl Worker {
     }
 }
 
+fn protocol_frame(frame: &Value, session: Uuid) -> &'static str {
+    if let Some(id) = frame["session_id"].as_str()
+        && id != session.to_string()
+    {
+        return "session_mismatch";
+    }
+    match frame["type"].as_str() {
+        Some("system") => match frame["subtype"].as_str() {
+            Some("task_started") => "task_started",
+            Some("background_tasks_changed") => "background_tasks_changed",
+            Some("task_notification") => "task_notification",
+            _ => "system",
+        },
+        Some("stream_event") => match frame["event"]["type"].as_str() {
+            Some("message_start") => "message_start",
+            Some("content_block_delta") => "content_block_delta",
+            _ => "stream_event",
+        },
+        Some("assistant") => "assistant",
+        Some("result") => "result",
+        Some("control_request") => "control_request",
+        Some("control_response") => "control_response",
+        Some("user") => "user",
+        _ => "unknown",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -858,6 +893,43 @@ mod tests {
         assert_eq!(fields["result_subtype"], "error_during_execution");
         assert_eq!(fields["http_status"], 429);
         assert_eq!(fields["exit_code"], 1);
+        assert!(!output.contains("private fixture"));
+    }
+
+    #[tokio::test]
+    async fn malformed_claude_task_notification_logs_only_the_frame_category() {
+        let (logs, _subscriber) =
+            crate::execution_diagnostics::test_support::CapturedLogs::capture();
+        let attempt = Uuid::new_v4();
+        let (client, server) = tokio::io::duplex(65536);
+        let (output_tx, output_rx) = mpsc::channel(16);
+        let output = stream::unfold(output_rx, |mut rx| async move {
+            rx.recv().await.map(|value| (value, rx))
+        });
+        let mut session = spawn_session(
+            JsonStream::new(Box::pin(client), Box::pin(output)),
+            attempt,
+            "hello".into(),
+            true,
+            async { Ok(1) },
+        );
+        let mut input = BufReader::new(server);
+        assert_eq!(read_request(&mut input).await["request_id"], "factory-init");
+        frame(&output_tx, json!({"type":"control_response","response":{"request_id":"factory-init","subtype":"success","response":{}}})).await;
+        assert!(matches!(
+            session.output.next().await.unwrap(),
+            Some(ExecutionEvent::ThreadReady { .. })
+        ));
+        session.control.begin_turn().await.unwrap();
+        let _ = read_request(&mut input).await;
+        frame(&output_tx, json!({"type":"system","subtype":"task_notification","task_id":"private fixture task","output":"private fixture content"})).await;
+        assert_eq!(
+            session.output.next().await.unwrap(),
+            Some(ExecutionEvent::Failed)
+        );
+        let output = logs.text();
+        let record: Value = serde_json::from_str(output.trim()).unwrap();
+        assert_eq!(record["fields"]["protocol_frame"], "task_notification");
         assert!(!output.contains("private fixture"));
     }
 

@@ -267,6 +267,10 @@ def node_install(repository, offline):
     if repository.node_manager == "pnpm":
         args = ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile",
                 "--store-dir", root / "pnpm"]
+        if not offline:
+            # Both relay hops bound the number of open tunnels. Leave room for
+            # idle connections while pnpm fetches metadata and tarballs.
+            args.extend(("--network-concurrency", "8"))
     else:
         args = ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund", "--logs-max=0",
                 "--cache", root / "npm"]
