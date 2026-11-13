@@ -10,6 +10,7 @@ pub(crate) struct ExecutionDiagnostics {
     pub(crate) result_subtype: Option<&'static str>,
     pub(crate) http_status: Option<u16>,
     pub(crate) stream_error: Option<&'static str>,
+    pub(crate) protocol_frame: Option<&'static str>,
     pub(crate) rpc_error: Option<(&'static str, i64)>,
 }
 
@@ -24,6 +25,7 @@ impl ExecutionDiagnostics {
             http_status: None,
             rpc_error: None,
             stream_error: None,
+            protocol_frame: None,
         }
     }
 
@@ -49,6 +51,7 @@ impl ExecutionDiagnostics {
             result_subtype = self.result_subtype,
             http_status = self.http_status,
             stream_error = self.stream_error,
+            protocol_frame = self.protocol_frame,
             rpc_method = self.rpc_error.map(|(method, _)| method),
             rpc_code = self.rpc_error.map(|(_, code)| code),
             execution_error = protocol.as_ref().map(tracing::field::display),
