@@ -509,3 +509,15 @@ The pinned Codex adapter keeps provider IDs and request correlation private. Gen
 protocol bindings preserve provenance, unsupported actionable requests fail visibly, and
 conversation correlation in that reference remains session-local. These mechanisms have
 no per-user ownership and are not the web execution implementation.
+
+## Conversation attachment storage
+
+Attachment metadata lives in PostgreSQL, while file bytes live in the member's
+workspace volume. The conversation store claims staged files with the message
+transaction. The application uses attachment store and file ports from
+[core](../crates/core/src/attachments/ports.rs), with implementations in
+[database](../crates/database/src/attachments/mod.rs) and
+[adapters](../crates/adapters/src/attachments/mod.rs). Feature discussion workers
+receive their conversation's files read-only and an attempt-specific writable
+output directory. The API checks ownership on reads and serves each media kind
+with its own response policy.

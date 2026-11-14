@@ -3,6 +3,7 @@
 pub mod admin;
 pub mod agent_connections;
 pub mod app;
+pub mod attachments;
 pub mod auth;
 pub mod bootstrap;
 pub mod config;

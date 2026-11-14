@@ -63,6 +63,9 @@ pub(crate) enum FixedProcess {
     ClaudeExecution(ClaudeLaunch),
     /// Fixed, immutable controller; its bounded JSON input never selects an executable.
     ProjectController,
+    /// Fixed, embedded controller source for attachment files. Its bounded JSON request
+    /// arrives on stdin, so no request data is ever an argument.
+    AttachmentController,
     FeatureProof {
         checkout: String,
     },
@@ -119,7 +122,7 @@ impl ClaudeLaunch {
 }
 
 impl FixedProcess {
-    fn options(self) -> CreateExecOptions<String> {
+    pub(crate) fn options(self) -> CreateExecOptions<String> {
         let working_dir = match &self {
             Self::ClaudeExecution(launch) => {
                 launch.cwd.as_deref().unwrap_or("/home/factory/Documents")
@@ -196,6 +199,13 @@ impl FixedProcess {
             Self::FeatureProof { checkout } => return feature_helper(proof_command(checkout)),
             Self::FeatureRelay { access, attempt } => return feature_helper(relay_command(*access, *attempt)),
             Self::ProjectController => vec!["/usr/local/bin/factory-project-controller"],
+            Self::AttachmentController => vec![
+                "/usr/bin/python3",
+                "-I",
+                "-S",
+                "-c",
+                crate::attachments::CONTROLLER_SOURCE,
+            ],
             // The fixed executable and fixed arguments are never selected by the browser.
             // A watchdog bounds orphan lifetime; it does not prove descendant cleanup.
             Self::CodexExecution => vec![

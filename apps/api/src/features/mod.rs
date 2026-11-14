@@ -226,7 +226,13 @@ async fn discuss(
     let coordinator = state.runtime().map_err(error)?.coordinator.clone();
     command(async move {
         coordinator
-            .discuss(actor, id, body.operation_id, body.input)
+            .discuss(
+                actor,
+                id,
+                body.operation_id,
+                body.input,
+                body.attachment_ids,
+            )
             .await
     })
     .await

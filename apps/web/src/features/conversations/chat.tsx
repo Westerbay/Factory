@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react"
 
@@ -32,6 +33,9 @@ import { FeatureFailure } from "../feature-workflows/api"
 import * as api from "./api"
 import { modelQueryKey, modelQueryOptions } from "./model-query"
 import { MessageMarkdown } from "./message-markdown"
+import { AttachmentList } from "./attachment-list"
+import * as attachmentApi from "./attachments"
+import { createAttachmentTray, type AttachmentTray } from "./attachment-tray"
 import {
   latestReader,
   runOutcome,
@@ -50,6 +54,7 @@ type PendingSend = {
   model: string
   effort: string
   conversation: string
+  attachmentIds: string[]
 }
 
 export type ChatLayout = {
@@ -69,7 +74,8 @@ export type WorkflowConversation = {
     operationId: string,
     input: string,
     csrf: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    attachmentIds?: string[]
   ) => Promise<unknown>
   onRefresh: () => void
   version: string
@@ -126,6 +132,37 @@ export function Chat({
   const input = drafts[selected ?? ""] ?? ""
   const setInput = (value: string) =>
     setDrafts((current) => ({ ...current, [selected ?? ""]: value }))
+  const csrfRef = useRef("")
+  const trays = useRef(new Map<string, AttachmentTray>())
+  const draftCreation = useRef<Promise<string> | undefined>(undefined)
+  const createDraftChat = useRef<() => Promise<string>>(() =>
+    Promise.reject(new Error("Chat is not ready"))
+  )
+  const tray = useMemo(() => {
+    const key = selected ?? ""
+    let existing = trays.current.get(key)
+    if (!existing) {
+      let conversationId = selected
+      existing = createAttachmentTray({
+        conversation: async () => {
+          conversationId ??= await createDraftChat.current()
+          return conversationId
+        },
+        upload: (conversation, file, signal) =>
+          attachmentApi.upload(conversation, file, csrfRef.current, signal),
+        remove: (conversation, attachment) =>
+          attachmentApi.remove(
+            conversation,
+            attachment,
+            csrfRef.current,
+            new AbortController().signal
+          ),
+      })
+      trays.current.set(key, existing)
+    }
+    return existing
+  }, [selected])
+  const trayState = useSyncExternalStore(tray.subscribe, tray.getSnapshot)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState("")
   const [listError, setListError] = useState(false)
@@ -151,6 +188,7 @@ export function Chat({
   const lifetime = useRef<AbortController | null>(null)
   const historyReader = useMemo(() => latestReader(api.read), [])
   const csrf = session.status === "active" ? session.session.csrfToken : ""
+  csrfRef.current = csrf
   const userId = session.status === "active" ? session.session.user.id : ""
   const modelQuery = useQuery({
     ...modelQueryOptions(userId),
@@ -435,6 +473,38 @@ export function Chat({
       setAnswers({})
     })
   }
+  createDraftChat.current = () => {
+    if (!draftCreation.current) {
+      const signal = lifetime.current?.signal
+      if (!signal || signal.aborted)
+        return Promise.reject(new Error("Chat is not ready"))
+      draftCreation.current = api
+        .create(csrf, signal)
+        .then((created) => {
+          if (signal.aborted) throw new Error("Chat is closed")
+          const draftTray = trays.current.get("")
+          if (draftTray) {
+            trays.current.delete("")
+            trays.current.set(created.id, draftTray)
+          }
+          setConversations((items) => [created, ...items])
+          setDrafts(({ "": draft = "", ...rest }) => ({
+            ...rest,
+            [created.id]: draft,
+          }))
+          if (!selectedRef.current) {
+            selectedRef.current = created.id
+            setSelected(created.id)
+            onOpenChat?.()
+          }
+          return created.id
+        })
+        .finally(() => {
+          draftCreation.current = undefined
+        })
+    }
+    return draftCreation.current
+  }
   function send() {
     if (
       !selected ||
@@ -451,12 +521,14 @@ export function Chat({
     const previous = pendingSends.current.get(selected)
     const sendModel = workflow ? "" : model
     const sendEffort = workflow ? "" : effort
+    const attachmentIds = tray?.readyIds() ?? []
     const operation =
       previous &&
       previous.conversation === selected &&
       previous.input === input &&
       previous.model === sendModel &&
-      previous.effort === sendEffort
+      previous.effort === sendEffort &&
+      previous.attachmentIds.join() === attachmentIds.join()
         ? previous
         : {
             operationId: crypto.randomUUID(),
@@ -464,6 +536,7 @@ export function Chat({
             model: sendModel,
             effort: sendEffort,
             conversation: selected,
+            attachmentIds,
           }
     pendingSends.current.set(selected, operation)
     void perform(async () => {
@@ -472,7 +545,8 @@ export function Chat({
           operation.operationId,
           operation.input,
           csrf,
-          lifetime.current!.signal
+          lifetime.current!.signal,
+          operation.attachmentIds
         )
       else
         await api.start(
@@ -482,12 +556,16 @@ export function Chat({
             input: operation.input,
             model: operation.model,
             effort: operation.effort || null,
+            ...(operation.attachmentIds.length
+              ? { attachmentIds: operation.attachmentIds }
+              : {}),
           },
           csrf,
           lifetime.current!.signal
         )
       if (!lifetime.current || lifetime.current.signal.aborted) return
       pendingSends.current.delete(selected)
+      tray?.clear()
       setInput("")
       await reload(selected)
     })
@@ -688,6 +766,7 @@ export function Chat({
     (!workflow && !selectedModel) ||
     Boolean(workflow && !workflow.canSend) ||
     !input.trim() ||
+    Boolean(trayState?.items.some((item) => item.status === "uploading")) ||
     busy ||
     !available ||
     Boolean(uncertain)
@@ -857,10 +936,13 @@ export function Chat({
               >
                 {item.role === "assistant" && <strong>Assistant</strong>}
                 {item.role === "assistant" ? (
-                  <MessageMarkdown>{item.content}</MessageMarkdown>
+                  <MessageMarkdown>
+                    {attachmentApi.hideFactoryFiles(item.content)}
+                  </MessageMarkdown>
                 ) : (
                   <p>{item.content}</p>
                 )}
+                <AttachmentList attachments={item.attachments} />
               </article>
             ))}
             {delta && currentHistory && (
@@ -869,7 +951,9 @@ export function Chat({
                 aria-label={m.assistant_response_in_progress()}
               >
                 <strong>Assistant</strong>
-                <MessageMarkdown previews={false}>{delta}</MessageMarkdown>
+                <MessageMarkdown previews={false}>
+                  {attachmentApi.hideFactoryFiles(delta)}
+                </MessageMarkdown>
               </article>
             )}
             {currentHistory?.requests.map((request) => {
@@ -1066,7 +1150,9 @@ export function Chat({
               model={model}
               models={models}
               effort={effort}
-              disabled={!selected || !historyReady || !available || busy}
+              disabled={
+                Boolean(selected && !historyReady) || !available || busy
+              }
               sendDisabled={submitDisabled}
               running={Boolean(activeRun)}
               stopDisabled={busy || !available}
@@ -1077,6 +1163,7 @@ export function Chat({
               }
               onSend={send}
               onStop={stop}
+              tray={tray}
               workflow={
                 workflow
                   ? {

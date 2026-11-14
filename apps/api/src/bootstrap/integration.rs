@@ -9,7 +9,11 @@ use axum::{
 };
 use factory_adapters::environments::{InstallationGuard, POLICY_VERSION};
 use factory_application::environments::EnvironmentService;
-use factory_core::environments::EnvironmentError;
+use factory_core::{
+    attachments::{AttachmentError, AttachmentStore},
+    environments::{EnvironmentActor, EnvironmentError},
+    identity::CredentialHash,
+};
 use factory_database::{identity::IdentityDatabase, local_target::from_fixture};
 use serde::Deserialize;
 use serde_json::json;
@@ -152,6 +156,31 @@ async fn lost_postgres_supervisor_recovers_without_restarting_the_router() {
         .await
         .unwrap();
     let initial = factory.start().await.unwrap();
+    // The host composes attachments over the real schema: an unknown session is
+    // rejected by the store's own queries, never reported as unavailable.
+    let stranger = EnvironmentActor {
+        user_id: Uuid::new_v4(),
+        session_hash: CredentialHash([0; 32]),
+    };
+    let rejected = database
+        .attachment_store()
+        .get(stranger, Uuid::new_v4())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            rejected,
+            AttachmentError::Unauthorized | AttachmentError::NotFound
+        ),
+        "{rejected:?}"
+    );
+    assert!(
+        initial
+            .attachments()
+            .get(stranger, Uuid::new_v4())
+            .await
+            .is_err()
+    );
     let old_service = initial.service();
     let old_router = runtime_router(old_service.clone(), "original");
     let (stop, stopped) = watch::channel(false);

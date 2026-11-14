@@ -21,10 +21,23 @@ const schemaFile = new URL(
   "../../../crates/database/schema.sql",
   import.meta.url
 )
-const featuresUpgradeFile = new URL(
-  "../../../crates/database/schema-upgrades/0005-features.sql",
-  import.meta.url
-)
+// Reviewed upgrades, each guarded on and advancing the schema version by one.
+const upgrades = [
+  {
+    from: 4,
+    file: new URL(
+      "../../../crates/database/schema-upgrades/0005-features.sql",
+      import.meta.url
+    ),
+  },
+  {
+    from: 5,
+    file: new URL(
+      "../../../crates/database/schema-upgrades/0006-attachments.sql",
+      import.meta.url
+    ),
+  },
+]
 export function createDatabase(proof: DatabaseTarget) {
   const target = verifyDatabaseTarget(proof)
   const client = postgres({
@@ -285,11 +298,29 @@ export function createDatabase(proof: DatabaseTarget) {
           await tx.unsafe(schema)
         })
       }),
-    upgradeFeatures: () =>
+    upgrade: () =>
       safe(async () => {
-        const upgrade = await readFile(featuresUpgradeFile, "utf8")
+        const scripts = await Promise.all(
+          upgrades.map(async ({ from, file }) => ({
+            from,
+            sql: await readFile(file, "utf8"),
+          }))
+        )
         await client.begin(async (tx) => {
-          await tx.unsafe(upgrade)
+          await tx`select pg_advisory_xact_lock(19742380583174472)`
+          const [row] = await tx<
+            { version: number }[]
+          >`select version from factory_identity.schema_info`
+          const current = row?.version
+          if (
+            current === undefined ||
+            current < Math.min(...upgrades.map(({ from }) => from)) ||
+            current > Math.max(...upgrades.map(({ from }) => from)) + 1
+          )
+            throw new Error("Unsupported Factory schema version")
+          // One transaction: a failed step leaves the database at its old version.
+          for (const script of scripts)
+            if (script.from >= current) await tx.unsafe(script.sql)
         })
       }),
     reset: () =>

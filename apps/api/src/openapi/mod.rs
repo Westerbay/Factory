@@ -43,6 +43,7 @@ mod conversation_contract_tests {
         let paths = doc["paths"].as_object().unwrap();
         let expected = [
             "/api/conversations",
+            "/api/conversations/{id}/attachments",
             "/api/conversations/{id}/runs",
             "/api/conversations/{id}/runs/{run}/cancel",
             "/api/conversations/{id}/runs/{run}/questions/{request}",
@@ -114,5 +115,58 @@ mod conversation_contract_tests {
                 "missing {status}"
             );
         }
+    }
+
+    #[test]
+    fn attachment_routes_document_binary_transfer_limits_and_ranges() {
+        let doc = serde_json::to_value(super::document()).unwrap();
+        let upload = &doc["paths"]["/api/conversations/{id}/attachments"]["post"];
+        assert!(upload["requestBody"]["content"]["application/octet-stream"].is_object());
+        assert!(
+            upload["requestBody"]["content"]
+                .get("application/json")
+                .is_none()
+        );
+        for status in ["201", "413", "415"] {
+            assert!(upload["responses"].get(status).is_some(), "upload {status}");
+        }
+        let remove = &doc["paths"]["/api/conversations/{id}/attachments/{attachment}"]["delete"];
+        for name in ["Origin", "X-CSRF-Token"] {
+            assert!(
+                remove["parameters"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|p| p["name"] == name && p["required"] == true),
+                "remove: {name}"
+            );
+        }
+        let read = &doc["paths"]["/api/conversations/{id}/attachments/{attachment}/content"]["get"];
+        for status in ["200", "206", "404", "416"] {
+            assert!(read["responses"].get(status).is_some(), "read {status}");
+        }
+        for name in ["download", "Range"] {
+            assert!(
+                read["parameters"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|p| p["name"] == name),
+                "read: {name}"
+            );
+        }
+        let message = &doc["components"]["schemas"]["MessageView"];
+        assert!(message["properties"].get("attachments").is_some());
+        let start = &doc["components"]["schemas"]["StartBody"];
+        assert!(start["properties"].get("attachmentIds").is_some());
+        assert!(
+            !start["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|name| name == "attachmentIds")
+        );
+        let turn = &doc["components"]["schemas"]["FeatureTurnBody"];
+        assert!(turn["properties"].get("attachmentIds").is_some());
     }
 }

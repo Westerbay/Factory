@@ -165,6 +165,7 @@ impl ProjectStore for PgProjectStore {
                 .bind(id).bind(actor.user_id).bind(env).fetch_one(&mut *tx).await.map_err(unavailable)?;
             if !exists { return Err(ProjectError::NotFound); }
             if has_blocking_work(&mut tx, actor.user_id, id).await? { return Err(ProjectError::InUse); }
+            sqlx::query("DELETE FROM factory_identity.conversation_attachments WHERE conversation_id IN (SELECT id FROM factory_identity.conversations WHERE project_id=$1 AND user_id=$2)").bind(id).bind(actor.user_id).execute(&mut *tx).await.map_err(unavailable)?;
             sqlx::query("DELETE FROM factory_identity.conversation_requests WHERE run_id IN (SELECT r.id FROM factory_identity.conversation_runs r JOIN factory_identity.conversations c ON c.id=r.conversation_id WHERE c.project_id=$1 AND c.user_id=$2)").bind(id).bind(actor.user_id).execute(&mut *tx).await.map_err(unavailable)?;
             sqlx::query("DELETE FROM factory_identity.conversation_messages WHERE run_id IN (SELECT r.id FROM factory_identity.conversation_runs r JOIN factory_identity.conversations c ON c.id=r.conversation_id WHERE c.project_id=$1 AND c.user_id=$2)").bind(id).bind(actor.user_id).execute(&mut *tx).await.map_err(unavailable)?;
             sqlx::query("DELETE FROM factory_identity.conversation_runs WHERE conversation_id IN (SELECT id FROM factory_identity.conversations WHERE project_id=$1 AND user_id=$2)").bind(id).bind(actor.user_id).execute(&mut *tx).await.map_err(unavailable)?;

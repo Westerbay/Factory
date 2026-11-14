@@ -3,11 +3,13 @@ use factory_adapters::projects::{
     DockerProjectRuntime, ProjectDirectory, ProjectRuntimeError, SshKeyStatus,
 };
 use factory_application::{
+    attachments::AttachmentService,
     environments::{EnvironmentAvailability, EnvironmentService},
     identity::RepositoryAccessService,
     projects::ProjectService,
 };
 use factory_core::{
+    attachments::AttachmentError,
     environments::{Environment, EnvironmentActor},
     identity::{
         RepositoryAccessError, RepositoryActor, RepositoryPublicKey, RepositoryPublicKeySource,
@@ -236,6 +238,8 @@ pub struct ProjectsRuntime {
     pub installation: Arc<dyn Send + Sync>,
     pub jobs: Arc<Semaphore>,
     pub active: Arc<Mutex<HashSet<Uuid>>>,
+    /// Purges the project's attachment files before its rows are deleted.
+    pub attachments: Option<Arc<AttachmentService>>,
 }
 struct ActiveImport {
     id: Uuid,
@@ -476,6 +480,17 @@ impl ProjectsRuntime {
                 ProjectRuntimeError::Invalid => ProjectError::Invalid,
                 _ => ProjectError::Unavailable,
             })?;
+        // The files go before the rows that name them; a retry repeats this step.
+        if let Some(attachments) = &self.attachments {
+            attachments
+                .purge_project(actor, id)
+                .await
+                .map_err(|error| match error {
+                    AttachmentError::Unauthorized => ProjectError::Unauthorized,
+                    AttachmentError::Conflict => ProjectError::Conflict,
+                    _ => ProjectError::Unavailable,
+                })?;
+        }
         if self.availability.is_failed() {
             return Err(ProjectError::Unavailable);
         }

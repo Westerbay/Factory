@@ -1,5 +1,5 @@
 use crate::{
-    admin, agent_connections,
+    admin, agent_connections, attachments,
     auth::{self, AuthState},
     config::RuntimeConfig,
     conversations, environments, features, health, http, projects, terminals,
@@ -28,6 +28,7 @@ pub struct IdentityRuntime {
 pub(crate) struct WorkspaceRuntime {
     pub projects: Option<Arc<projects::runtime::ProjectsRuntime>>,
     pub features: Option<features::FeatureRuntime>,
+    pub attachments: Option<Arc<factory_application::attachments::AttachmentService>>,
 }
 
 pub fn router(
@@ -103,7 +104,15 @@ pub(crate) fn router_with_workspace(
         .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
         .allow_headers([
             header::CONTENT_TYPE,
+            header::RANGE,
             axum::http::HeaderName::from_static("x-csrf-token"),
+        ])
+        // The browser app reads text and HTML attachments and honors ranges itself.
+        .expose_headers([
+            header::ACCEPT_RANGES,
+            header::CONTENT_LENGTH,
+            header::CONTENT_RANGE,
+            header::CONTENT_DISPOSITION,
         ])
         .max_age(Duration::from_secs(60));
     let (routes, _) = documented_router_with_workspace(
@@ -172,6 +181,10 @@ fn documented_router_with_workspace(
         .merge(conversations::documented_router(
             auth.clone(),
             conversations,
+        ))
+        .merge(attachments::documented_router(
+            auth.clone(),
+            workspace.attachments,
         ))
         .merge(features::documented_router(
             auth.clone(),
@@ -282,6 +295,37 @@ mod tests {
             if allowed {
                 assert_eq!(headers[header::ACCESS_CONTROL_ALLOW_CREDENTIALS], "true");
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_app_may_send_ranges_and_read_attachment_headers() {
+        let config = RuntimeConfig::from_values(|_| None).unwrap();
+        let response = router(&config, None)
+            .unwrap()
+            .oneshot(
+                Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/api/conversations/x/attachments/y/content")
+                    .header(header::ORIGIN, "http://localhost:3000")
+                    .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                    .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "range")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let allowed = response.headers()[header::ACCESS_CONTROL_ALLOW_HEADERS]
+            .to_str()
+            .unwrap();
+        assert!(allowed.split(',').any(|name| name.trim() == "range"));
+        let live = request(Method::GET, "/health/live", "http://localhost:3000").await;
+        let exposed = live.headers()[header::ACCESS_CONTROL_EXPOSE_HEADERS]
+            .to_str()
+            .unwrap()
+            .to_ascii_lowercase();
+        for name in ["content-range", "content-length", "accept-ranges"] {
+            assert!(exposed.contains(name), "{name}");
         }
     }
 }

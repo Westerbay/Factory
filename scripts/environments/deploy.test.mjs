@@ -5,13 +5,20 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
+  stat,
   realpath,
   rm,
   writeFile,
 } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { fileURLToPath } from "node:url"
 import { join } from "node:path"
 import test from "node:test"
+
+// The fixture executes stub commands, so use the checkout instead of a potentially noexec /tmp.
+const scratch = fileURLToPath(
+  new URL("../../node_modules/.cache/deploy-test/", import.meta.url)
+)
 
 const docker = `#!/bin/sh
 case "$*" in
@@ -26,8 +33,15 @@ case "$*" in
     [ "$BLOCK" != after-stop ] || exit 1
     touch "$INSTALL/state/.factory/environments/upgrade/mutating" ;;
   *" api workspace upgrade rollback") echo rollback >> "$TRACE" ;;
+  *" exec -T postgres psql "*"--command "*) cat "$TRACE.version" ;;
+  *" exec -T postgres pg_dump "*) echo backup >> "$TRACE"; echo dump ;;
+  *" exec -T postgres psql "*"--single-transaction"*)
+    cat > "$TRACE.sql"
+    echo migrate >> "$TRACE"
+    [ "$BLOCK" != migration-failure ] || exit 1
+    echo 6 > "$TRACE.version" ;;
   *" stop --timeout 120 api") echo stop >> "$TRACE" ;;
-  *" up -d "*) echo up >> "$TRACE"; [ "$BLOCK" != startup ] ;;
+  *" up -d "*) echo up >> "$TRACE"; [ "$BLOCK" != startup ] && [ "$BLOCK" != migrated-startup ] ;;
   *) exit 2 ;;
 esac
 `
@@ -79,21 +93,39 @@ test(
         trace: ["stage", "check", "up"],
       },
       {
+        block: "schema-upgrade",
+        version: 5,
+        status: 0,
+        trace: ["stage", "check", "stop", "backup", "migrate", "up"],
+      },
+      {
+        block: "migration-failure",
+        version: 5,
+        status: 1,
+        trace: ["stage", "check", "stop", "backup", "migrate", "restore"],
+      },
+      {
+        block: "migrated-startup",
+        version: 5,
+        status: 1,
+        trace: ["stage", "check", "stop", "backup", "migrate", "up"],
+      },
+      {
         block: "bootstrap-retry",
         status: 0,
         trace: ["check", "prepare", "up"],
       },
     ]
-    for (const { block, status, trace } of cases) {
+    for (const { block, status, trace, version = 6 } of cases) {
       await t.test(block || "compatible release", async () => {
-        const directory = await realpath(
-          await mkdtemp(join(tmpdir(), "factory-deploy-test-"))
-        )
+        await mkdir(scratch, { recursive: true })
+        const directory = await realpath(await mkdtemp(join(scratch, "run-")))
         try {
           for (const path of [
             "bin",
             "bootstrap",
             "bundle/infra/deploy",
+            "bundle/crates/database/schema-upgrades",
             "bundle/web-dist",
             "previous/infra/deploy",
             "state/.factory/environments",
@@ -146,14 +178,26 @@ test(
               join(directory, "bundle/infra/deploy", name)
             )
           }
+          await copyFile(
+            new URL(
+              "../../crates/database/schema-upgrades/0006-attachments.sql",
+              import.meta.url
+            ),
+            join(
+              directory,
+              "bundle/crates/database/schema-upgrades/0006-attachments.sql"
+            )
+          )
           const tracePath = join(directory, "trace")
+          await writeFile(tracePath + ".version", String(version))
           const result = spawnSync("bash", [script, directory, "deploy"], {
             env: {
               PATH: `${join(directory, "bin")}:${process.env.PATH}`,
               TRACE: tracePath,
               BLOCK: block,
               INSTALL: directory,
-              WORKSPACE_IMAGE: block === "compatible" ? "previous" : "next",
+              WORKSPACE_IMAGE:
+                block === "compatible" || version === 5 ? "previous" : "next",
             },
             encoding: "utf8",
             timeout: 10_000,
@@ -167,6 +211,30 @@ test(
             await readFile(join(workspaceState, "prepared.json"), "utf8"),
             block === "changed" ? "next\n" : "previous\n"
           )
+          if (version === 5) {
+            const backups = await readdir(join(directory, "backups"))
+            assert.equal(backups.length, 1)
+            assert.equal(
+              (await stat(join(directory, "backups", backups[0]))).mode & 0o777,
+              0o600
+            )
+            assert.match(
+              await readFile(tracePath + ".sql", "utf8"),
+              /CREATE TABLE factory_identity.conversation_attachments/
+            )
+            assert.equal(
+              (await readFile(tracePath + ".version", "utf8")).trim(),
+              block === "migration-failure" ? "5" : "6"
+            )
+            if (block === "migrated-startup") {
+              assert.match(result.stderr, /Retry the same bundle/)
+              assert.ok(
+                (await readdir(join(workspaceState, "upgrade"))).includes(
+                  "schema-upgrade"
+                )
+              )
+            }
+          }
         } finally {
           await rm(directory, { recursive: true })
         }

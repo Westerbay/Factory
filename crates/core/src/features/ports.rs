@@ -95,6 +95,8 @@ pub struct FeatureRun {
     pub model: String,
     pub effort: Option<String>,
     pub input: String,
+    /// Conversation whose attachments the worker may read and whose outputs it fills.
+    pub conversation_id: Option<Uuid>,
 }
 
 pub struct FeatureExecution {

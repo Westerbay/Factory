@@ -218,6 +218,70 @@
         "required": ["ticket", "expiresAt"],
         "type": "object"
       },
+      "AttachmentSourceView": {
+        "enum": ["user", "agent"],
+        "type": "string"
+      },
+      "AttachmentStateView": {
+        "enum": ["uploading", "staged", "attached", "unavailable"],
+        "type": "string"
+      },
+      "AttachmentView": {
+        "properties": {
+          "conversationId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MediaKindView"
+          },
+          "mediaType": {
+            "description": "The stored type, never the type the client declared.",
+            "type": "string"
+          },
+          "messageId": {
+            "format": "uuid",
+            "type": ["string", "null"]
+          },
+          "name": {
+            "type": "string"
+          },
+          "runId": {
+            "format": "uuid",
+            "type": ["string", "null"]
+          },
+          "size": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AttachmentSourceView"
+          },
+          "state": {
+            "$ref": "#/components/schemas/AttachmentStateView"
+          }
+        },
+        "required": [
+          "id",
+          "conversationId",
+          "source",
+          "state",
+          "name",
+          "mediaType",
+          "kind",
+          "size",
+          "createdAt"
+        ],
+        "type": "object"
+      },
       "AuthorizationView": {
         "properties": {
           "authorizationUrl": {
@@ -226,6 +290,11 @@
         },
         "required": ["authorizationUrl"],
         "type": "object"
+      },
+      "BinaryBody": {
+        "description": "Raw file bytes, up to 50 MiB.",
+        "format": "binary",
+        "type": "string"
       },
       "CancelAgentLoginBody": {
         "additionalProperties": false,
@@ -789,6 +858,14 @@
       "FeatureTurnBody": {
         "additionalProperties": false,
         "properties": {
+          "attachmentIds": {
+            "description": "Staged uploads of the feature's conversation to send with the message, at most 10.",
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
           "input": {
             "type": "string"
           },
@@ -928,8 +1005,20 @@
         "required": ["status"],
         "type": "object"
       },
+      "MediaKindView": {
+        "description": "How the interface presents the file; classified by Factory from the stored bytes.",
+        "enum": ["image", "svg", "video", "pdf", "text", "html", "file"],
+        "type": "string"
+      },
       "MessageView": {
         "properties": {
+          "attachments": {
+            "description": "Files sent with a user message or referenced by an agent message.",
+            "items": {
+              "$ref": "#/components/schemas/AttachmentView"
+            },
+            "type": "array"
+          },
           "content": {
             "type": "string"
           },
@@ -948,7 +1037,14 @@
             "type": "string"
           }
         },
-        "required": ["id", "runId", "role", "content", "createdAt"],
+        "required": [
+          "id",
+          "runId",
+          "role",
+          "content",
+          "createdAt",
+          "attachments"
+        ],
         "type": "object"
       },
       "ModelView": {
@@ -1247,6 +1343,14 @@
       "StartBody": {
         "additionalProperties": false,
         "properties": {
+          "attachmentIds": {
+            "description": "Staged uploads of this conversation to send with the message, at most 10.",
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
           "effort": {
             "type": ["string", "null"]
           },
@@ -3190,6 +3294,420 @@
                 }
               }
             }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/conversations/{id}/attachments": {
+      "post": {
+        "operationId": "uploadConversationAttachment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "File name, a single path component",
+            "in": "query",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Declared type; ignored, Factory classifies the bytes",
+            "in": "query",
+            "name": "type",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact configured frontend Origin required",
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Session CSRF token required",
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "$ref": "#/components/schemas/BinaryBody"
+              }
+            }
+          },
+          "description": "Raw file bytes, streamed up to 50 MiB",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentView"
+                }
+              }
+            },
+            "description": "The staged attachment"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid path, name or body"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Active session required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Exact Origin or CSRF rejected"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Too many staged files or a changed conversation"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Larger than 50 MiB"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "The body is not application/octet-stream"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Request rate limit"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Service unavailable"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/conversations/{id}/attachments/{attachment}": {
+      "delete": {
+        "operationId": "removeConversationAttachment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "attachment",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact configured frontend Origin required",
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Session CSRF token required",
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Invalid path or body"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Active session required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Exact Origin or CSRF rejected"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Only staged attachments can be removed"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Request rate limit"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Service unavailable"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/conversations/{id}/attachments/{attachment}/content": {
+      "get": {
+        "operationId": "readConversationAttachment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "attachment",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "1 forces a download",
+            "in": "query",
+            "name": "download",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "A single byte range",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": ["string", "null"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryBody"
+                }
+              }
+            },
+            "description": "The stored bytes with the type Factory classified"
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryBody"
+                }
+              }
+            },
+            "description": "The requested byte range"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "416": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "The range is outside the file"
           },
           "429": {
             "content": {
