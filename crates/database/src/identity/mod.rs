@@ -92,6 +92,9 @@ impl IdentityDatabase {
             pool: self.pool.clone(),
         }
     }
+    pub fn attachment_store(&self) -> crate::attachments::PgAttachmentStore {
+        crate::attachments::PgAttachmentStore::new(self.pool.clone())
+    }
     pub fn feature_store(&self) -> crate::features::PgFeatureStore {
         crate::features::PgFeatureStore::new(self.pool.clone())
     }
@@ -120,6 +123,15 @@ impl IdentityDatabase {
             &self.pool,
             || IdentityError::Unavailable,
             |connection| Box::pin(schema::ready(connection)),
+        )
+        .await
+    }
+    /// Workspace upgrade commands can inspect schema 5 before attachment migration.
+    pub async fn workspace_upgrade_readiness(&self) -> Result<Readiness, IdentityError> {
+        with_connection(
+            &self.pool,
+            || IdentityError::Unavailable,
+            |connection| Box::pin(schema::compatible(connection, true)),
         )
         .await
     }

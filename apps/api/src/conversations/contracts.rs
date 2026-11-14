@@ -1,7 +1,9 @@
+use crate::attachments::contracts::AttachmentView;
 use factory_core::conversations::{
     Conversation, ConversationHistory, MessageRole, RequestKind, RequestState, RunStatus,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -75,6 +77,8 @@ pub struct MessageView {
     pub role: String,
     pub content: String,
     pub created_at: String,
+    /// Files sent with a user message or referenced by an agent message.
+    pub attachments: Vec<AttachmentView>,
 }
 #[derive(Clone, Debug, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
@@ -121,6 +125,12 @@ pub struct HistoryView {
 impl TryFrom<ConversationHistory> for HistoryView {
     type Error = ();
     fn try_from(h: ConversationHistory) -> Result<Self, ()> {
+        let mut files: HashMap<Uuid, Vec<AttachmentView>> = HashMap::new();
+        for attachment in h.attachments {
+            if let Some(message) = attachment.message_id {
+                files.entry(message).or_default().push(attachment.into());
+            }
+        }
         Ok(Self {
             conversation: h.conversation.into(),
             runs_truncated: h.runs_truncated,
@@ -140,6 +150,7 @@ impl TryFrom<ConversationHistory> for HistoryView {
                     .into(),
                     content: m.content,
                     created_at: m.created_at.to_rfc3339(),
+                    attachments: files.remove(&m.id).unwrap_or_default(),
                 })
                 .collect(),
             requests: h
@@ -181,6 +192,9 @@ pub struct StartBody {
     pub model: String,
     pub effort: Option<String>,
     pub input: String,
+    /// Staged uploads of this conversation to send with the message, at most 10.
+    #[serde(default)]
+    pub attachment_ids: Vec<Uuid>,
 }
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -231,6 +245,7 @@ mod tests {
             },
             runs: vec![],
             messages: vec![],
+            attachments: vec![],
             runs_truncated: false,
             messages_truncated: false,
             requests_truncated: false,

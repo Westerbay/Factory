@@ -304,6 +304,54 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  "/api/conversations/{id}/attachments": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post: operations["uploadConversationAttachment"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/conversations/{id}/attachments/{attachment}": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post?: never
+    delete: operations["removeConversationAttachment"]
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  "/api/conversations/{id}/attachments/{attachment}/content": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get: operations["readConversationAttachment"]
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   "/api/conversations/{id}/runs": {
     parameters: {
       query?: never
@@ -933,9 +981,37 @@ export interface components {
       expiresAt: string
       ticket: string
     }
+    /** @enum {string} */
+    AttachmentSourceView: "user" | "agent"
+    /** @enum {string} */
+    AttachmentStateView: "uploading" | "staged" | "attached" | "unavailable"
+    AttachmentView: {
+      /** Format: uuid */
+      conversationId: string
+      createdAt: string
+      /** Format: uuid */
+      id: string
+      kind: components["schemas"]["MediaKindView"]
+      /** @description The stored type, never the type the client declared. */
+      mediaType: string
+      /** Format: uuid */
+      messageId?: string | null
+      name: string
+      /** Format: uuid */
+      runId?: string | null
+      /** Format: int64 */
+      size: number
+      source: components["schemas"]["AttachmentSourceView"]
+      state: components["schemas"]["AttachmentStateView"]
+    }
     AuthorizationView: {
       authorizationUrl: string
     }
+    /**
+     * Format: binary
+     * @description Raw file bytes, up to 50 MiB.
+     */
+    BinaryBody: string
     CancelAgentLoginBody: {
       /** Format: uuid */
       operationId: string
@@ -1156,6 +1232,8 @@ export interface components {
       title: string
     }
     FeatureTurnBody: {
+      /** @description Staged uploads of the feature's conversation to send with the message, at most 10. */
+      attachmentIds?: string[]
       input: string
       /** Format: uuid */
       operationId: string
@@ -1188,7 +1266,14 @@ export interface components {
       /** @enum {string} */
       status: "ok"
     }
+    /**
+     * @description How the interface presents the file; classified by Factory from the stored bytes.
+     * @enum {string}
+     */
+    MediaKindView: "image" | "svg" | "video" | "pdf" | "text" | "html" | "file"
     MessageView: {
+      /** @description Files sent with a user message or referenced by an agent message. */
+      attachments: components["schemas"]["AttachmentView"][]
       content: string
       createdAt: string
       /** Format: uuid */
@@ -1308,6 +1393,8 @@ export interface components {
       role: components["schemas"]["UserRole"]
     }
     StartBody: {
+      /** @description Staged uploads of this conversation to send with the message, at most 10. */
+      attachmentIds?: string[]
       effort?: string | null
       input: string
       model: string
@@ -2800,6 +2887,297 @@ export interface operations {
         }
       }
       409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  uploadConversationAttachment: {
+    parameters: {
+      query: {
+        /** @description File name, a single path component */
+        name: string
+        /** @description Declared type; ignored, Factory classifies the bytes */
+        type?: string
+      }
+      header: {
+        /** @description Exact configured frontend Origin required */
+        Origin: string
+        /** @description Session CSRF token required */
+        "X-CSRF-Token": string
+      }
+      path: {
+        id: string
+      }
+      cookie?: never
+    }
+    /** @description Raw file bytes, streamed up to 50 MiB */
+    requestBody: {
+      content: {
+        "application/octet-stream": components["schemas"]["BinaryBody"]
+      }
+    }
+    responses: {
+      /** @description The staged attachment */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["AttachmentView"]
+        }
+      }
+      /** @description Invalid path, name or body */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Active session required */
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Exact Origin or CSRF rejected */
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Too many staged files or a changed conversation */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Larger than 50 MiB */
+      413: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description The body is not application/octet-stream */
+      415: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Request rate limit */
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Service unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  removeConversationAttachment: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Exact configured frontend Origin required */
+        Origin: string
+        /** @description Session CSRF token required */
+        "X-CSRF-Token": string
+      }
+      path: {
+        id: string
+        attachment: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      204: {
+        headers: {
+          [name: string]: unknown
+        }
+        content?: never
+      }
+      /** @description Invalid path or body */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Active session required */
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Exact Origin or CSRF rejected */
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Only staged attachments can be removed */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Request rate limit */
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description Service unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  readConversationAttachment: {
+    parameters: {
+      query?: {
+        /** @description 1 forces a download */
+        download?: string
+      }
+      header?: {
+        /** @description A single byte range */
+        Range?: string | null
+      }
+      path: {
+        id: string
+        attachment: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The stored bytes with the type Factory classified */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/octet-stream": components["schemas"]["BinaryBody"]
+        }
+      }
+      /** @description The requested byte range */
+      206: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/octet-stream": components["schemas"]["BinaryBody"]
+        }
+      }
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      /** @description The range is outside the file */
+      416: {
         headers: {
           [name: string]: unknown
         }

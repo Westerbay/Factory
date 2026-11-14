@@ -3,6 +3,7 @@ use crate::config::RuntimeConfig;
 use crate::conversations::runtime::ConversationRuntime;
 use crate::features::FeatureRuntime;
 use crate::projects::runtime::{KeySource, ProjectsRuntime};
+use factory_adapters::attachments::DockerAttachmentFiles;
 use factory_adapters::claude_account::ClaudeAccountAdapter;
 use factory_adapters::claude_execution::ClaudeExecutionAdapter;
 use factory_adapters::codex_account::CodexAccountAdapter;
@@ -16,6 +17,7 @@ use factory_adapters::identity::{GitHubRepositoryProvider, RepositoryAeadCipher}
 use factory_adapters::projects::DockerProjectRuntime;
 use factory_adapters::terminals::DockerTerminalRuntime;
 use factory_application::agent_connections::AgentConnectionService;
+use factory_application::attachments::AttachmentService;
 use factory_application::conversations::ConversationService;
 use factory_application::conversations::coordinator::ExecutionProvider;
 use factory_application::environments::{
@@ -61,6 +63,7 @@ pub struct EnvironmentHost {
     conversations: Arc<ConversationRuntime>,
     projects: Arc<ProjectsRuntime>,
     features: FeatureRuntime,
+    attachments: Arc<AttachmentService>,
     availability: EnvironmentAvailability,
     stop: watch::Sender<bool>,
     workers: Vec<JoinHandle<()>>,
@@ -263,6 +266,16 @@ impl EnvironmentHostFactory {
             ))),
             _ => None,
         };
+        let conversation_service = Arc::new(ConversationService::new_with_projects(
+            service.clone(),
+            Arc::new(self.database.conversation_store()),
+            projects.clone(),
+        ));
+        let attachments = Arc::new(AttachmentService::new(
+            conversation_service.clone(),
+            Arc::new(self.database.attachment_store()),
+            Arc::new(DockerAttachmentFiles::new(runtime.clone())),
+        ));
         let project_runtime = Arc::new(ProjectsRuntime {
             environments: service.clone(),
             projects: projects.clone(),
@@ -273,12 +286,8 @@ impl EnvironmentHostFactory {
             installation: self.installation.clone(),
             jobs: Arc::new(tokio::sync::Semaphore::new(4)),
             active: Arc::new(StdMutex::new(std::collections::HashSet::new())),
+            attachments: Some(attachments.clone()),
         });
-        let conversation_service = Arc::new(ConversationService::new_with_projects(
-            service.clone(),
-            Arc::new(self.database.conversation_store()),
-            projects,
-        ));
         let terminal = Arc::new(TerminalService::new_with_conversations(
             service.clone(),
             Arc::new(DockerTerminalRuntime::new(runtime.clone())),
@@ -294,7 +303,7 @@ impl EnvironmentHostFactory {
             Arc::new(ClaudeAccountAdapter::new(runtime.clone())),
         ));
         let feature_store: Arc<dyn FeatureStore> = Arc::new(self.database.feature_store());
-        let conversations = crate::conversations::runtime::with_providers_and_features(
+        let conversations = crate::conversations::runtime::with_providers_features_and_attachments(
             conversation_service,
             vec![
                 ExecutionProvider {
@@ -311,6 +320,7 @@ impl EnvironmentHostFactory {
                 },
             ],
             feature_store.clone(),
+            attachments.clone(),
         )
         .map_err(|_| EnvironmentError::InvalidConfiguration)?;
         let coordinator = FeatureCoordinator::new(
@@ -365,6 +375,7 @@ impl EnvironmentHostFactory {
             conversations,
             projects: project_runtime,
             features,
+            attachments,
             availability,
             stop,
             workers,
@@ -400,6 +411,10 @@ impl EnvironmentHost {
 
     pub(crate) fn features(&self) -> FeatureRuntime {
         self.features.clone()
+    }
+
+    pub(crate) fn attachments(&self) -> Arc<AttachmentService> {
+        self.attachments.clone()
     }
 
     /// Drain bounded in-flight operations. Stopping the API never deletes user data.

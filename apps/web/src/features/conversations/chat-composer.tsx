@@ -1,10 +1,17 @@
 import * as m from "@workspace/i18n/messages"
 import { useLocale, translateMessage } from "../../lib/i18n"
-import { useId, useRef } from "react"
-import { ArrowUp, CircleHelp, Square } from "lucide-react"
+import { useId, useRef, useState, useSyncExternalStore } from "react"
+import { ArrowUp, CircleHelp, Paperclip, Square, X } from "lucide-react"
 
 import { IconButton } from "../../components/ui/button"
 import type { Model } from "./api"
+import type { AttachmentTray } from "./attachment-tray"
+
+function noopSubscribe() {
+  return () => {}
+}
+const emptyTray = { items: [], rejections: [] }
+const emptySnapshot = () => emptyTray
 
 export function ChatComposer({
   input,
@@ -21,6 +28,7 @@ export function ChatComposer({
   onSend,
   onStop,
   workflow,
+  tray,
 }: {
   input: string
   model: string
@@ -36,19 +44,95 @@ export function ChatComposer({
   onSend: () => void
   onStop: () => void
   workflow?: { modelLabel: string; access: string }
+  tray?: AttachmentTray
 }) {
   useLocale()
   const inputId = useId()
   const composing = useRef(false)
   const selected = models.find((item) => item.id === model)
+  const files = useRef<HTMLInputElement>(null)
+  const [dragging, setDragging] = useState(false)
+  const { items, rejections } = useSyncExternalStore(
+    tray?.subscribe ?? noopSubscribe,
+    tray?.getSnapshot ?? emptySnapshot
+  )
+  const attach = (list: Iterable<File>) => {
+    const added = [...list]
+    if (!disabled && tray && added.length) tray.add(added)
+  }
+  const hasFiles = (event: React.DragEvent) =>
+    event.dataTransfer.types.includes("Files")
   return (
     <form
       className="chat-composer"
+      data-dragging={dragging}
+      onDragOver={(event) => {
+        if (!hasFiles(event)) return
+        event.preventDefault()
+        if (tray && !disabled) setDragging(true)
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+          setDragging(false)
+      }}
+      onDrop={(event) => {
+        if (!hasFiles(event)) return
+        event.preventDefault()
+        setDragging(false)
+        attach(event.dataTransfer.files)
+      }}
       onSubmit={(event) => {
         event.preventDefault()
         if (!sendDisabled && !running) onSend()
       }}
     >
+      {(items.length > 0 || rejections.length > 0) && tray && (
+        <div>
+          <ul className="attachment-tray" aria-label={m.attachment_tray()}>
+            {items.map((item) => (
+              <li
+                key={item.key}
+                className="attachment-chip"
+                data-status={item.status}
+              >
+                <span className="attachment-chip-body">
+                  <span className="attachment-name">{item.name}</span>
+                  <small role="status">
+                    {item.status === "uploading"
+                      ? m.attachment_uploading()
+                      : item.status === "failed"
+                        ? m.attachment_failed()
+                        : m.attachment_ready()}
+                  </small>
+                  <button
+                    type="button"
+                    aria-label={m.attachment_remove({ name: item.name })}
+                    onClick={() => void tray.remove(item.key)}
+                  >
+                    <X aria-hidden="true" size={12} />
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ul>
+          {rejections.length > 0 && (
+            <div className="attachment-notice" role="status">
+              <span>
+                {rejections
+                  .map((item) =>
+                    item.reason === "too-large"
+                      ? m.attachment_too_large({ name: item.name })
+                      : m.attachment_too_many({ name: item.name })
+                  )
+                  .join(" ")}
+              </span>
+              <button type="button" onClick={() => tray.dismissRejections()}>
+                {m.attachment_dismiss()}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       <label className="sr-only" htmlFor={inputId}>
         {m.message_assistant()}{" "}
       </label>
@@ -56,6 +140,12 @@ export function ChatComposer({
         id={inputId}
         value={input}
         onChange={(event) => onInput(event.target.value)}
+        onPaste={(event) => {
+          const pasted = [...event.clipboardData.files]
+          if (!tray || disabled || pasted.length === 0) return
+          event.preventDefault()
+          attach(pasted)
+        }}
         onCompositionStart={() => {
           composing.current = true
         }}
@@ -79,6 +169,28 @@ export function ChatComposer({
         rows={2}
       />
       <div className="chat-composer-actions">
+        {tray && (
+          <>
+            <input
+              ref={files}
+              type="file"
+              multiple
+              hidden
+              tabIndex={-1}
+              onChange={(event) => {
+                attach(event.target.files ?? [])
+                event.target.value = ""
+              }}
+            />
+            <IconButton
+              label={m.attachment_add()}
+              onClick={() => files.current?.click()}
+              disabled={disabled}
+            >
+              <Paperclip aria-hidden="true" size={16} />
+            </IconButton>
+          </>
+        )}
         {workflow ? (
           <span className="chat-model chat-workflow-model">
             {workflow.modelLabel}

@@ -135,7 +135,7 @@ python3 -c 'import json, os, sys; path=sys.argv[1]; info=os.stat(path); json.dum
             let (proof_code, proof_output) = execute(&runtime, main_id, &proof_args.iter().map(String::as_str).collect::<Vec<_>>()).await;
             assert_eq!(proof_code, 0);
             let proof = parse_proof(&proof_output).unwrap();
-            let request = FeatureRun { workspace: workspace.clone(), provider: provider.into(), model: model.into(), effort: None, input: "Fixture never begins a provider turn".into() };
+            let request = FeatureRun { workspace: workspace.clone(), provider: provider.into(), model: model.into(), effort: None, input: "Fixture never begins a provider turn".into(), conversation_id: None };
             let provider = ScopedProvider::from_request(&request).unwrap();
             let relay = runtime.docker.create_exec(main_id, CreateExecOptions {
                 cmd: Some(relay_command(RelayAccess::Provider(provider), workspace.attempt_id)), user: Some("10000:10000".to_owned()),
@@ -365,6 +365,7 @@ python3 -c 'import json, os, sys; path=sys.argv[1]; info=os.stat(path); json.dum
             model: "gpt-5.4".into(),
             effort: None,
             input: "Fixture stops before a provider turn".into(),
+            conversation_id: None,
         }).await.unwrap();
         let ready = tokio::time::timeout(Duration::from_secs(35), agent.session.output.next()).await;
         assert!(matches!(ready, Ok(Ok(Some(ExecutionEvent::ThreadReady { .. })))), "{ready:?}");
@@ -435,4 +436,189 @@ python3 -c 'import json, os, sys; path=sys.argv[1]; info=os.stat(path); json.dum
     }
     fixture::cleanup(&runtime, &[&env]).await;
     outcome.unwrap();
+}
+
+mod attachment_mounts {
+    use super::*;
+    use factory_core::attachments::{conversation_store, worker_outputs_store};
+    use factory_core::projects::ProjectState;
+    use serde_json::Value;
+
+    fn synthetic() -> (Environment, Project, TaskWorkspace) {
+        let installation = Uuid::new_v4();
+        let id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let name = format!("factory-{}-{}", installation.simple(), id.simple());
+        let env = Environment {
+            id,
+            user_id,
+            installation_id: installation,
+            desired_state: DesiredState::Running,
+            observed_state: ObservedState::Running,
+            generation: 1,
+            provisioning_state: ProvisioningState::VolumeReady,
+            volume_name: format!("{name}-home"),
+            container_name: name,
+            image_id: format!("sha256:{}", "a".repeat(64)),
+            policy_version: POLICY_VERSION.into(),
+            observed_at: None,
+            error_code: None,
+            next_reconcile_at: Utc::now(),
+        };
+        let project = Project {
+            id: Uuid::new_v4(),
+            user_id,
+            repository_id: 42,
+            full_name: "fixture/project".into(),
+            cloned_full_name: "fixture/project".into(),
+            directory: "project".into(),
+            state: ProjectState::Ready,
+            operation_id: Uuid::new_v4(),
+            environment_id: id,
+            environment_generation: 1,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let workspace = TaskWorkspace {
+            feature_id: Uuid::new_v4(),
+            attempt_id: Uuid::new_v4(),
+            base_oid: "a".repeat(40),
+            access: WorkspaceAccess::ReadOnly,
+        };
+        (env, project, workspace)
+    }
+
+    fn body(identity: &WorkerIdentity, env: &Environment) -> Value {
+        let command = vec!["/bin/true".to_owned()];
+        serde_json::to_value(identity.body(env, CHECKOUT, command).unwrap()).unwrap()
+    }
+
+    /// What Docker reports for a container created from `expected`.
+    fn inspected(env: &Environment, expected: &Value) -> Value {
+        let attached: Vec<Value> = expected["HostConfig"]["Mounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|mount| {
+                json!({"Type": "volume", "Name": env.volume_name,
+                    "Destination": mount["Target"], "RW": mount["ReadOnly"] != true})
+            })
+            .collect();
+        json!({"Config": expected, "HostConfig": expected["HostConfig"], "Mounts": attached,
+            "NetworkSettings": {"Networks": {"none": {}}}})
+    }
+
+    fn mount<'a>(body: &'a Value, target: &str) -> Option<&'a Value> {
+        body["HostConfig"]["Mounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|mount| mount["Target"] == target)
+    }
+
+    #[test]
+    fn conversation_workers_mount_attachments_read_only_and_their_outputs_writable() {
+        let (env, project, workspace) = synthetic();
+        let conversation = Uuid::new_v4();
+        let identity = WorkerIdentity::new(&env, &project, &workspace, env.generation, Role::Agent)
+            .unwrap()
+            .with_conversation(&project, conversation);
+        let expected = body(&identity, &env);
+        let files = mount(&expected, "/workspace/attachments").unwrap();
+        assert_eq!(files["ReadOnly"], true);
+        assert_eq!(files["Source"], env.volume_name);
+        assert_eq!(
+            files["VolumeOptions"],
+            json!({"NoCopy": true, "Subpath": conversation_store(Some(project.id), conversation)})
+        );
+        let outputs = mount(&expected, "/workspace/outputs").unwrap();
+        assert_eq!(outputs["ReadOnly"], false);
+        assert_eq!(
+            outputs["VolumeOptions"]["Subpath"],
+            worker_outputs_store(Some(project.id), conversation, workspace.attempt_id)
+        );
+        // Checkout, relay, attachments and outputs; nothing else.
+        assert_eq!(
+            expected["HostConfig"]["Mounts"].as_array().unwrap().len(),
+            4
+        );
+        assert!(verify_worker(&inspected(&env, &expected), &expected).is_ok());
+    }
+
+    #[test]
+    fn workers_without_a_conversation_get_no_attachment_mounts() {
+        let (env, project, workspace) = synthetic();
+        let identity =
+            WorkerIdentity::new(&env, &project, &workspace, env.generation, Role::Agent).unwrap();
+        let expected = body(&identity, &env);
+        assert!(mount(&expected, "/workspace/attachments").is_none());
+        assert!(mount(&expected, "/workspace/outputs").is_none());
+        assert_eq!(
+            expected["HostConfig"]["Mounts"].as_array().unwrap().len(),
+            2
+        );
+        assert!(verify_worker(&inspected(&env, &expected), &expected).is_ok());
+    }
+
+    #[test]
+    fn verification_rejects_a_writable_attachments_mount_even_if_expected() {
+        let (env, project, workspace) = synthetic();
+        let identity = WorkerIdentity::new(&env, &project, &workspace, env.generation, Role::Agent)
+            .unwrap()
+            .with_conversation(&project, Uuid::new_v4());
+        let mut expected = body(&identity, &env);
+        for mount in expected["HostConfig"]["Mounts"].as_array_mut().unwrap() {
+            if mount["Target"] == "/workspace/attachments" {
+                mount["ReadOnly"] = json!(false);
+            }
+        }
+        // The container matches its (wrong) specification exactly.
+        assert_eq!(
+            verify_worker(&inspected(&env, &expected), &expected),
+            Err(ExecutionError::PreflightUnavailable)
+        );
+    }
+
+    #[test]
+    fn verification_rejects_swapped_or_missing_attachment_mounts() {
+        let (env, project, workspace) = synthetic();
+        let identity = WorkerIdentity::new(&env, &project, &workspace, env.generation, Role::Agent)
+            .unwrap()
+            .with_conversation(&project, Uuid::new_v4());
+        let expected = body(&identity, &env);
+        let good = inspected(&env, &expected);
+
+        let mut other_source = good.clone();
+        for mount in other_source["HostConfig"]["Mounts"].as_array_mut().unwrap() {
+            if mount["Target"] == "/workspace/outputs" {
+                mount["VolumeOptions"]["Subpath"] = json!(".factory/attachments/chats");
+            }
+        }
+        assert_eq!(
+            verify_worker(&other_source, &expected),
+            Err(ExecutionError::PreflightUnavailable)
+        );
+
+        let mut writable_inspect = good.clone();
+        for mount in writable_inspect["Mounts"].as_array_mut().unwrap() {
+            if mount["Destination"] == "/workspace/attachments" {
+                mount["RW"] = json!(true);
+            }
+        }
+        assert_eq!(
+            verify_worker(&writable_inspect, &expected),
+            Err(ExecutionError::PreflightUnavailable)
+        );
+
+        let mut missing = good;
+        missing["HostConfig"]["Mounts"]
+            .as_array_mut()
+            .unwrap()
+            .pop();
+        missing["Mounts"].as_array_mut().unwrap().pop();
+        assert_eq!(
+            verify_worker(&missing, &expected),
+            Err(ExecutionError::PreflightUnavailable)
+        );
+    }
 }

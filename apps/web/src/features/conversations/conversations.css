@@ -343,7 +343,7 @@
     flex-wrap: wrap;
   }
   .chat-model {
-    flex: 1 0 100%;
+    flex: 1 1 calc(100% - 3.25rem);
   }
   .chat-model select {
     width: 100%;
@@ -375,4 +375,100 @@
   .chat-access p {
     animation: none;
   }
+}
+
+.attachment-list,
+.attachment-tray {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+  padding: 0;
+  list-style: none;
+}
+.attachment-chip,
+.attachment-thumbnail {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--surface-sidebar);
+  font-size: 0.75rem;
+}
+.attachment-chip > a,
+.attachment-chip > button,
+.attachment-chip[data-state="unavailable"],
+.attachment-chip > .attachment-chip-body {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  max-width: 16rem;
+  padding: 0.375rem 0.625rem;
+  color: inherit;
+}
+.attachment-chip > button,
+.attachment-thumbnail > button {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+}
+.attachment-chip[data-state="unavailable"] {
+  color: var(--text-muted);
+}
+.attachment-thumbnail {
+  overflow: hidden;
+}
+.attachment-thumbnail > button {
+  display: block;
+  padding: 0;
+}
+.attachment-thumbnail img {
+  display: block;
+  width: 7rem;
+  height: 5rem;
+  object-fit: cover;
+}
+.attachment-chip svg,
+.attachment-chip small,
+.attachment-chip-body > button {
+  flex-shrink: 0;
+}
+.attachment-viewer h2 {
+  overflow-wrap: anywhere;
+}
+.attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-viewer-actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 0.75rem;
+}
+.attachment-notice {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.25rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+.chat-composer[data-dragging="true"] {
+  outline: 2px dashed var(--border);
+  outline-offset: -4px;
+}
+.attachment-chip[data-status="failed"] {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+.attachment-chip > .attachment-chip-body > button {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
 }

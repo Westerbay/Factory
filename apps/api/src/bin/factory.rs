@@ -116,7 +116,11 @@ async fn configure(database: &IdentityDatabase, username: &str) -> Result<(), &'
 }
 
 async fn ready(database: &IdentityDatabase) -> Result<(), &'static str> {
-    match database.ready().await {
+    check_readiness(database.ready().await)
+}
+
+fn check_readiness(result: Result<Readiness, IdentityError>) -> Result<(), &'static str> {
+    match result {
         Ok(Readiness::Ready) => {}
         Ok(Readiness::Missing) => return Err("IDENTITY_SCHEMA_REQUIRED"),
         Ok(Readiness::Invalid) => return Err("IDENTITY_SCHEMA_INVALID"),
@@ -137,7 +141,7 @@ async fn run() -> Result<(), &'static str> {
     let result = match command {
         Command::Admin(username) => configure(&database, username).await,
         Command::Upgrade(action) => {
-            ready(&database).await?;
+            check_readiness(database.workspace_upgrade_readiness().await)?;
             workspace_upgrade::run(&config, &database, action).await
         }
         Command::Help => unreachable!(),

@@ -119,6 +119,15 @@ impl ConversationService {
         let env = self.current_environment(actor).await?;
         self.store.history(actor, env.id, env.generation, id).await
     }
+    /// Resolve an owned conversation under the current environment.
+    pub async fn get(
+        &self,
+        actor: EnvironmentActor,
+        id: Uuid,
+    ) -> Result<Conversation, ConversationError> {
+        let env = self.current_environment(actor).await?;
+        self.store.get(actor, env.id, env.generation, id).await
+    }
     pub async fn find_turn(
         &self,
         actor: EnvironmentActor,
@@ -126,6 +135,7 @@ impl ConversationService {
         operation_id: Uuid,
         model: String,
         input: String,
+        attachment_ids: Vec<Uuid>,
     ) -> Result<Option<Run>, ConversationError> {
         let env = self.current_environment(actor).await?;
         self.store
@@ -138,6 +148,7 @@ impl ConversationService {
                     generation: env.generation,
                     model,
                     input,
+                    attachment_ids,
                 },
             )
             .await
@@ -150,6 +161,7 @@ impl ConversationService {
         operation_id: Uuid,
         model: String,
         input: String,
+        attachment_ids: Vec<Uuid>,
     ) -> Result<(Environment, Run, bool), ConversationError> {
         let env = self.current_environment(actor).await?;
         let (run, created) = self
@@ -163,6 +175,7 @@ impl ConversationService {
                     generation: env.generation,
                     model,
                     input,
+                    attachment_ids,
                 },
             )
             .await?;

@@ -466,6 +466,64 @@ async fn owned_composition_preserves_identity_across_restart_and_revokes_access(
         403
     );
 
+    // Attachment routes use the same real session and CSRF checks. Without an
+    // environment host their service is absent, so they fail closed after those checks.
+    let member_csrf = session(&app, &member).await["csrfToken"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let conversation = "00000000-0000-0000-0000-000000000001";
+    let upload = format!("/api/conversations/{conversation}/attachments?name=a.bin");
+    let content = format!("/api/conversations/{conversation}/attachments/{conversation}/content");
+    let binary = |cookie: &str, csrf: Option<&str>, content_type: Option<&str>| {
+        let mut builder = Request::builder()
+            .method(Method::POST)
+            .uri(&upload)
+            .header(header::ORIGIN, WEB_ORIGIN);
+        if !cookie.is_empty() {
+            builder = builder.header(header::COOKIE, cookie);
+        }
+        if let Some(csrf) = csrf {
+            builder = builder.header("x-csrf-token", csrf);
+        }
+        if let Some(content_type) = content_type {
+            builder = builder.header(header::CONTENT_TYPE, content_type);
+        }
+        builder.body(Body::from(vec![0u8; 16])).unwrap()
+    };
+    for (cookie, csrf, status) in [
+        ("", Some(member_csrf.as_str()), 401),
+        (member.as_str(), None, 403),
+        (member.as_str(), Some("forged"), 403),
+        (member.as_str(), Some(member_csrf.as_str()), 503),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(binary(cookie, csrf, Some("application/octet-stream")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status, "upload {cookie:?} {csrf:?}");
+        assert_eq!(
+            response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+            "nosniff"
+        );
+    }
+    let json_upload = app
+        .clone()
+        .oneshot(binary(
+            &member,
+            Some(&member_csrf),
+            Some("application/json"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(json_upload.status(), 415);
+    let anonymous_read = request(&app, Method::GET, &content, "", None, None).await;
+    assert_eq!(anonymous_read.status(), 401);
+    let unavailable_read = request(&app, Method::GET, &content, &member, None, None).await;
+    assert_eq!(unavailable_read.status(), 503);
+    assert_eq!(response_json(unavailable_read).await["code"], "unavailable");
+
     // Recreate the runtime and connection pool, keeping only browser cookies.
     drop(app);
     database.close().await;

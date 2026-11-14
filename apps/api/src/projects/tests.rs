@@ -711,6 +711,7 @@ async fn stopped_import_recovers_without_github_credentials_and_reuses_original_
         installation: Arc::new(()),
         jobs: Arc::new(tokio::sync::Semaphore::new(4)),
         active: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        attachments: None,
     });
     let app: Router = documented_router(Some(auth), Some(runtime)).into();
     let cookie = format!("factory_session={raw}");
@@ -1172,6 +1173,7 @@ async fn project_verification_and_connection_are_read_only_and_report_provider_e
         installation: Arc::new(()),
         jobs: Arc::new(tokio::sync::Semaphore::new(4)),
         active: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        attachments: None,
     });
     let other_auth = AuthState::new(
         Arc::new(IdentityService::new(
@@ -1321,4 +1323,675 @@ async fn project_verification_and_connection_are_read_only_and_report_provider_e
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "provider_unauthorized");
+}
+
+type Events = Arc<std::sync::Mutex<Vec<&'static str>>>;
+
+/// Records the order of fence, file purges and row removal for one project deletion.
+struct DeletingProjects {
+    project: factory_core::projects::Project,
+    events: Events,
+}
+#[async_trait]
+impl factory_core::projects::ProjectStore for DeletingProjects {
+    async fn begin_delete(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: Uuid,
+    ) -> Result<factory_core::projects::Project, ProjectError> {
+        self.events.lock().unwrap().push("fence");
+        Ok(self.project.clone())
+    }
+    async fn finish_delete(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: Uuid,
+    ) -> Result<(), ProjectError> {
+        self.events.lock().unwrap().push("rows");
+        Ok(())
+    }
+    async fn sync_repository_metadata(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: &[factory_core::projects::RepositoryMetadata],
+    ) -> Result<Vec<i64>, ProjectError> {
+        unreachable!()
+    }
+    async fn reserve(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: factory_core::projects::ImportProject,
+    ) -> Result<(factory_core::projects::Project, bool), ProjectError> {
+        unreachable!()
+    }
+    async fn get(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: Uuid,
+    ) -> Result<factory_core::projects::Project, ProjectError> {
+        Ok(self.project.clone())
+    }
+    async fn list(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: Option<Uuid>,
+    ) -> Result<factory_core::projects::ProjectPage, ProjectError> {
+        unreachable!()
+    }
+    async fn settle(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: Uuid,
+        _: Uuid,
+        _: bool,
+    ) -> Result<factory_core::projects::Project, ProjectError> {
+        unreachable!()
+    }
+    async fn recover_stopped(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: chrono::DateTime<Utc>,
+        _: Uuid,
+    ) -> Result<factory_core::projects::Project, ProjectError> {
+        unreachable!()
+    }
+    async fn recoverable(
+        &self,
+        _: EnvironmentActor,
+    ) -> Result<Vec<factory_core::projects::RecoverableImport>, ProjectError> {
+        unreachable!()
+    }
+    async fn confirm_recovered(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: Uuid,
+        _: Uuid,
+    ) -> Result<factory_core::projects::Project, ProjectError> {
+        unreachable!()
+    }
+    async fn retry(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: Uuid,
+        _: Uuid,
+        _: Uuid,
+    ) -> Result<factory_core::projects::Project, ProjectError> {
+        unreachable!()
+    }
+}
+
+struct DeletingDriver(Events);
+#[async_trait]
+impl runtime::ProjectDriver for DeletingDriver {
+    async fn delete_project(
+        &self,
+        _: &factory_core::environments::Environment,
+        _: &factory_core::projects::Project,
+    ) -> Result<(), factory_adapters::projects::ProjectRuntimeError> {
+        self.0.lock().unwrap().push("repository");
+        Ok(())
+    }
+    async fn setup_status(
+        &self,
+        _: &factory_core::environments::Environment,
+    ) -> Result<bool, factory_adapters::projects::ProjectRuntimeError> {
+        unreachable!()
+    }
+    async fn public_key_status(
+        &self,
+        _: &factory_core::environments::Environment,
+    ) -> Result<
+        factory_adapters::projects::SshKeyStatus,
+        factory_adapters::projects::ProjectRuntimeError,
+    > {
+        unreachable!()
+    }
+    async fn mark_key_registered(
+        &self,
+        _: &factory_core::environments::Environment,
+        _: &str,
+    ) -> Result<(), factory_adapters::projects::ProjectRuntimeError> {
+        unreachable!()
+    }
+    async fn rotate_missing_key(
+        &self,
+        _: &factory_core::environments::Environment,
+        _: &str,
+    ) -> Result<
+        factory_adapters::projects::SshKeyStatus,
+        factory_adapters::projects::ProjectRuntimeError,
+    > {
+        unreachable!()
+    }
+    async fn configure_git_identity(
+        &self,
+        _: &factory_core::environments::Environment,
+        _: &str,
+        _: &str,
+    ) -> Result<(), factory_adapters::projects::ProjectRuntimeError> {
+        unreachable!()
+    }
+    async fn destination_available(
+        &self,
+        _: &factory_core::environments::Environment,
+        _: &str,
+    ) -> Result<bool, factory_adapters::projects::ProjectRuntimeError> {
+        unreachable!()
+    }
+    async fn clone_project(
+        &self,
+        _: &factory_core::environments::Environment,
+        _: &factory_core::projects::Project,
+    ) -> Result<(), factory_adapters::projects::ProjectRuntimeError> {
+        unreachable!()
+    }
+    async fn inspect_project(
+        &self,
+        _: &factory_core::environments::Environment,
+        _: &factory_core::projects::Project,
+    ) -> Result<
+        factory_adapters::projects::ProjectDirectory,
+        factory_adapters::projects::ProjectRuntimeError,
+    > {
+        unreachable!()
+    }
+}
+
+/// Only the project purge is reachable from project deletion.
+struct PurgingFiles {
+    events: Events,
+    fail: std::sync::atomic::AtomicBool,
+    purged: std::sync::Mutex<Vec<Uuid>>,
+}
+#[async_trait]
+impl factory_core::attachments::AttachmentFiles for PurgingFiles {
+    async fn delete_project(
+        &self,
+        _: &factory_core::environments::Environment,
+        project_id: Uuid,
+    ) -> Result<(), factory_core::attachments::AttachmentError> {
+        if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(factory_core::attachments::AttachmentError::Unavailable);
+        }
+        self.events.lock().unwrap().push("attachments");
+        self.purged.lock().unwrap().push(project_id);
+        Ok(())
+    }
+    async fn put(
+        &self,
+        _: &factory_core::environments::Environment,
+        _: &factory_core::attachments::AttachmentLocation,
+        _: &mut dyn factory_core::attachments::ByteSource,
+    ) -> Result<factory_core::attachments::StoredFile, factory_core::attachments::AttachmentError>
+    {
+        unreachable!()
+    }
+    async fn capture(
+        &self,
+        _: &factory_core::environments::Environment,
+        _: &factory_core::attachments::AttachmentLocation,
+        _: &str,
+        _: &[String],
+    ) -> Result<factory_core::attachments::StoredFile, factory_core::attachments::AttachmentError>
+    {
+        unreachable!()
+    }
+    async fn read(
+        &self,
+        _: &factory_core::environments::Environment,
+        _: &factory_core::attachments::AttachmentLocation,
+        _: u64,
+        _: u64,
+    ) -> Result<Vec<u8>, factory_core::attachments::AttachmentError> {
+        unreachable!()
+    }
+    async fn delete_attachment(
+        &self,
+        _: &factory_core::environments::Environment,
+        _: &factory_core::attachments::AttachmentLocation,
+    ) -> Result<(), factory_core::attachments::AttachmentError> {
+        unreachable!()
+    }
+    async fn delete_conversation(
+        &self,
+        _: &factory_core::environments::Environment,
+        _: Option<Uuid>,
+        _: Uuid,
+    ) -> Result<(), factory_core::attachments::AttachmentError> {
+        unreachable!()
+    }
+    async fn prepare_worker_directories(
+        &self,
+        _: &factory_core::environments::Environment,
+        _: Uuid,
+        _: Uuid,
+        _: Uuid,
+    ) -> Result<
+        factory_core::attachments::WorkerDirectories,
+        factory_core::attachments::AttachmentError,
+    > {
+        unreachable!()
+    }
+}
+
+#[tokio::test]
+async fn deleting_a_project_purges_its_attachment_files_before_its_rows() {
+    use factory_application::{
+        attachments::AttachmentService,
+        conversations::ConversationService,
+        environments::{EnvironmentAvailability, EnvironmentReconciler, EnvironmentService},
+        projects::ProjectService,
+    };
+    use factory_core::{environments::*, projects::*};
+    use std::sync::atomic::Ordering;
+
+    struct NoConversations;
+    // Deleting a project never touches conversation rows through this service.
+    #[async_trait]
+    impl factory_core::conversations::ConversationStore for NoConversations {
+        async fn reserve_model_probe(
+            &self,
+            _: EnvironmentActor,
+            _: Uuid,
+            _: i64,
+            _: Uuid,
+        ) -> Result<(), factory_core::conversations::ConversationError> {
+            unreachable!()
+        }
+        async fn settle_model_probe_launch(
+            &self,
+            _: Uuid,
+            _: Uuid,
+            _: i64,
+        ) -> Result<(), factory_core::conversations::ConversationError> {
+            unreachable!()
+        }
+        async fn release_model_probe(
+            &self,
+            _: EnvironmentActor,
+            _: Uuid,
+        ) -> Result<(), factory_core::conversations::ConversationError> {
+            unreachable!()
+        }
+        async fn recover_model_probe_stopped(
+            &self,
+            _: EnvironmentActor,
+            _: Uuid,
+            _: i64,
+            _: chrono::DateTime<Utc>,
+        ) -> Result<bool, factory_core::conversations::ConversationError> {
+            unreachable!()
+        }
+        async fn has_open_runs(
+            &self,
+            _: EnvironmentActor,
+        ) -> Result<bool, factory_core::conversations::ConversationError> {
+            unreachable!()
+        }
+        async fn create(
+            &self,
+            _: EnvironmentActor,
+            _: Uuid,
+            _: i64,
+        ) -> Result<
+            factory_core::conversations::Conversation,
+            factory_core::conversations::ConversationError,
+        > {
+            unreachable!()
+        }
+        async fn list(
+            &self,
+            _: EnvironmentActor,
+            _: Uuid,
+            _: i64,
+            _: Option<Uuid>,
+        ) -> Result<
+            factory_core::conversations::ConversationPage,
+            factory_core::conversations::ConversationError,
+        > {
+            unreachable!()
+        }
+        async fn history(
+            &self,
+            _: EnvironmentActor,
+            _: Uuid,
+            _: i64,
+            _: Uuid,
+        ) -> Result<
+            factory_core::conversations::ConversationHistory,
+            factory_core::conversations::ConversationError,
+        > {
+            unreachable!()
+        }
+        async fn find_turn(
+            &self,
+            _: EnvironmentActor,
+            _: factory_core::conversations::StartTurn,
+        ) -> Result<
+            Option<factory_core::conversations::Run>,
+            factory_core::conversations::ConversationError,
+        > {
+            unreachable!()
+        }
+        async fn begin_turn(
+            &self,
+            _: EnvironmentActor,
+            _: factory_core::conversations::StartTurn,
+        ) -> Result<
+            (factory_core::conversations::Run, bool),
+            factory_core::conversations::ConversationError,
+        > {
+            unreachable!()
+        }
+        async fn settle_run_launch(
+            &self,
+            _: Uuid,
+            _: Uuid,
+            _: i64,
+        ) -> Result<(), factory_core::conversations::ConversationError> {
+            unreachable!()
+        }
+        async fn set_thread(
+            &self,
+            _: EnvironmentActor,
+            _: Uuid,
+            _: i64,
+            _: Uuid,
+            _: &str,
+            _: Option<&str>,
+        ) -> Result<(), factory_core::conversations::ConversationError> {
+            unreachable!()
+        }
+        async fn append_assistant(
+            &self,
+            _: EnvironmentActor,
+            _: Uuid,
+            _: i64,
+            _: Uuid,
+            _: &str,
+            _: &str,
+        ) -> Result<
+            (factory_core::conversations::Message, bool),
+            factory_core::conversations::ConversationError,
+        > {
+            unreachable!()
+        }
+        async fn add_request(
+            &self,
+            _: EnvironmentActor,
+            _: Uuid,
+            _: i64,
+            _: factory_core::conversations::PendingRequest,
+            _: &str,
+        ) -> Result<(), factory_core::conversations::ConversationError> {
+            unreachable!()
+        }
+        async fn claim_response(
+            &self,
+            _: EnvironmentActor,
+            _: Uuid,
+            _: i64,
+            _: Uuid,
+            _: Uuid,
+            _: &str,
+        ) -> Result<
+            factory_core::conversations::ResponseClaim,
+            factory_core::conversations::ConversationError,
+        > {
+            unreachable!()
+        }
+        async fn record_response(
+            &self,
+            _: EnvironmentActor,
+            _: Uuid,
+            _: i64,
+            _: Uuid,
+            _: Uuid,
+            _: factory_core::conversations::ResponseState,
+        ) -> Result<(), factory_core::conversations::ConversationError> {
+            unreachable!()
+        }
+        async fn recoverable_stopped(
+            &self,
+            _: EnvironmentActor,
+            _: Uuid,
+            _: i64,
+            _: chrono::DateTime<Utc>,
+        ) -> Result<
+            Vec<factory_core::conversations::RecoverableRun>,
+            factory_core::conversations::ConversationError,
+        > {
+            unreachable!()
+        }
+        async fn recover_stopped(
+            &self,
+            _: EnvironmentActor,
+            _: Uuid,
+            _: i64,
+            _: chrono::DateTime<Utc>,
+            _: Uuid,
+        ) -> Result<(), factory_core::conversations::ConversationError> {
+            unreachable!()
+        }
+        async fn finish_turn(
+            &self,
+            _: EnvironmentActor,
+            _: Uuid,
+            _: i64,
+            _: Uuid,
+            _: factory_core::conversations::RunStatus,
+        ) -> Result<(), factory_core::conversations::ConversationError> {
+            unreachable!()
+        }
+    }
+
+    let hash = hash_token(&random_token().unwrap()).unwrap();
+    let owner = Uuid::new_v4();
+    let config = EnvironmentStart {
+        installation_id: Uuid::new_v4(),
+        image_id: "fixture".into(),
+        policy_version: "fixture".into(),
+    };
+    let environment_id = Uuid::new_v4();
+    let env = Arc::new(RecoveryEnvironment {
+        owner,
+        hash,
+        value: std::sync::Mutex::new(Environment {
+            id: environment_id,
+            user_id: owner,
+            installation_id: config.installation_id,
+            desired_state: DesiredState::Running,
+            observed_state: ObservedState::Running,
+            generation: 1,
+            provisioning_state: ProvisioningState::VolumeReady,
+            volume_name: "fixture".into(),
+            container_name: "fixture".into(),
+            image_id: config.image_id.clone(),
+            policy_version: config.policy_version.clone(),
+            observed_at: Some(Utc::now() + Duration::seconds(1)),
+            error_code: None,
+            next_reconcile_at: Utc::now(),
+        }),
+    });
+    let availability = EnvironmentAvailability::default();
+    EnvironmentReconciler::new(
+        env.clone(),
+        Arc::new(NoRuntime),
+        Box::new(Supervisor),
+        config.clone(),
+        availability.clone(),
+    )
+    .unwrap()
+    .next_batch()
+    .await
+    .unwrap();
+    let environments =
+        Arc::new(EnvironmentService::new(env, config, availability.clone()).unwrap());
+    let id = Uuid::new_v4();
+    let events = Events::default();
+    let store = Arc::new(DeletingProjects {
+        project: Project {
+            id,
+            user_id: owner,
+            repository_id: 7,
+            full_name: "fixture/repo".into(),
+            cloned_full_name: "fixture/repo".into(),
+            directory: format!("project-{id}"),
+            state: ProjectState::Ready,
+            operation_id: Uuid::new_v4(),
+            environment_id,
+            environment_generation: 1,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        },
+        events: events.clone(),
+    });
+    let projects = Arc::new(ProjectService::new(environments.clone(), store.clone()));
+    let files = Arc::new(PurgingFiles {
+        events: events.clone(),
+        fail: std::sync::atomic::AtomicBool::new(true),
+        purged: std::sync::Mutex::default(),
+    });
+    let conversations = Arc::new(ConversationService::new_with_projects(
+        environments.clone(),
+        Arc::new(NoConversations),
+        projects.clone(),
+    ));
+    let attachments = Arc::new(AttachmentService::new(
+        conversations,
+        Arc::new(NoAttachmentRows),
+        files.clone(),
+    ));
+    let runtime = Arc::new(runtime::ProjectsRuntime {
+        environments,
+        projects,
+        store,
+        docker: Arc::new(DeletingDriver(events.clone())),
+        access: None,
+        availability,
+        installation: Arc::new(()),
+        jobs: Arc::new(tokio::sync::Semaphore::new(4)),
+        active: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        attachments: Some(attachments),
+    });
+    let actor = EnvironmentActor {
+        user_id: owner,
+        session_hash: hash,
+    };
+
+    // A purge that fails keeps the rows, so the deletion can be retried.
+    assert_eq!(
+        runtime.delete(actor, id).await,
+        Err(ProjectError::Unavailable)
+    );
+    assert_eq!(*events.lock().unwrap(), ["fence", "repository"]);
+    files.fail.store(false, Ordering::SeqCst);
+    events.lock().unwrap().clear();
+    runtime.delete(actor, id).await.unwrap();
+    assert_eq!(
+        *events.lock().unwrap(),
+        ["fence", "repository", "attachments", "rows"]
+    );
+    assert_eq!(*files.purged.lock().unwrap(), [id]);
+}
+
+/// Project deletion never reads attachment rows: the database removes them with the project.
+struct NoAttachmentRows;
+#[async_trait]
+impl factory_core::attachments::AttachmentStore for NoAttachmentRows {
+    async fn reserve(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: factory_core::attachments::NewAttachment,
+    ) -> Result<factory_core::attachments::Attachment, factory_core::attachments::AttachmentError>
+    {
+        unreachable!()
+    }
+    async fn mark_staged(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: Uuid,
+        _: factory_core::attachments::StoredFile,
+    ) -> Result<factory_core::attachments::Attachment, factory_core::attachments::AttachmentError>
+    {
+        unreachable!()
+    }
+    async fn remove_staged(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: Uuid,
+    ) -> Result<factory_core::attachments::Attachment, factory_core::attachments::AttachmentError>
+    {
+        unreachable!()
+    }
+    async fn expire_staged(
+        &self,
+        _: EnvironmentActor,
+        _: chrono::DateTime<Utc>,
+    ) -> Result<
+        Vec<factory_core::attachments::Attachment>,
+        factory_core::attachments::AttachmentError,
+    > {
+        unreachable!()
+    }
+    async fn get(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+    ) -> Result<factory_core::attachments::Attachment, factory_core::attachments::AttachmentError>
+    {
+        unreachable!()
+    }
+    async fn list(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: Uuid,
+    ) -> Result<
+        Vec<factory_core::attachments::Attachment>,
+        factory_core::attachments::AttachmentError,
+    > {
+        unreachable!()
+    }
+    async fn record_agent_attachments(
+        &self,
+        _: EnvironmentActor,
+        _: Uuid,
+        _: i64,
+        _: Uuid,
+        _: Uuid,
+        _: Vec<factory_core::attachments::AgentAttachment>,
+    ) -> Result<
+        Vec<factory_core::attachments::Attachment>,
+        factory_core::attachments::AttachmentError,
+    > {
+        unreachable!()
+    }
 }

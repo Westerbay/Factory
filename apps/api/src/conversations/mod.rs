@@ -203,8 +203,16 @@ async fn start(
     let Json(b) = body.map_err(|_| error(ConversationError::Invalid))?;
     let rt = s.runtime().map_err(error)?;
     let task = tokio::spawn(async move {
-        rt.begin(a, id, b.operation_id, b.model, b.effort, b.input)
-            .await
+        rt.begin(
+            a,
+            id,
+            b.operation_id,
+            b.model,
+            b.effort,
+            b.input,
+            b.attachment_ids,
+        )
+        .await
     });
     let run = task
         .await

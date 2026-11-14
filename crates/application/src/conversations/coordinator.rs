@@ -3,9 +3,14 @@ use super::{
     model_probes::{ModelProbeResult, ModelProbes},
     provider_sessions,
 };
-use crate::{agent_connections::AgentConnectionService, features::discussion::ScopedDiscussion};
+use crate::{
+    agent_connections::AgentConnectionService,
+    attachments::{AgentScope, AttachmentService, Deadline, Vantage, attachment_error},
+    features::discussion::ScopedDiscussion,
+};
 use factory_core::{
     agent_connections::ConnectionStatus,
+    attachments::{Attachment, validate_attachment_ids},
     conversations::{
         ConversationError, PendingRequest, RequestKind, RequestState, ResponseState, Run,
         RunStatus,
@@ -23,6 +28,7 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{Arc, Mutex as StdMutex, Weak},
+    time::Duration,
 };
 use tokio::sync::{Mutex, broadcast};
 use uuid::Uuid;
@@ -36,9 +42,17 @@ pub trait ExecutionTicker: Send {
     /// None is a periodic authorization check, Some is provider output.
     fn next<'a>(&'a mut self, output: &'a mut dyn ExecutionOutput) -> Wait<'a>;
 }
+/// How long the files an agent referenced in one message may take to be captured.
+const CAPTURE_DELAY: Duration = Duration::from_secs(30);
+
 pub trait ExecutionHost: Send + Sync {
     fn spawn(&self, task: Task);
     fn ticker(&self) -> Box<dyn ExecutionTicker>;
+    /// Resolves after `duration`. Hosts must override this: without a timer a
+    /// capture is not time-bounded.
+    fn sleep(&self, _duration: Duration) -> Deadline {
+        Box::pin(std::future::pending())
+    }
 }
 /// Keeps durable wire-compatible encoding outside application policy.
 pub trait ConversationCodec: Send + Sync {
@@ -102,6 +116,7 @@ pub struct ConversationRuntime {
     model_probes: ModelProbes,
     inflight: Mutex<HashMap<Uuid, Uuid>>,
     features: Option<Arc<dyn FeatureStore>>,
+    attachments: Option<Arc<AttachmentService>>,
 }
 
 /// A real provider's account and execution capabilities are registered together.
@@ -150,6 +165,19 @@ impl ConversationRuntime {
         codec: Arc<dyn ConversationCodec>,
         features: Option<Arc<dyn FeatureStore>>,
     ) -> Result<Arc<Self>, ConversationError> {
+        Self::with_attachments(service, providers, host, codec, features, None)
+    }
+
+    /// Attachments are optional: without the service, turns cannot carry files and
+    /// agent file references stay in the message text.
+    pub fn with_attachments(
+        service: Arc<ConversationService>,
+        providers: Vec<ExecutionProvider>,
+        host: Arc<dyn ExecutionHost>,
+        codec: Arc<dyn ConversationCodec>,
+        features: Option<Arc<dyn FeatureStore>>,
+        attachments: Option<Arc<AttachmentService>>,
+    ) -> Result<Arc<Self>, ConversationError> {
         if providers.is_empty()
             || providers.len() > 16
             || !providers.iter().any(|provider| provider.id == "codex")
@@ -177,7 +205,30 @@ impl ConversationRuntime {
             model_probes: ModelProbes::default(),
             inflight: Mutex::new(HashMap::new()),
             features,
+            attachments,
         }))
+    }
+
+    pub(crate) fn attachments(&self) -> Option<&Arc<AttachmentService>> {
+        self.attachments.as_ref()
+    }
+
+    /// The files a turn will attach, resolved before the turn so the prompt can name them.
+    pub(crate) async fn staged_files(
+        &self,
+        actor: EnvironmentActor,
+        conversation: Uuid,
+        ids: &[Uuid],
+    ) -> Result<Vec<Attachment>, ConversationError> {
+        validate_attachment_ids(ids).map_err(attachment_error)?;
+        match &self.attachments {
+            Some(attachments) => attachments
+                .staged(actor, conversation, ids)
+                .await
+                .map_err(attachment_error),
+            None if ids.is_empty() => Ok(Vec::new()),
+            None => Err(ConversationError::Unavailable),
+        }
     }
     pub async fn models(
         &self,
@@ -277,6 +328,7 @@ impl ConversationRuntime {
         result.map_err(|_| ConversationError::Unavailable)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn begin(
         self: &Arc<Self>,
         actor: EnvironmentActor,
@@ -285,7 +337,9 @@ impl ConversationRuntime {
         model: String,
         effort: Option<String>,
         input: String,
+        attachment_ids: Vec<Uuid>,
     ) -> Result<Run, ConversationError> {
+        validate_attachment_ids(&attachment_ids).map_err(attachment_error)?;
         if let Some(features) = &self.features
             && features
                 .get_by_conversation(actor, id)
@@ -299,7 +353,14 @@ impl ConversationRuntime {
             encode_selection(&model, effort.as_deref()).map_err(|_| ConversationError::Invalid)?;
         if let Some(run) = self
             .service
-            .find_turn(actor, id, operation, selection.clone(), input.clone())
+            .find_turn(
+                actor,
+                id,
+                operation,
+                selection.clone(),
+                input.clone(),
+                attachment_ids.clone(),
+            )
             .await?
         {
             return Ok(run);
@@ -340,10 +401,22 @@ impl ConversationRuntime {
                 "00000000-0000-0000-0000-000000000000",
             )?;
         }
-        let prompt = provider_sessions::handoff(&history, provider.id, &input)?;
+        let files = self.staged_files(actor, id, &attachment_ids).await?;
+        let mut prompt = provider_sessions::handoff(&history, provider.id, &input)?;
+        if self.attachments.is_some() {
+            let project_id = history.conversation.project_id;
+            prompt.push_str(&Vantage::Container { project_id }.prompt_suffix(&files));
+        }
         let (env, run, fresh) = self
             .service
-            .begin_turn(actor, id, operation, selection, input.clone())
+            .begin_turn(
+                actor,
+                id,
+                operation,
+                selection,
+                input.clone(),
+                attachment_ids,
+            )
             .await?;
         if !fresh {
             return Ok(run);
@@ -376,6 +449,7 @@ impl ConversationRuntime {
         self: &Arc<Self>,
         scoped: ScopedDiscussion,
         input: String,
+        attachment_ids: Vec<Uuid>,
     ) -> Result<Run, ConversationError> {
         let actor = scoped.actor();
         let id = scoped.conversation();
@@ -392,7 +466,14 @@ impl ConversationRuntime {
             encode_selection(&model, effort.as_deref()).map_err(|_| ConversationError::Invalid)?;
         match self
             .service
-            .find_turn(actor, id, operation, selection.clone(), input.clone())
+            .find_turn(
+                actor,
+                id,
+                operation,
+                selection.clone(),
+                input.clone(),
+                attachment_ids.clone(),
+            )
             .await
         {
             Ok(Some(run)) => return Ok(run),
@@ -407,7 +488,7 @@ impl ConversationRuntime {
         }
         let (env, mut run, fresh) = match self
             .service
-            .begin_turn(actor, id, operation, selection, input)
+            .begin_turn(actor, id, operation, selection, input, attachment_ids)
             .await
         {
             Ok(result) => result,
@@ -539,7 +620,7 @@ impl ConversationRuntime {
                 return;
             }
         };
-        let opened = if let Some(scoped) = &scoped {
+        let opened = if let Some(scoped) = &mut scoped {
             scoped.open().await
         } else {
             provider
@@ -590,6 +671,13 @@ impl ConversationRuntime {
             self.inflight.lock().await.remove(&run.id);
             return;
         }
+        let scope = match &scoped {
+            Some(scoped) => scoped.agent_scope(),
+            None => self
+                .attachments
+                .as_ref()
+                .map(|_| AgentScope::chat(project.as_ref(), run.conversation_id)),
+        };
         let (events, _) = broadcast::channel(128);
         let active = Arc::new(Active {
             user: actor.user_id,
@@ -691,10 +779,15 @@ impl ConversationRuntime {
                         None => Some(message),
                     };
                     if let Some(visible) = visible {
-                        self.service
-                            .append_assistant(actor, &env, run.id, &provider_item, &visible)
-                            .await
-                            .map(|_| ())
+                        self.append_message(
+                            actor,
+                            &env,
+                            run.id,
+                            scope.as_ref(),
+                            &provider_item,
+                            &visible,
+                        )
+                        .await
                     } else {
                         Ok(())
                     }
@@ -784,6 +877,35 @@ impl ConversationRuntime {
         }
         self.active.lock().await.remove(&run.id);
         self.inflight.lock().await.remove(&run.id);
+    }
+
+    async fn append_message(
+        &self,
+        actor: EnvironmentActor,
+        env: &Environment,
+        run: Uuid,
+        scope: Option<&AgentScope>,
+        provider_item: &str,
+        visible: &str,
+    ) -> Result<(), ConversationError> {
+        let (Some(attachments), Some(scope)) = (&self.attachments, scope) else {
+            return self
+                .service
+                .append_assistant(actor, env, run, provider_item, visible)
+                .await
+                .map(|_| ());
+        };
+        attachments
+            .append_message(
+                actor,
+                env,
+                run,
+                scope,
+                provider_item,
+                visible,
+                self.host.sleep(CAPTURE_DELAY),
+            )
+            .await
     }
 
     fn provider_for_model(
