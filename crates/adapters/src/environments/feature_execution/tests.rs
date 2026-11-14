@@ -537,10 +537,10 @@ mod attachment_mounts {
             outputs["VolumeOptions"]["Subpath"],
             worker_outputs_store(Some(project.id), conversation, workspace.attempt_id)
         );
-        // Checkout, relay, attachments and outputs; nothing else.
+        // Checkout, repository tooling, relay, attachments and outputs.
         assert_eq!(
             expected["HostConfig"]["Mounts"].as_array().unwrap().len(),
-            4
+            5
         );
         assert!(verify_worker(&inspected(&env, &expected), &expected).is_ok());
     }
@@ -555,7 +555,7 @@ mod attachment_mounts {
         assert!(mount(&expected, "/workspace/outputs").is_none());
         assert_eq!(
             expected["HostConfig"]["Mounts"].as_array().unwrap().len(),
-            2
+            3
         );
         assert!(verify_worker(&inspected(&env, &expected), &expected).is_ok());
     }
