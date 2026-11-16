@@ -96,8 +96,11 @@ Keep the previous release directory until the upgrade succeeds. If cutover fails
 the updater attempts to restore the previous release. If rollback is interrupted,
 rerun the same version to recover the pending deployment. PostgreSQL applies the
 repository schema during first initialization only and uses a separate non-superuser role
-for the API. Future schema changes require an explicit, reviewed upgrade step
-before starting an API that expects them. `/health/ready` checks identity and the
+for the API. For the attachment schema upgrade from version 5 to 6, the updater
+stops the API, writes a private PostgreSQL dump under the installation's `backups/`
+directory, and applies the migration in a transaction. If startup fails after
+the migration commits, retry the same release bundle. Restoring the previous
+API requires restoring a compatible database backup first. `/health/ready` checks identity and the
 database schema. It does not exercise OAuth or the agent runtime.
 
 On the first release, set up the administrator with the explicit CLI and type

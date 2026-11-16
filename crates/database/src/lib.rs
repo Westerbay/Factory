@@ -1,4 +1,5 @@
 //! Persistence adapters. Development connections require fresh proof of local resource ownership.
+pub mod attachments;
 mod connection;
 pub mod environments;
 pub mod features;

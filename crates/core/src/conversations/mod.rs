@@ -1,5 +1,5 @@
 //! User-owned conversation records; provider protocol and credentials remain private.
-use crate::environments::EnvironmentActor;
+use crate::{attachments::Attachment, environments::EnvironmentActor};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -114,6 +114,8 @@ pub struct ConversationHistory {
     pub conversation: Conversation,
     pub runs: Vec<Run>,
     pub messages: Vec<Message>,
+    /// Files of the returned messages, from the user and the agent.
+    pub attachments: Vec<Attachment>,
     pub requests: Vec<PendingRequest>,
     /// Older records remain durable but are outside this bounded recent window.
     pub runs_truncated: bool,
@@ -128,6 +130,9 @@ pub struct StartTurn {
     pub generation: i64,
     pub model: String,
     pub input: String,
+    /// Staged uploads to attach atomically with the turn: at most the per-message
+    /// limit, without duplicates (`validate_attachment_ids`).
+    pub attachment_ids: Vec<Uuid>,
 }
 
 /// Every method checks current actor and environment in the same transaction as the operation.

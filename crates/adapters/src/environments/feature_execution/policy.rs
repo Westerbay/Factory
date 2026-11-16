@@ -2,6 +2,9 @@ use super::super::policy::{empty, labels};
 use super::{CHECKOUT, TOOLING};
 use bollard::models::ContainerCreateBody;
 use factory_core::{
+    attachments::{
+        WORKER_ATTACHMENTS_DIR, WORKER_OUTPUTS_DIR, conversation_store, worker_outputs_store,
+    },
     conversations::execution::ExecutionError,
     environments::{Environment, EnvironmentError},
     features::{TaskWorkspace, WorkspaceAccess},
@@ -36,12 +39,22 @@ impl Role {
 
 pub(super) struct WorkerIdentity {
     pub(super) name: String,
+    attempt: Uuid,
     labels: HashMap<String, String>,
     pub(super) checkout: String,
     relay: Option<String>,
+    attachments: Option<AttachmentMounts>,
     pub(super) readonly: bool,
     pub(super) tooling: String,
     role: Role,
+}
+
+/// Home-relative sources of a discussion worker's conversation files.
+struct AttachmentMounts {
+    /// The conversation store, read-only in the worker.
+    attachments: String,
+    /// This attempt's outputs, the only writable attachment location.
+    outputs: String,
 }
 
 impl WorkerIdentity {
@@ -72,11 +85,13 @@ impl WorkerIdentity {
         ]);
         Ok(Self {
             name: worker_name(env, workspace.attempt_id, role.as_str()),
+            attempt: workspace.attempt_id,
             labels,
             checkout: format!(
                 ".factory/features/{}/{}/attempts/{}/checkout",
                 project.id, workspace.feature_id, workspace.attempt_id
             ),
+            attachments: None,
             relay: match role {
                 Role::Agent => Some(format!(".factory/feature-relays/{}", workspace.attempt_id)),
                 Role::Prepare => Some(format!(
@@ -89,6 +104,17 @@ impl WorkerIdentity {
             tooling: format!(".factory/features/{}/.tooling", project.id),
             role,
         })
+    }
+
+    /// Give the worker its conversation's attachments (read-only) and this attempt's
+    /// outputs (writable). The directories must already exist; see
+    /// `AttachmentFiles::prepare_worker_directories`.
+    pub(super) fn with_conversation(mut self, project: &Project, conversation: Uuid) -> Self {
+        self.attachments = Some(AttachmentMounts {
+            attachments: conversation_store(Some(project.id), conversation),
+            outputs: worker_outputs_store(Some(project.id), conversation, self.attempt),
+        });
+        self
     }
 
     pub(super) fn body(
@@ -106,6 +132,10 @@ impl WorkerIdentity {
             mounts.push(mount(env, "/run/factory-relay", relay, true));
             // Agent research needs room for both the Git pack and its working tree.
             scratch_mib = 768;
+        }
+        if let Some(files) = &self.attachments {
+            mounts.push(mount(env, WORKER_ATTACHMENTS_DIR, &files.attachments, true));
+            mounts.push(mount(env, WORKER_OUTPUTS_DIR, &files.outputs, false));
         }
         serde_json::from_value(json!({
             "Image": env.image_id, "User": "10000:10000", "WorkingDir": cwd,
@@ -226,6 +256,17 @@ pub(super) fn verify_worker(value: &Value, expected: &Value) -> Result<(), Execu
         .as_array()
         .ok_or(ExecutionError::PreflightUnavailable)?;
     if actual.len() != mounts.len() || attached.len() != mounts.len() {
+        return Err(ExecutionError::PreflightUnavailable);
+    }
+    // Whatever the expected spec says, the conversation's files are never writable
+    // through the attachments mount.
+    if actual
+        .iter()
+        .any(|mount| mount["Target"] == WORKER_ATTACHMENTS_DIR && mount["ReadOnly"] != true)
+        || attached
+            .iter()
+            .any(|mount| mount["Destination"] == WORKER_ATTACHMENTS_DIR && mount["RW"] != false)
+    {
         return Err(ExecutionError::PreflightUnavailable);
     }
     for wanted in mounts {

@@ -73,6 +73,7 @@ async fn conversations_are_owned_idempotent_and_block_uncertain_runs() {
         generation: 1,
         model: "test-model".into(),
         input: "hello".into(),
+        attachment_ids: vec![],
     };
     assert!(!store.has_open_runs(one).await.unwrap());
     assert_eq!(store.find_turn(one, input.clone()).await.unwrap(), None);
@@ -399,6 +400,7 @@ async fn bounded_history_keeps_active_work_and_discloses_older_records() {
                 generation: 1,
                 model: "test-model".into(),
                 input: "current".into(),
+                attachment_ids: vec![],
             },
         )
         .await
@@ -735,6 +737,7 @@ async fn unsettled_launches_survive_stop_restart_and_suspension_until_settled() 
                 generation: 1,
                 model: "model".into(),
                 input: "hello".into(),
+                attachment_ids: vec![],
             },
         )
         .await
@@ -844,6 +847,7 @@ async fn independent_runs_are_not_globally_capped_but_each_conversation_remains_
             generation: 1,
             model: "model".into(),
             input: "hello".into(),
+            attachment_ids: vec![],
         };
         tasks.push(tokio::spawn(async move {
             barrier.wait().await;

@@ -79,6 +79,13 @@ VALUES (decode(:'token_hash', 'hex'), :'user_id', :'csrf', clock_timestamp() + i
 SQL
 }
 
+schema_query() {
+  run_release "$1" compose exec -T postgres psql -X -U factory -d factory --no-align --tuples-only --quiet \
+    --command "$2"
+}
+previous_schema=$(schema_query previous 'SELECT version FROM factory_identity.schema_info')
+[[ "$previous_schema" == 5 || "$previous_schema" == 6 ]]
+
 request() {
   curl --noproxy '*' --resolve 'factory.upgrade.test:443:127.0.0.1' --insecure \
     --fail --silent --show-error --max-time 8 --cookie "factory_session=$session" \
@@ -129,6 +136,13 @@ previous_workspace=$workspace
 previous_workspace_image=$("${docker[@]}" inspect --format '{{.Image}}' "$workspace")
 configure_tls candidate
 run_release candidate deploy
+[[ "$(schema_query candidate 'SELECT version FROM factory_identity.schema_info')" == 6 ]]
+[[ "$(schema_query candidate "SELECT count(*) FROM factory_identity.users WHERE id = '$user_id' AND display_name = 'Upgrade Fixture'")" == 1 ]]
+[[ "$(schema_query candidate 'SELECT count(*) FROM factory_identity.conversation_attachments')" == 0 ]]
+if [[ "$previous_schema" == 5 ]]; then
+  backups=("$fixture"/backups/factory-schema-5-*.dump)
+  [[ ${#backups[@]} -eq 1 && "$(stat -c %a "${backups[0]}")" == 600 && -s "${backups[0]}" ]]
+fi
 candidate_api_id=$(image_id "$(image_ref candidate FACTORY_API_IMAGE)")
 [[ "$("${docker[@]}" inspect --format '{{.Image}}' factory-prod-api-1)" == "$candidate_api_id" ]]
 request "$origin/" | cmp - "$fixture/candidate/web-dist/index.html"

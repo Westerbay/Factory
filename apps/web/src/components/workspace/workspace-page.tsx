@@ -696,10 +696,14 @@ export function WorkspacePage() {
                   m.feature_profile()
                 )
               })(),
-              start: (operationId, input, csrf, signal) =>
+              start: (operationId, input, csrf, signal, attachmentIds) =>
                 featureApi.start(
                   selectedFeature.feature.id,
-                  { operationId, input },
+                  {
+                    operationId,
+                    input,
+                    ...(attachmentIds?.length ? { attachmentIds } : {}),
+                  },
                   csrf,
                   signal
                 ),

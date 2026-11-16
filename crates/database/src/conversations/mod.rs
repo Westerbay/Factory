@@ -1,6 +1,8 @@
 //! PostgreSQL conversation storage. Every entry point revalidates session and generation.
 use crate::connection::with_connection;
-use factory_core::{conversations::*, environments::EnvironmentActor};
+use factory_core::{
+    attachments::validate_attachment_ids, conversations::*, environments::EnvironmentActor,
+};
 use sqlx::{Connection, PgPool, Postgres, Row, Transaction, postgres::PgRow};
 use uuid::Uuid;
 
@@ -52,23 +54,41 @@ fn run(row: &PgRow) -> Result<Run, ConversationError> {
         status: status(&row.try_get::<String, _>("status").map_err(unavailable)?)?,
     })
 }
-fn matching_turn(row: &PgRow, turn: &StartTurn) -> Result<Run, ConversationError> {
+async fn matching_turn(
+    tx: &mut Transaction<'_, Postgres>,
+    row: &PgRow,
+    turn: &StartTurn,
+) -> Result<Run, ConversationError> {
     let previous = run(row)?;
     let input: String = row.try_get("input").map_err(unavailable)?;
     let env: Uuid = row.try_get("environment_id").map_err(unavailable)?;
+    let mut attached = crate::attachments::user_attachment_ids(tx, previous.id)
+        .await
+        .map_err(unavailable)?;
+    let mut requested = turn.attachment_ids.clone();
+    attached.sort();
+    requested.sort();
     if previous.model != turn.model
         || input != turn.input
         || env != turn.environment_id
         || previous.environment_generation != turn.generation
+        || attached != requested
     {
         return Err(ConversationError::Conflict);
     }
     Ok(previous)
 }
+fn valid_attachments(ids: &[Uuid]) -> Result<(), ConversationError> {
+    validate_attachment_ids(ids).map_err(|_| ConversationError::Invalid)?;
+    if ids.iter().any(Uuid::is_nil) {
+        return Err(ConversationError::Invalid);
+    }
+    Ok(())
+}
 fn valid(s: &str, max: usize) -> bool {
     !s.trim().is_empty() && s.len() <= max && !s.contains('\0')
 }
-async fn authorize_actor(
+pub(crate) async fn authorize_actor(
     tx: &mut Transaction<'_, Postgres>,
     actor: EnvironmentActor,
 ) -> Result<(), ConversationError> {
@@ -88,7 +108,7 @@ async fn authorize_actor(
     }
     Ok(())
 }
-async fn authorize(
+pub(crate) async fn authorize(
     tx: &mut Transaction<'_, Postgres>,
     actor: EnvironmentActor,
     env: Uuid,
@@ -102,7 +122,7 @@ async fn authorize(
     }
     Ok(())
 }
-async fn owned(
+pub(crate) async fn owned(
     tx: &mut Transaction<'_, Postgres>,
     user: Uuid,
     id: Uuid,
@@ -111,7 +131,7 @@ async fn owned(
         .bind(id).bind(user).fetch_optional(&mut **tx).await.map_err(unavailable)?.ok_or(ConversationError::NotFound)?;
     conversation(&row)
 }
-async fn owned_run(
+pub(crate) async fn owned_run(
     tx: &mut Transaction<'_, Postgres>,
     user: Uuid,
     env: Uuid,
@@ -413,10 +433,14 @@ impl ConversationStore for PgConversationStore {
                     })
                     .collect::<Result<Vec<_>, ConversationError>>()?;
                 ordered_messages.sort_by_key(|(created, id, ordinal, _)| (*created, *id, *ordinal));
-                let messages = ordered_messages
+                let messages: Vec<Message> = ordered_messages
                     .into_iter()
                     .map(|(_, _, _, message)| message)
                     .collect();
+                let message_ids: Vec<Uuid> = messages.iter().map(|m: &Message| m.id).collect();
+                let attachments = crate::attachments::for_messages(&mut tx, &message_ids)
+                    .await
+                    .map_err(|_| ConversationError::Unavailable)?;
                 let mut rows = sqlx::query("SELECT q.* FROM factory_identity.conversation_requests q JOIN factory_identity.conversation_runs r ON r.id=q.run_id WHERE r.conversation_id=$1 AND q.response_state IN ('pending','claimed','uncertain') ORDER BY (r.status IN ('active','uncertain')) DESC,q.created_at DESC,q.id DESC LIMIT 101").bind(id).fetch_all(&mut *tx).await.map_err(unavailable)?;
                 let requests_truncated = rows.len() > 100;
                 rows.truncate(100);
@@ -464,6 +488,7 @@ impl ConversationStore for PgConversationStore {
                     conversation,
                     runs,
                     messages,
+                    attachments,
                     requests,
                     runs_truncated,
                     messages_truncated,
@@ -481,13 +506,17 @@ impl ConversationStore for PgConversationStore {
         if turn.operation_id.is_nil() || !valid(&turn.input, 65536) || !valid(&turn.model, 256) {
             return Err(ConversationError::Invalid);
         }
+        valid_attachments(&turn.attachment_ids)?;
         with_connection(&self.pool, || ConversationError::Unavailable, |connection| {
             Box::pin(async move {
                 let mut tx = connection.begin().await.map_err(unavailable)?;
                 authorize(&mut tx, actor, turn.environment_id, turn.generation).await?;
                 owned(&mut tx, actor.user_id, turn.conversation_id).await?;
                 let prior = sqlx::query("SELECT * FROM factory_identity.conversation_runs WHERE conversation_id=$1 AND operation_id=$2").bind(turn.conversation_id).bind(turn.operation_id).fetch_optional(&mut *tx).await.map_err(unavailable)?;
-                let result = prior.as_ref().map(|row| matching_turn(row, &turn)).transpose()?;
+                let result = match prior.as_ref() {
+                    Some(row) => Some(matching_turn(&mut tx, row, &turn).await?),
+                    None => None,
+                };
                 tx.commit().await.map_err(unavailable)?;
                 Ok(result)
             })
@@ -524,6 +553,7 @@ impl ConversationStore for PgConversationStore {
         if turn.operation_id.is_nil() || !valid(&turn.input, 65536) || !valid(&turn.model, 256) {
             return Err(ConversationError::Invalid);
         }
+        valid_attachments(&turn.attachment_ids)?;
         with_connection(&self.pool, || ConversationError::Unavailable, |connection| {
             Box::pin(async move {
                 let mut tx = connection.begin().await.map_err(unavailable)?;
@@ -536,7 +566,7 @@ impl ConversationStore for PgConversationStore {
                 }
                 let prior = sqlx::query("SELECT * FROM factory_identity.conversation_runs WHERE conversation_id=$1 AND operation_id=$2").bind(turn.conversation_id).bind(turn.operation_id).fetch_optional(&mut *tx).await.map_err(unavailable)?;
                 if let Some(row) = prior {
-                    let previous = matching_turn(&row, &turn)?;
+                    let previous = matching_turn(&mut tx, &row, &turn).await?;
                     tx.commit().await.map_err(unavailable)?;
                     return Ok((previous, false));
                 }
@@ -546,7 +576,9 @@ impl ConversationStore for PgConversationStore {
                 }
                 let row=sqlx::query("INSERT INTO factory_identity.conversation_runs(id,conversation_id,operation_id,environment_id,environment_generation,model,input,status) VALUES($1,$2,$3,$4,$5,$6,$7,'active') RETURNING *").bind(Uuid::new_v4()).bind(turn.conversation_id).bind(turn.operation_id).bind(turn.environment_id).bind(turn.generation).bind(&turn.model).bind(&turn.input).fetch_one(&mut *tx).await.map_err(unavailable)?;
                 let result = run(&row)?;
-                sqlx::query("INSERT INTO factory_identity.conversation_messages(id,run_id,role,content,ordinal) VALUES($1,$2,'user',$3,0)").bind(Uuid::new_v4()).bind(result.id).bind(&turn.input).execute(&mut *tx).await.map_err(unavailable)?;
+                let message_id = Uuid::new_v4();
+                sqlx::query("INSERT INTO factory_identity.conversation_messages(id,run_id,role,content,ordinal) VALUES($1,$2,'user',$3,0)").bind(message_id).bind(result.id).bind(&turn.input).execute(&mut *tx).await.map_err(unavailable)?;
+                crate::attachments::claim_staged(&mut tx, actor.user_id, turn.conversation_id, turn.environment_id, result.id, message_id, &turn.attachment_ids).await?;
                 tx.commit().await.map_err(unavailable)?;
                 Ok((result, true))
             })

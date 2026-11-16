@@ -55,6 +55,9 @@ pub struct CreateFeatureBody {
 pub struct FeatureTurnBody {
     pub operation_id: Uuid,
     pub input: String,
+    /// Staged uploads of the feature's conversation to send with the message, at most 10.
+    #[serde(default)]
+    pub attachment_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

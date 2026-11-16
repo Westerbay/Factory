@@ -2,7 +2,9 @@ use super::{
     FeatureCoordinator, bundle, conversation_error,
     coordinator::{ReservedTask, TaskRequest},
 };
+use crate::attachments::{AgentScope, Vantage};
 use factory_core::{
+    attachments::{Attachment, AttachmentSource, AttachmentState, WorkerDirectories},
     conversations::{
         ConversationError, ConversationHistory, MessageRole, Run, RunStatus,
         execution::{ExecutionError, ExecutionSession},
@@ -24,6 +26,7 @@ impl FeatureCoordinator {
         id: Uuid,
         operation_id: Uuid,
         input: String,
+        attachment_ids: Vec<Uuid>,
     ) -> Result<Run, FeatureError> {
         if operation_id.is_nil()
             || input.trim().is_empty()
@@ -49,7 +52,14 @@ impl FeatureCoordinator {
             if let Some(run) = self
                 .conversations
                 .service
-                .find_turn(actor, conversation, operation_id, selection, input.clone())
+                .find_turn(
+                    actor,
+                    conversation,
+                    operation_id,
+                    selection,
+                    input.clone(),
+                    attachment_ids.clone(),
+                )
                 .await
                 .map_err(conversation_error)?
             {
@@ -74,7 +84,15 @@ impl FeatureCoordinator {
             .history(actor, conversation)
             .await
             .map_err(conversation_error)?;
-        let prompt = discussion_prompt(self.codec.as_ref(), &state, role, &history, &input)?;
+        let files = self
+            .conversations
+            .staged_files(actor, conversation, &attachment_ids)
+            .await
+            .map_err(conversation_error)?;
+        let mut prompt = discussion_prompt(self.codec.as_ref(), &state, role, &history, &input)?;
+        if self.conversations.attachments().is_some() {
+            prompt.push_str(&Vantage::Worker.prompt_suffix(&files));
+        }
         let branch = self.initialize_verified(actor, &env, &project, id).await?;
         let task = internal_task(
             operation_id,
@@ -104,9 +122,10 @@ impl FeatureCoordinator {
             conversation,
             proposal: None,
             streams: HashMap::new(),
+            worker: None,
         };
         self.conversations
-            .begin_scoped(scoped, input)
+            .begin_scoped(scoped, input, attachment_ids)
             .await
             .map_err(conversation_error)
     }
@@ -139,16 +158,30 @@ impl FeatureCoordinator {
             .ok_or(FeatureError::Conflict)?
             .content
             .clone();
+        // The failed run keeps its files; the retry only has to be told about them.
+        let files: Vec<Attachment> = history
+            .attachments
+            .iter()
+            .filter(|file| {
+                file.run_id == Some(failed_run)
+                    && file.source == AttachmentSource::User
+                    && file.state == AttachmentState::Attached
+            })
+            .cloned()
+            .collect();
         history
             .messages
             .retain(|message| message.run_id != failed_run);
-        let prompt = discussion_prompt(
+        let mut prompt = discussion_prompt(
             self.codec.as_ref(),
             state,
             prior.claim.task.role,
             &history,
             &input,
         )?;
+        if self.conversations.attachments().is_some() {
+            prompt.push_str(&Vantage::Worker.prompt_suffix(&files));
+        }
         let reserved = self
             .reserve_task(
                 actor,
@@ -171,9 +204,10 @@ impl FeatureCoordinator {
             conversation,
             proposal: None,
             streams: HashMap::new(),
+            worker: None,
         };
         self.conversations
-            .begin_scoped(scoped, input)
+            .begin_scoped(scoped, input, Vec::new())
             .await
             .map_err(conversation_error)?;
         self.store.get(actor, id).await
@@ -306,6 +340,8 @@ pub(crate) struct ScopedDiscussion {
     conversation: Uuid,
     proposal: Option<FeatureProposal>,
     streams: HashMap<String, StreamTail>,
+    /// Set once the worker's directories exist.
+    worker: Option<WorkerDirectories>,
 }
 
 impl ScopedDiscussion {
@@ -350,8 +386,23 @@ impl ScopedDiscussion {
         }
     }
 
-    pub(crate) async fn open(&self) -> Result<ExecutionSession, ExecutionError> {
-        self.owner.open_attempt(&self.reserved).await
+    pub(crate) async fn open(&mut self) -> Result<ExecutionSession, ExecutionError> {
+        let (session, worker) = self
+            .owner
+            .open_attempt(&self.reserved, Some(self.conversation))
+            .await?;
+        self.worker = worker;
+        Ok(session)
+    }
+
+    /// Where the worker may reference files from, once it has been opened.
+    pub(crate) fn agent_scope(&self) -> Option<AgentScope> {
+        let directories = self.worker.as_ref()?;
+        Some(AgentScope::worker(
+            self.reserved.project.id,
+            self.conversation,
+            directories,
+        ))
     }
 
     pub(crate) async fn thread(&self, id: String) -> Result<(), ConversationError> {
@@ -517,7 +568,9 @@ fn discussion_prompt(
         prompt.push_str(role);
         prompt.push_str(":\n");
         prompt.push_str(&message.content);
-        prompt.push_str("\n\n");
+        prompt.push('\n');
+        prompt.push_str(&Vantage::Worker.history_note(&history.attachments, message.id));
+        prompt.push('\n');
         if prompt.len() > PROMPT_LIMIT {
             return Err(FeatureError::Invalid);
         }

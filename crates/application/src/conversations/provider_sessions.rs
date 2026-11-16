@@ -1,4 +1,5 @@
 //! Private provider session references within the existing bounded conversation record.
+use crate::attachments::Vantage;
 use factory_core::conversations::{ConversationError, ConversationHistory, MessageRole, RunStatus};
 use std::collections::BTreeMap;
 
@@ -120,6 +121,9 @@ pub(super) fn handoff(
     let mut prompt = String::from(
         "The following is the preceding conversation, provided as context after changing providers.\n\n",
     );
+    let vantage = Vantage::Container {
+        project_id: history.conversation.project_id,
+    };
     for message in &history.messages {
         let role = match message.role {
             MessageRole::User => "User",
@@ -128,7 +132,9 @@ pub(super) fn handoff(
         prompt.push_str(role);
         prompt.push_str(":\n");
         prompt.push_str(&message.content);
-        prompt.push_str("\n\n");
+        prompt.push('\n');
+        prompt.push_str(&vantage.history_note(&history.attachments, message.id));
+        prompt.push('\n');
         if prompt.len().saturating_add(input.len()) > PROMPT_LIMIT {
             return Err(ConversationError::ContextLimit);
         }
@@ -212,6 +218,7 @@ mod tests {
                     created_at: Utc::now(),
                 },
             ],
+            attachments: vec![],
             requests: vec![],
             runs_truncated: false,
             messages_truncated: false,

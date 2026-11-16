@@ -9,6 +9,7 @@ use super::{
     policy::{require_current_policy, validate_record},
     process::{DockerProcess, FixedProcess, ProcessStartError},
 };
+use crate::attachments::DockerAttachmentFiles;
 use async_trait::async_trait;
 use bollard::{
     container::LogOutput,
@@ -20,6 +21,7 @@ use bollard::{
     },
 };
 use factory_core::{
+    attachments::AttachmentFiles,
     conversations::execution::{ExecutionControl, ExecutionError, QuestionAnswer},
     environments::{DesiredState, Environment, EnvironmentError, VolumePresence},
     features::{
@@ -211,13 +213,26 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
             return Err(ExecutionError::PreflightUnavailable);
         }
         let provider = ScopedProvider::from_request(request)?;
-        let identity = WorkerIdentity::new(
+        let mut identity = WorkerIdentity::new(
             env,
             project,
             &request.workspace,
             env.generation,
             Role::Agent,
         )?;
+        if let Some(conversation) = request.conversation_id {
+            // Mount sources must exist, and the call is idempotent.
+            DockerAttachmentFiles::new(Arc::clone(&self.runtime))
+                .prepare_worker_directories(
+                    env,
+                    project.id,
+                    conversation,
+                    request.workspace.attempt_id,
+                )
+                .await
+                .map_err(|_| ExecutionError::PreflightUnavailable)?;
+            identity = identity.with_conversation(project, conversation);
+        }
         let cwd = match provider {
             ScopedProvider::Codex => "/workspace",
             ScopedProvider::Claude => CHECKOUT,

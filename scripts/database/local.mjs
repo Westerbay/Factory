@@ -109,7 +109,7 @@ if (action === "stop") {
   const database = createDatabase(inspectTarget(target))
   try {
     if (action === "reset") await database.reset()
-    if (action === "upgrade") await database.upgradeFeatures()
+    if (action === "upgrade") await database.upgrade()
     if (action === "setup") {
       const status = await database.ready()
       if (!status.available) await database.initialize()

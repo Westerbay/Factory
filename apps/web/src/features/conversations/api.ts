@@ -2,6 +2,7 @@ import { z } from "zod"
 
 import { apiClient, API_ORIGIN, ApiFailure } from "../../lib/api/client"
 import type { components } from "../../lib/api/schema"
+import { attachmentSchema } from "./attachments"
 
 export type History = components["schemas"]["HistoryView"]
 export type Conversation = components["schemas"]["ConversationView"]
@@ -45,6 +46,7 @@ const history = z.object({
       role: z.enum(["user", "assistant"]),
       content: text,
       createdAt: text,
+      attachments: z.array(attachmentSchema),
     })
   ),
   requests: z.array(

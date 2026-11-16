@@ -36,7 +36,7 @@ impl EnvironmentAvailability {
         self.state.load(Ordering::SeqCst) == 2
     }
 
-    pub(super) fn ready(&self) {
+    pub(crate) fn ready(&self) {
         let _ = self
             .state
             .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst);

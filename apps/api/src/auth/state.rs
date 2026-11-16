@@ -78,6 +78,9 @@ impl AuthState {
         self.projects = projects;
         self
     }
+    pub(crate) fn web_origin(&self) -> &str {
+        &self.web_origin
+    }
     pub(crate) fn secure_cookie(&self) -> bool {
         self.secure_cookie
     }

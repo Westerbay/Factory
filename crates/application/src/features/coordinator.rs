@@ -2,6 +2,7 @@ use super::{
     FeatureCoordinator, LocalAttempt, bundle, conversation_error, profiles, workspace_error,
 };
 use factory_core::{
+    attachments::WorkerDirectories,
     conversations::execution::{ExecutionError, ExecutionEvent, ExecutionSession},
     environments::{Environment, EnvironmentActor},
     features::*,
@@ -219,10 +220,13 @@ impl FeatureCoordinator {
         .await
     }
 
+    /// A discussion passes its conversation so the worker gets that conversation's
+    /// attachments and a writable output directory; the directories are returned.
     pub(super) async fn open_attempt(
         &self,
         task: &ReservedTask,
-    ) -> Result<ExecutionSession, ExecutionError> {
+        conversation_id: Option<Uuid>,
+    ) -> Result<(ExecutionSession, Option<WorkerDirectories>), ExecutionError> {
         let workspace = &task.attempt.claim.workspace;
         if let Err(error) = self
             .workspaces
@@ -250,12 +254,33 @@ impl FeatureCoordinator {
                 .map_err(|_| ExecutionError::Unavailable)?;
             return Err(ExecutionError::PreflightUnavailable);
         }
+        let mut worker = None;
+        if let (Some(conversation), Some(attachments)) =
+            (conversation_id, self.conversations.attachments())
+        {
+            match attachments
+                .prepare_worker(&task.env, task.project.id, conversation, task.attempt.id())
+                .await
+            {
+                Ok(directories) => worker = Some(directories),
+                Err(_) => {
+                    self.fail_before_launch(
+                        task,
+                        "The attachment directories could not be prepared",
+                    )
+                    .await
+                    .map_err(|_| ExecutionError::Unavailable)?;
+                    return Err(ExecutionError::PreflightUnavailable);
+                }
+            }
+        }
         let request = FeatureRun {
             workspace: workspace.clone(),
             provider: task.provider.clone(),
             model: task.attempt.claim.model.clone(),
             effort: task.attempt.claim.effort.clone(),
             input: task.input.clone(),
+            conversation_id: worker.as_ref().and(conversation_id),
         };
         match self
             .runtime
@@ -276,7 +301,7 @@ impl FeatureCoordinator {
                     let _ = opened.session.control.interrupt().await;
                     return Err(ExecutionError::CleanupUncertain);
                 }
-                Ok(opened.session)
+                Ok((opened.session, worker))
             }
             Err(error) => {
                 let result = match error {
@@ -321,8 +346,8 @@ impl FeatureCoordinator {
         if !task.fresh {
             return Ok(saved_result(task.attempt));
         }
-        let mut session = match self.open_attempt(&task).await {
-            Ok(session) => session,
+        let mut session = match self.open_attempt(&task, None).await {
+            Ok((session, _)) => session,
             Err(_) => {
                 let state = self
                     .store

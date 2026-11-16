@@ -38,6 +38,8 @@ use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc};
 use tower::ServiceExt;
 use uuid::Uuid;
 
+#[path = "conversations/attachments.rs"]
+mod attachments;
 #[path = "conversations/features.rs"]
 mod features;
 
@@ -225,6 +227,7 @@ struct ConversationData {
     run: Option<Run>,
     run_environment: Option<Uuid>,
     messages: Vec<Message>,
+    attachments: Vec<factory_core::attachments::Attachment>,
     probes: std::collections::HashMap<Uuid, (Uuid, Uuid, i64, bool)>,
     run_settled: bool,
 }
@@ -409,6 +412,7 @@ impl ConversationStore for Conversations {
             conversation: d.conversation.clone().unwrap(),
             runs: d.run.clone().into_iter().collect(),
             messages: d.messages.clone(),
+            attachments: d.attachments.clone(),
             requests: vec![],
             runs_truncated: false,
             messages_truncated: false,

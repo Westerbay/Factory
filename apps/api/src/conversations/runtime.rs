@@ -95,6 +95,24 @@ pub fn with_providers_and_features(
     )
 }
 
+/// Providers, features and attachments: turns can carry files and agent file
+/// references are captured as attachments.
+pub fn with_providers_features_and_attachments(
+    service: Arc<factory_application::conversations::ConversationService>,
+    providers: Vec<factory_application::conversations::coordinator::ExecutionProvider>,
+    features: Arc<dyn factory_core::features::FeatureStore>,
+    attachments: Arc<factory_application::attachments::AttachmentService>,
+) -> Result<Arc<ConversationRuntime>, ConversationError> {
+    ConversationRuntime::with_attachments(
+        service,
+        providers,
+        Arc::new(ApiHost),
+        Arc::new(ApiCodec),
+        Some(features),
+        Some(attachments),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

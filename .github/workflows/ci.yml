@@ -300,7 +300,7 @@ jobs:
           set -euo pipefail
           cat "$IMAGE_DIR"/release-{api,workspace,egress}.env > release.env
           tar --sort=name --mtime="@$(git show -s --format=%ct HEAD)" --owner=0 --group=0 --numeric-owner \
-            -czf factory-server.tar.gz release.env web-dist infra/deploy crates/database/schema.sql \
+            -czf factory-server.tar.gz release.env web-dist infra/deploy crates/database/schema.sql crates/database/schema-upgrades \
             scripts/environments/prepare.mjs scripts/environments/docker.mjs scripts/egress/prepare.mjs
           sha256sum factory-server.tar.gz > factory-server.tar.gz.sha256
       - uses: actions/upload-artifact@v4

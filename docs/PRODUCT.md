@@ -241,6 +241,13 @@ Assistant replies render Markdown during streaming and after completion, includi
 links, lists, tables and code blocks. Raw HTML cannot execute and embedded images do
 not load remote resources automatically. User messages remain plain text.
 
+Messages in free chats, project chats and feature discussions can include up to
+10 files of up to 50 MiB each. Adding a file to a new free chat creates the
+conversation. Files can be selected, dropped on the composer or pasted, and can
+be removed before sending. The message still requires text. Factory shows image
+thumbnails and file chips, with previews for supported formats and a download
+action. An agent can attach files it explicitly references from its output directory.
+
 In free chat, both providers run with full access inside the member's container: commands and file changes do
 not ask for per-action approval, and the agent can read, change or delete any files
 accessible to that container user, including saved provider credentials. Docker's

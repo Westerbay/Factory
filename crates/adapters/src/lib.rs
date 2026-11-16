@@ -1,5 +1,6 @@
 //! Concrete provider adapters; credentials are injected by the runtime composition.
 
+pub mod attachments;
 pub mod claude_account;
 pub mod claude_execution;
 pub mod codex_account;

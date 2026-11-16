@@ -21,7 +21,7 @@ wait_for_upgrade_check() {
 remove_upgrade_journal() {
   local path=$1
   rm -f -- "$path/previous/"{prepared,egress}.json "$path/candidate/"{prepared,egress}.json \
-    "$path/bundle" "$path/previous-bundle" "$path/mutating" "$path/applied"
+    "$path/bundle" "$path/previous-bundle" "$path/mutating" "$path/applied" "$path/schema-upgrade"
   rmdir -- "$path/previous" "$path/candidate" "$path"
 }
 
@@ -62,6 +62,28 @@ create_upgrade_journal() {
   mv -T -- "$staging" "$journal"
 }
 
+database_schema_version() {
+  "${compose[@]}" exec -T postgres psql -X -U factory -d factory \
+    --no-align --tuples-only --quiet --set ON_ERROR_STOP=1 \
+    --command 'SELECT version FROM factory_identity.schema_info'
+}
+
+upgrade_attachment_schema() {
+  local backups="$installation/backups" temporary backup
+  mkdir -p -m 700 "$backups"
+  temporary=$(mktemp "$backups/.factory-schema-5.XXXXXX")
+  backup="$backups/factory-schema-5-$(date -u +%Y%m%dT%H%M%SZ)-${temporary##*.}.dump"
+  if ! "${compose[@]}" exec -T postgres pg_dump -U factory -d factory --format=custom > "$temporary" ||
+    ! test -s "$temporary" || ! mv -- "$temporary" "$backup"; then
+    rm -f -- "$temporary"
+    echo 'Database backup failed; the schema is unchanged.' >&2
+    return 1
+  fi
+  "${compose[@]}" exec -T postgres psql -X -U factory -d factory \
+    --set ON_ERROR_STOP=1 --single-transaction --file - \
+    < "$bundle/crates/database/schema-upgrades/0006-attachments.sql"
+}
+
 restore_previous_release() {
   rm -f -- "$journal/applied" || return
   if [[ -e "$journal/mutating" ]]; then
@@ -76,7 +98,11 @@ upgrade_exit() {
   local status=$?
   trap - EXIT
   if ((status != 0)); then
-    if restore_previous_release; then
+    local observed
+    if [[ -e "$journal/schema-upgrade" ]] &&
+      { ! observed=$(database_schema_version) || [[ "$observed" != 5 ]]; }; then
+      echo 'The database upgrade may be committed. Retry the same bundle to finish; the previous API requires schema 5.' >&2
+    elif restore_previous_release; then
       echo 'The update failed and the previous release was restored.' >&2
     else
       echo 'Automatic rollback could not finish. Retry deployment of the same bundle to resume the pending upgrade.' >&2
@@ -100,6 +126,13 @@ upgrade_installation() {
     return 1
   fi
 
+  local schema
+  schema=$(database_schema_version)
+  case "$schema" in
+    5|6) ;;
+    *) echo "Unsupported Factory schema version: $schema" >&2; return 1 ;;
+  esac
+
   trap upgrade_exit EXIT
   if [[ ! -e "$journal/applied" ]]; then
     if ! cmp -s "$journal/previous/prepared.json" "$journal/candidate/prepared.json" ||
@@ -107,8 +140,14 @@ upgrade_installation() {
       "${compose[@]}" stop --timeout 120 api
       upgrade_command apply
       activate_preparation "$journal/candidate"
+    elif [[ "$schema" == 5 ]]; then
+      "${compose[@]}" stop --timeout 120 api
     fi
     touch -- "$journal/applied"
+  fi
+  if [[ "$schema" == 5 ]]; then
+    touch -- "$journal/schema-upgrade"
+    upgrade_attachment_schema
   fi
   "${compose[@]}" up -d --pull never --wait --wait-timeout 120
   trap - EXIT

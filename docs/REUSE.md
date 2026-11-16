@@ -274,3 +274,12 @@ Paraglide message catalogs and generated, typed browser runtime. The web locale 
 in [`apps/web/src/lib/i18n`](../apps/web/src/lib/i18n/) selects the browser language
 when available and persists explicit choices locally. Use generated messages for interface
 copy; provider output remains user content.
+
+## Conversation attachments
+
+[Core attachment policy](../crates/core/src/attachments/mod.rs) owns media
+classification and file limits. The
+[HTTP attachment routes](../apps/api/src/attachments/mod.rs) serve authenticated
+uploads and reads; the HTTP layer owns the response headers. The browser
+[media renderer](../apps/web/src/features/artifacts/media.tsx) renders the
+server-provided media kind and is shared by conversation attachment previews.

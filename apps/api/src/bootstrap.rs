@@ -167,6 +167,7 @@ async fn create_host_router(
         app::WorkspaceRuntime {
             projects: Some(host.projects()),
             features: Some(host.features()),
+            attachments: Some(host.attachments()),
         },
     );
     match router {

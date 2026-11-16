@@ -296,11 +296,11 @@ async fn readiness_rejects_old_schema_version() {
         .await
         .unwrap();
     assert_eq!(db.ready().await.unwrap(), Readiness::Invalid);
-    sqlx::query("UPDATE factory_identity.schema_info SET version=5")
+    sqlx::query("UPDATE factory_identity.schema_info SET version=6")
         .execute(&sql)
         .await
         .unwrap();
-    sqlx::query("ALTER TABLE factory_identity.schema_info ADD CONSTRAINT schema_info_version_check CHECK (version=5)").execute(&sql).await.unwrap();
+    sqlx::query("ALTER TABLE factory_identity.schema_info ADD CONSTRAINT schema_info_version_check CHECK (version=6)").execute(&sql).await.unwrap();
     assert_eq!(db.ready().await.unwrap(), Readiness::Ready);
 }
 
@@ -663,6 +663,7 @@ async fn deletion_fences_runs_and_removes_only_owned_project_history() {
         generation: 1,
         model: "fixture".into(),
         input: "test".into(),
+        attachment_ids: vec![],
     };
     let (run, _) = conversations.begin_turn(owner, turn.clone()).await.unwrap();
     assert!(matches!(
