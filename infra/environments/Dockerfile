@@ -79,12 +79,13 @@ COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 COPY web-tools/package.json web-tools/package-lock.json /opt/factory/web-tools/
 COPY web-tools/playwright /usr/local/bin/playwright
+# Use the locked native pnpm binary so tools such as Turborepo can spawn it directly.
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && npm --prefix /opt/factory/web-tools ci --ignore-scripts --no-audit --no-fund \
-    && ln -s /opt/factory/web-tools/node_modules/.bin/pnpm /usr/local/bin/pnpm \
+    && ln -s "/opt/factory/web-tools/node_modules/@pnpm/exe.linux-$(node -p 'process.arch')/pnpm" /usr/local/bin/pnpm \
     && chmod 0555 /usr/local/bin/playwright \
-    && pnpm --version \
+    && python3 -c 'import subprocess; subprocess.run(["/usr/local/bin/pnpm", "--version"], check=True)' \
     && playwright install --with-deps --only-shell chromium \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/*
