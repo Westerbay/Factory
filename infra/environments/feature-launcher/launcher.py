@@ -409,9 +409,18 @@ def repository_main(*command):
         return subprocess.call(command, env=env)
 
 
-def worker_main(provider, git_ssh_source, *args):
+def worker_main(provider, git_ssh_source, access, activation, *args):
+    if access not in {"read", "write"}:
+        raise ValueError("invalid worker access")
     os.umask(0o077)
-    seed_credentials(provider)
+    # Claim the one-shot seed before activation can consume its 35-second
+    # delivery window. Preparation and native protocol startup have separate
+    # budgets; the relay's credential window and token lifetime stay unchanged.
+    try:
+        seed_credentials(provider)
+    except (OSError, ValueError):
+        print('{"type":"factory_repository_failed","step":"credential-seed"}', flush=True)
+        return 1
     git_ssh_path = "/home/factory/.factory-git-ssh.py"
     with open(git_ssh_path, "x") as helper:
         helper.write(git_ssh_source)
@@ -429,7 +438,10 @@ def worker_main(provider, git_ssh_source, *args):
         )
         binary = {"codex": "/opt/codex/bin/codex", "claude": "/opt/claude/claude"}[provider]
         try:
-            return subprocess.call([binary, *args], timeout=86400)
+            return subprocess.call(
+                ["/usr/bin/python3", "-I", "-c", activation, access, binary, *args],
+                timeout=86400,
+            )
         except subprocess.TimeoutExpired:
             return 124
 

@@ -17,12 +17,21 @@ pub(super) struct Transport {
 }
 impl Transport {
     pub fn new(input: ProcessInput, output: ProcessOutput) -> Self {
+        Self::from_stream(JsonStream::new(input, output))
+    }
+    pub(super) fn prepared(input: ProcessInput, output: ProcessOutput) -> Self {
+        Self::from_stream(JsonStream::prepared(input, output))
+    }
+    fn from_stream(stream: JsonStream) -> Self {
         Self {
-            stream: JsonStream::new(input, output),
+            stream,
             queued: VecDeque::new(),
             next_id: 1,
             rpc_error: None,
         }
+    }
+    pub(super) async fn repository_ready(&mut self) -> Result<(), ExecutionError> {
+        self.stream.repository_ready().await
     }
     pub async fn send(&mut self, value: Value) -> Result<(), ExecutionError> {
         self.stream.send(value).await

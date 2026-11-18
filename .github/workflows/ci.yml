@@ -155,6 +155,8 @@ jobs:
       - name: Repository environment and relay tests
         run: |
           python3 -B -m unittest discover -s infra/environments -p test_repository_environment.py
+          python3 -B -m unittest discover -s infra/environments -p test_build_cleanup.py
+          python3 -B -m unittest discover -s infra/environments -p test_activation.py
           python3 -B -m unittest discover -s infra/environments/feature-launcher
       - name: Environment integration and image preparation
         run: node scripts/environments/integration.mjs

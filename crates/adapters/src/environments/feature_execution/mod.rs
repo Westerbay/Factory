@@ -1,6 +1,7 @@
 //! Disposable worker containers for Features. The normal chat runtime stays in the
 //! member container. Workers have no network namespace peer and mount only a checkout
 //! and, for a provider turn, the read-only endpoint of an exact-domain CONNECT relay.
+mod build_cleanup;
 mod policy;
 mod provider;
 
@@ -20,6 +21,7 @@ use bollard::{
         ListContainersOptions, RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
     },
 };
+use build_cleanup::BuildCleanup;
 use factory_core::{
     attachments::AttachmentFiles,
     conversations::execution::{ExecutionControl, ExecutionError, QuestionAnswer},
@@ -239,11 +241,7 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
         };
         self.prepare_repository(env, project, &request.workspace)
             .await?;
-        let body = identity.body(
-            env,
-            cwd,
-            prepared_command(identity.readonly, provider.command(request)),
-        )?;
+        let body = identity.body(env, cwd, provider.command(request))?;
         let (process, exit) = self
             .start(
                 env,
@@ -309,7 +307,7 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
         workspace: &TaskWorkspace,
         generation: i64,
     ) -> Result<(), ExecutionError> {
-        tokio::time::timeout(self.runtime.timeout, async {
+        let removed = tokio::time::timeout(self.runtime.timeout, async {
             validate_record(env, self.runtime.metadata.installation_id()).map_err(preflight)?;
             let _gate = launch_lock(env).await.map_err(preflight)?;
             let Some(value) = self
@@ -318,7 +316,7 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
             else {
                 // Only the caller's already durable acknowledgement makes
                 // cleanup idempotent. Recovery never treats this as proof.
-                return Ok(());
+                return Ok(false);
             };
             if value["State"]["Status"] != "exited" || value["State"]["Running"] != false {
                 return Err(ExecutionError::CleanupUncertain);
@@ -327,10 +325,18 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
             self.runtime
                 .remove_feature_worker(id)
                 .await
+                .map(|()| true)
                 .map_err(|_| ExecutionError::CleanupUncertain)
         })
         .await
-        .map_err(|_| ExecutionError::CleanupUncertain)?
+        .map_err(|_| ExecutionError::CleanupUncertain)??;
+        if removed {
+            let identity = WorkerIdentity::new(env, project, workspace, generation, Role::Check)?;
+            if let Some(cleanup) = BuildCleanup::new(env, &identity) {
+                cleanup.run(&self.runtime).await;
+            }
+        }
+        Ok(())
     }
 
     async fn reconcile_check(
@@ -370,7 +376,8 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
         project: &Project,
         attempt: &TaskAttempt,
     ) -> Result<TaskObservation, ExecutionError> {
-        tokio::time::timeout(self.runtime.timeout, async {
+        let mut build_cleanup = None;
+        let observation = tokio::time::timeout(self.runtime.timeout, async {
             validate_record(env, self.runtime.metadata.installation_id()).map_err(preflight)?;
             let _gate = launch_lock(env).await.map_err(preflight)?;
             let checking = attempt.pending_verification == Some(attempt.id());
@@ -378,7 +385,7 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
             let mut running = false;
             let mut unknown = false;
             let mut stopped = Vec::new();
-            for role in [Role::Agent, Role::Check, Role::Prepare] {
+            for role in [Role::Agent, Role::Check, Role::Prepare, Role::Cleanup] {
                 let identity = WorkerIdentity::new(
                     env,
                     project,
@@ -422,6 +429,14 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
                         .await
                         .map_err(|_| ExecutionError::CleanupUncertain)?;
                 }
+                let identity = WorkerIdentity::new(
+                    env,
+                    project,
+                    &attempt.claim.workspace,
+                    attempt.generation,
+                    Role::Agent,
+                )?;
+                build_cleanup = BuildCleanup::new(env, &identity);
                 return Ok(TaskObservation::Stopped);
             }
             // An old agent cannot prove a subsequently uncertain check stopped.
@@ -434,7 +449,11 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
             }))
         })
         .await
-        .map_err(|_| ExecutionError::CleanupUncertain)?
+        .map_err(|_| ExecutionError::CleanupUncertain)??;
+        if let Some(cleanup) = build_cleanup {
+            cleanup.run(&self.runtime).await;
+        }
+        Ok(observation)
     }
 }
 
@@ -558,6 +577,7 @@ pub(crate) struct WorkerExit {
     id: String,
     relay: Option<DockerProcess>,
     launch_ack: Arc<AtomicBool>,
+    build_cleanup: Option<BuildCleanup>,
 }
 
 impl WorkerExit {
@@ -568,6 +588,7 @@ impl WorkerExit {
             id,
             relay,
             launch_ack,
+            build_cleanup,
         } = self;
         // Closing both relay stream halves tears down the Unix listener and tunnels.
         drop(relay);
@@ -605,6 +626,9 @@ impl WorkerExit {
         .await;
         if !matches!(cleanup, Ok(Ok(()))) {
             return Err(ExecutionError::CleanupUncertain);
+        }
+        if launch_recorded && let Some(cleanup) = build_cleanup {
+            cleanup.run(&runtime).await;
         }
         // If the watchdog or shutdown was required, we proved cleanup but have no
         // trustworthy command exit code. Preserve that distinction for checks.
@@ -677,6 +701,7 @@ impl DockerEnvironmentRuntime {
                 runtime: Arc::clone(self),
                 id,
                 launch_ack: Arc::new(AtomicBool::new(false)),
+                build_cleanup: BuildCleanup::new(env, identity),
                 relay: relay.map(|(process, _)| process),
             },
         ))

@@ -150,14 +150,21 @@ python3 -c 'import json, os, sys; path=sys.argv[1]; info=os.stat(path); json.dum
                 panic!("relay fixture did not provide mount identity");
             };
             let relay_identity = relay_proof(&message).unwrap().to_owned();
-            let body = identity.body(&env, match provider { ScopedProvider::Codex => "/workspace", ScopedProvider::Claude => CHECKOUT }, prepared_command(identity.readonly, provider.command(&request))).unwrap();
+            let mut command = provider.command(&request);
+            if matches!(provider, ScopedProvider::Claude) {
+                // Exercise the real pinned CLI after a cold activation longer
+                // than the 30-second protocol deadline, without a provider turn.
+                let activation = command.iter_mut().find(|arg| arg.as_str() == include_str!("activation.py")).unwrap();
+                *activation = format!("import time; time.sleep(35)\n{activation}");
+            }
+            let body = identity.body(&env, match provider { ScopedProvider::Codex => "/workspace", ScopedProvider::Claude => CHECKOUT }, command).unwrap();
             let (process, exit) = runtime.create_feature_worker(&env, &identity, body, Some((DockerProcess { id: relay.id, input, output }, relay_identity)), proof).await.unwrap();
             let process_receipt = process.id.clone();
             let mut session = match provider {
                 ScopedProvider::Codex => crate::codex_execution::scoped_session(process, exit, &request),
                 ScopedProvider::Claude => crate::claude_execution::scoped_session(process, exit, &request),
             };
-            let event = tokio::time::timeout(Duration::from_secs(35), session.output.next()).await;
+            let event = tokio::time::timeout(Duration::from_secs(75), session.output.next()).await;
             assert!(matches!(event, Ok(Ok(Some(ExecutionEvent::ThreadReady { .. })))),
                 "{} native session initialization: {event:?}; worker state: {:?}",
                 provider.as_str(), runtime.inspect_feature_worker(&process_receipt).await.unwrap().map(|value| value["State"].clone())
@@ -408,21 +415,61 @@ source=/home/factory/{}
 target=/home/factory/{}
 mkdir -p "$target"
 cp "$source/.node-version" "$source/package.json" "$source/package-lock.json" "$source/test.cjs" "$target"
+git -C "$target" init --quiet
+printf '/target/\n/node_modules/\n' > "$target/.gitignore"
+git -C "$target" add .gitignore test.cjs package.json package-lock.json .node-version
 python3 -c 'import json, os, sys; path=sys.argv[1]; info=os.stat(path); json.dump(dict(device=info.st_dev, inode=info.st_ino), open(os.path.join(os.path.dirname(path), "ready"), "w"))' "$target"
 "#, identity.checkout, check_identity.checkout);
         let (code, output) = execute(&runtime, main_id, &["/bin/sh", "-ec", &setup]).await;
         assert_eq!(code, 0, "{output}");
         fixture::stop_proxy(&runtime).await;
         let output = feature_runtime
-            .run_check(&env, &project, &check, "npm test && node --version")
+            .run_check(&env, &project, &check,
+                "npm test && node --version && mkdir -p target node_modules && printf 'Signature: 8a477f597d28d172789f06886806bc55\\n' > target/CACHEDIR.TAG && touch target/generated node_modules/generated")
             .await
             .unwrap();
+
         assert_eq!(output.exit_code, 0, "{:?}", output.output);
         assert!(output.output.contains("v22.16.0"));
+        let retained = format!("test -f /home/factory/{}/target/generated", check_identity.checkout);
+        assert_eq!(execute(&runtime, main_id, &["/bin/sh", "-ec", &retained]).await.0, 0);
         feature_runtime
             .acknowledge_check(&env, &project, &check, env.generation)
             .await
             .unwrap();
+
+        let verify = format!(r#"
+from pathlib import Path
+checkout = Path('/home/factory/{}')
+assert not (checkout / 'target').exists()
+assert not (checkout / 'node_modules').exists()
+assert (checkout / 'test.cjs').is_file()
+assert (checkout / '.git/index').is_file()
+"#, check_identity.checkout);
+        let (code, log) = execute(&runtime, main_id, &["/usr/bin/python3", "-I", "-c", &verify]).await;
+        assert_eq!(code, 0, "stopped-check build cleanup: {log}");
+
+        // A failed command reclaims its regenerated dependencies as well, while
+        // retaining exit evidence until the owning application acknowledges it.
+        let failure = feature_runtime.run_check(&env, &project, &check,
+            "mkdir -p target node_modules && printf 'Signature: 8a477f597d28d172789f06886806bc55\\n' > target/CACHEDIR.TAG && touch target/generated node_modules/generated && exit 7")
+            .await.unwrap();
+        assert_eq!(failure.exit_code, 7);
+        assert_eq!(execute(&runtime, main_id, &["/bin/sh", "-ec", &retained]).await.0, 0);
+        feature_runtime.acknowledge_check(&env, &project, &check, env.generation).await.unwrap();
+        let (code, log) = execute(&runtime, main_id, &["/usr/bin/python3", "-I", "-c", &verify]).await;
+        assert_eq!(code, 0, "failed-check build cleanup: {log}");
+
+        // Provider sessions use this same finish path after their launch receipt
+        // is saved. Exercise it without a live inference request or credential.
+        let body = check_body(&check_identity, &env,
+            "mkdir -p target node_modules && printf 'Signature: 8a477f597d28d172789f06886806bc55\\n' > target/CACHEDIR.TAG && touch target/generated node_modules/generated").unwrap();
+        let proof = runtime.checkout_proof(&env, &check_identity).await.unwrap();
+        let (process, exit) = runtime.create_feature_worker(&env, &check_identity, body, None, &proof).await.unwrap();
+        exit.launch_ack.store(true, Ordering::Release);
+        assert_eq!(collect_check(process, exit).await.unwrap().exit_code, 0);
+        let (code, log) = execute(&runtime, main_id, &["/usr/bin/python3", "-I", "-c", &verify]).await;
+        assert_eq!(code, 0, "acknowledged-worker finish cleanup: {log}");
 
     })
     .catch_unwind()
@@ -514,6 +561,33 @@ mod attachment_mounts {
             .unwrap()
             .iter()
             .find(|mount| mount["Target"] == target)
+    }
+
+    #[test]
+    fn build_cleanup_mounts_only_the_writable_checkout_without_any_relay() {
+        let (env, project, mut workspace) = synthetic();
+        for role in [Role::Agent, Role::Check, Role::Prepare, Role::Cleanup] {
+            let readonly =
+                WorkerIdentity::new(&env, &project, &workspace, env.generation, role).unwrap();
+            assert!(readonly.cleanup().is_none());
+        }
+        workspace.access = WorkspaceAccess::Write;
+        for role in [Role::Agent, Role::Check] {
+            let identity = WorkerIdentity::new(&env, &project, &workspace, env.generation, role)
+                .unwrap()
+                .with_conversation(&project, Uuid::new_v4());
+            let cleanup = identity.cleanup().unwrap();
+            let expected = body(&cleanup, &env);
+            let mounts = expected["HostConfig"]["Mounts"].as_array().unwrap();
+            assert_eq!(mounts.len(), 1);
+            assert_eq!(mounts[0]["Target"], CHECKOUT);
+            assert_eq!(mounts[0]["ReadOnly"], false);
+            assert_eq!(mounts[0]["VolumeOptions"]["Subpath"], identity.checkout);
+            assert_eq!(expected["HostConfig"]["NetworkMode"], "none");
+            assert_eq!(expected["HostConfig"]["ReadonlyRootfs"], true);
+            assert!(cleanup.cleanup().is_none());
+            assert!(verify_worker(&inspected(&env, &expected), &expected).is_ok());
+        }
     }
 
     #[test]

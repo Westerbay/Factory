@@ -1,7 +1,7 @@
 use crate::environments::process::ClaudeLaunch;
 use factory_core::{
     conversations::execution::{ExecutionError, valid_effort},
-    features::FeatureRun,
+    features::{FeatureRun, WorkspaceAccess},
 };
 use uuid::Uuid;
 
@@ -66,6 +66,15 @@ impl ScopedProvider {
     pub(super) fn command(self, request: &FeatureRun) -> Vec<String> {
         let mut args = launcher_args("worker", self.as_str());
         args.push(GIT_SSH_HELPER.into());
+        args.push(
+            if request.workspace.access == WorkspaceAccess::ReadOnly {
+                "read"
+            } else {
+                "write"
+            }
+            .into(),
+        );
+        args.push(include_str!("activation.py").into());
         let native = match self {
             Self::Codex => vec![
                 "--disable",

@@ -25,6 +25,7 @@ pub(super) enum Role {
     Agent,
     Check,
     Prepare,
+    Cleanup,
 }
 
 impl Role {
@@ -33,10 +34,12 @@ impl Role {
             Self::Agent => "agent",
             Self::Check => "check",
             Self::Prepare => "prepare",
+            Self::Cleanup => "cleanup",
         }
     }
 }
 
+#[derive(Clone)]
 pub(super) struct WorkerIdentity {
     pub(super) name: String,
     attempt: Uuid,
@@ -50,6 +53,7 @@ pub(super) struct WorkerIdentity {
 }
 
 /// Home-relative sources of a discussion worker's conversation files.
+#[derive(Clone)]
 struct AttachmentMounts {
     /// The conversation store, read-only in the worker.
     attachments: String,
@@ -58,6 +62,20 @@ struct AttachmentMounts {
 }
 
 impl WorkerIdentity {
+    /// Cleanup can only own the writable checkout of a stopped agent or check.
+    pub(super) fn cleanup(&self) -> Option<Self> {
+        if self.readonly || !matches!(self.role, Role::Agent | Role::Check) {
+            return None;
+        }
+        let mut identity = self.clone();
+        identity.name = format!("{}cleanup", self.name.strip_suffix(self.role.as_str())?);
+        identity.labels.insert(ROLE.into(), "cleanup".into());
+        identity.role = Role::Cleanup;
+        identity.relay = None;
+        identity.attachments = None;
+        Some(identity)
+    }
+
     pub(super) fn new(
         env: &Environment,
         project: &Project,
@@ -98,7 +116,7 @@ impl WorkerIdentity {
                     ".factory/feature-relays/{}-repository",
                     workspace.attempt_id
                 )),
-                Role::Check => None,
+                Role::Check | Role::Cleanup => None,
             },
             readonly: role == Role::Prepare || workspace.access == WorkspaceAccess::ReadOnly,
             tooling: format!(".factory/features/{}/.tooling", project.id),
@@ -123,10 +141,15 @@ impl WorkerIdentity {
         cwd: &str,
         command: Vec<String>,
     ) -> Result<ContainerCreateBody, ExecutionError> {
-        let mut mounts = vec![
-            mount(env, CHECKOUT, &self.checkout, self.readonly),
-            mount(env, TOOLING, &self.tooling, self.role != Role::Prepare),
-        ];
+        let mut mounts = vec![mount(env, CHECKOUT, &self.checkout, self.readonly)];
+        if self.role != Role::Cleanup {
+            mounts.push(mount(
+                env,
+                TOOLING,
+                &self.tooling,
+                self.role != Role::Prepare,
+            ));
+        }
         let mut scratch_mib = 256;
         if let Some(relay) = &self.relay {
             mounts.push(mount(env, "/run/factory-relay", relay, true));
@@ -312,7 +335,7 @@ pub(super) fn verify_worker_owner(
     let labels = &value["Config"]["Labels"];
     let role = labels[ROLE]
         .as_str()
-        .filter(|s| matches!(*s, "agent" | "check" | "prepare"))
+        .filter(|s| matches!(*s, "agent" | "check" | "prepare" | "cleanup"))
         .ok_or(EnvironmentError::OwnershipConflict)?;
     let attempt = labels[ATTEMPT]
         .as_str()
