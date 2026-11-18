@@ -64,6 +64,7 @@ impl JsonStream {
                     Some("disk-space") => "disk-space",
                     Some("filesystem-permission") => "filesystem-permission",
                     Some("executable-format") => "executable-format",
+                    Some("credential-seed") => "credential-seed",
                     _ => "configuration",
                 };
                 Err(ExecutionError::RepositoryPreparationFailed(step))

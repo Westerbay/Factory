@@ -1,4 +1,5 @@
 """Behavior tests for the provider relay. No Docker, network or credentials needed."""
+import contextlib
 import io
 import json
 import os
@@ -7,7 +8,7 @@ import socket
 import tempfile
 import unittest
 import uuid
-from unittest.mock import patch
+from unittest.mock import mock_open, patch
 
 from launcher import (
     PROVIDERS,
@@ -18,6 +19,7 @@ from launcher import (
     connect_target,
     establish,
     github_read,
+    worker_main,
 )
 
 
@@ -95,6 +97,41 @@ class ConnectTargetTest(unittest.TestCase):
 
 
 class WorkerCredentialTest(unittest.TestCase):
+    def test_claims_the_one_shot_seed_before_repository_activation(self):
+        for provider, binary in [("claude", "/opt/claude/claude"), ("codex", "/opt/codex/bin/codex")]:
+            with self.subTest(provider=provider):
+                calls = []
+
+                def seeded(selected):
+                    calls.append(("seed", selected))
+
+                def activated(command, timeout):
+                    self.assertEqual(calls, [("seed", provider)])
+                    self.assertEqual(command, ["/usr/bin/python3", "-I", "-c",
+                                               "trusted activation", "write", binary, "--stdio"])
+                    self.assertEqual(timeout, 86400)
+                    return 0
+
+                with patch("launcher.seed_credentials", side_effect=seeded), \
+                        patch("launcher.os.umask"), patch.dict(os.environ), \
+                        patch("builtins.open", mock_open()), \
+                        patch("launcher.socket.socket") as socket_factory, \
+                        patch("launcher.threading.Thread"), \
+                        patch("launcher.subprocess.call", side_effect=activated):
+                    socket_factory.return_value.__enter__.return_value.getsockname.return_value = ("127.0.0.1", 3000)
+                    self.assertEqual(worker_main(provider, "git helper", "write",
+                                                 "trusted activation", "--stdio"), 0)
+
+    def test_seed_failure_is_classified_without_exposing_credentials(self):
+        output = io.StringIO()
+        with patch("launcher.seed_credentials", side_effect=ValueError("private credential")), \
+                patch("launcher.os.umask"), patch("launcher.subprocess.call") as execute, \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(worker_main("claude", "git helper", "read", "trusted activation"), 1)
+        execute.assert_not_called()
+        self.assertEqual(json.loads(output.getvalue()),
+                         {"type": "factory_repository_failed", "step": "credential-seed"})
+
     def test_copies_only_the_selected_access_token(self):
         codex = json.loads(access_only("codex", b"""{
             "last_refresh":"2026-11-07T15:00:00Z",

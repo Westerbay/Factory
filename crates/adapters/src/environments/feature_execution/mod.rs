@@ -39,7 +39,7 @@ use policy::{
 pub(crate) use provider::{
     AGENT_INSTRUCTIONS, RelayAccess, ScopedProvider, proof_command, relay_command,
 };
-use provider::{guarded_command, prepare_command, prepared_agent_command, prepared_command};
+use provider::{guarded_command, prepare_command, prepared_command};
 use serde_json::Value;
 use std::{
     collections::HashMap,
@@ -241,11 +241,7 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
         };
         self.prepare_repository(env, project, &request.workspace)
             .await?;
-        let body = identity.body(
-            env,
-            cwd,
-            prepared_agent_command(identity.readonly, provider.command(request)),
-        )?;
+        let body = identity.body(env, cwd, provider.command(request))?;
         let (process, exit) = self
             .start(
                 env,

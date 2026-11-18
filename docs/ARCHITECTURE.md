@@ -430,7 +430,8 @@ writable for implementation and correction. Both provider CLIs run without comma
 worker.
 A fixed bootstrap embedded in the API activates each agent's repository environment
 using the image's existing helper, then emits a readiness frame before starting the
-native CLI. The transport waits up to ten minutes for activation before starting
+native CLI. The worker claims its access-only credential seed before activation,
+inside the relay's unchanged one-shot 35-second delivery window. The transport waits up to ten minutes for activation before starting
 the provider's unchanged protocol handshake deadline. Activation failures retain a
 fixed, non-sensitive step in `agent.execution.failed` with phase `repository_activation`;
 a Claude handshake timeout reports `initialize_timeout` in phase `initialize`.

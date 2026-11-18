@@ -395,6 +395,9 @@ The matching activation bootstrap tests use
 Repository activation has its own ten-minute startup budget; it does not consume
 Claude's 30-second protocol initialization deadline. Diagnose
 `agent.execution.failed` by its `repository_activation` or `initialize` phase.
+The worker claims its one-shot access credential before activation, so cold startup
+does not consume the relay's 35-second credential delivery window. A failed handoff
+reports `credential-seed`; token expiration and refresh behavior are unchanged.
 
 A prepared image with a different policy is not applied to existing containers. During
 local development, a fresh database creates new environments; existing Docker homes are

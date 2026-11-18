@@ -150,11 +150,12 @@ python3 -c 'import json, os, sys; path=sys.argv[1]; info=os.stat(path); json.dum
                 panic!("relay fixture did not provide mount identity");
             };
             let relay_identity = relay_proof(&message).unwrap().to_owned();
-            let mut command = prepared_agent_command(identity.readonly, provider.command(&request));
+            let mut command = provider.command(&request);
             if matches!(provider, ScopedProvider::Claude) {
                 // Exercise the real pinned CLI after a cold activation longer
                 // than the 30-second protocol deadline, without a provider turn.
-                command[3] = format!("import time; time.sleep(35)\n{}", command[3]);
+                let activation = command.iter_mut().find(|arg| arg.as_str() == include_str!("activation.py")).unwrap();
+                *activation = format!("import time; time.sleep(35)\n{activation}");
             }
             let body = identity.body(&env, match provider { ScopedProvider::Codex => "/workspace", ScopedProvider::Claude => CHECKOUT }, command).unwrap();
             let (process, exit) = runtime.create_feature_worker(&env, &identity, body, Some((DockerProcess { id: relay.id, input, output }, relay_identity)), proof).await.unwrap();
