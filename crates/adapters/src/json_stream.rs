@@ -9,12 +9,14 @@ use tokio::io::AsyncWriteExt;
 
 const MAX_FRAME: usize = 1024 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(20);
+const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(600);
 
 pub(crate) struct JsonStream {
     input: ProcessInput,
     output: ProcessOutput,
     bytes: Vec<u8>,
     read_failure: Option<&'static str>,
+    repository_pending: bool,
 }
 
 impl JsonStream {
@@ -24,7 +26,57 @@ impl JsonStream {
             output,
             bytes: Vec::new(),
             read_failure: None,
+            repository_pending: false,
         }
+    }
+
+    pub(crate) fn prepared(input: ProcessInput, output: ProcessOutput) -> Self {
+        Self {
+            repository_pending: true,
+            ..Self::new(input, output)
+        }
+    }
+
+    /// This is separate from the provider's protocol deadline. Fresh checkouts
+    /// may still be installing locked dependencies before a native CLI exists.
+    pub(crate) async fn repository_ready(&mut self) -> Result<(), ExecutionError> {
+        if !self.repository_pending {
+            return Ok(());
+        }
+        let frame = match tokio::time::timeout(ACTIVATION_TIMEOUT, self.read()).await {
+            Ok(result) => result?,
+            Err(_) => {
+                self.record_timeout("repository_activation_timeout");
+                return Err(ExecutionError::RepositoryPreparationFailed(
+                    "activation-timeout",
+                ));
+            }
+        };
+        match frame["type"].as_str() {
+            Some("factory_repository_ready") => {
+                self.repository_pending = false;
+                Ok(())
+            }
+            Some("factory_repository_failed") => {
+                let step = match frame["step"].as_str() {
+                    Some("environment-not-prepared") => "environment-not-prepared",
+                    Some("node-offline-install") => "node-offline-install",
+                    Some("disk-space") => "disk-space",
+                    Some("filesystem-permission") => "filesystem-permission",
+                    Some("executable-format") => "executable-format",
+                    _ => "configuration",
+                };
+                Err(ExecutionError::RepositoryPreparationFailed(step))
+            }
+            _ => {
+                self.read_failure = Some("invalid_repository_activation_frame");
+                Err(ExecutionError::Protocol)
+            }
+        }
+    }
+
+    pub(crate) fn record_timeout(&mut self, reason: &'static str) {
+        self.read_failure = Some(reason);
     }
 
     pub(crate) async fn send(&mut self, value: Value) -> Result<(), ExecutionError> {
@@ -124,6 +176,48 @@ fn parse(bytes: &[u8]) -> Result<Value, ExecutionError> {
 mod tests {
     use super::*;
     use futures_util::stream;
+
+    #[tokio::test]
+    async fn repository_readiness_preserves_batched_provider_frames_and_sanitizes_failures() {
+        let output = stream::iter(vec![Ok(LogOutput::StdOut {
+            message: b"{\"type\":\"factory_repository_ready\"}\n{\"id\":1}\n"
+                .to_vec()
+                .into(),
+        })]);
+        let mut stream = JsonStream::prepared(Box::pin(tokio::io::sink()), Box::pin(output));
+        stream.repository_ready().await.unwrap();
+        stream.repository_ready().await.unwrap();
+        assert_eq!(stream.read().await.unwrap()["id"], 1);
+        for (step, expected) in [
+            ("node-offline-install", "node-offline-install"),
+            ("private credential", "configuration"),
+        ] {
+            let output = stream::iter(vec![Ok(LogOutput::StdOut {
+                message: format!(
+                    "{{\"type\":\"factory_repository_failed\",\"step\":\"{step}\"}}\n"
+                )
+                .into(),
+            })]);
+            let mut stream = JsonStream::prepared(Box::pin(tokio::io::sink()), Box::pin(output));
+            assert_eq!(
+                stream.repository_ready().await,
+                Err(ExecutionError::RepositoryPreparationFailed(expected))
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn repository_activation_is_bounded_without_claiming_a_protocol_timeout() {
+        let mut stream =
+            JsonStream::prepared(Box::pin(tokio::io::sink()), Box::pin(stream::pending()));
+        assert_eq!(
+            stream.repository_ready().await,
+            Err(ExecutionError::RepositoryPreparationFailed(
+                "activation-timeout"
+            ))
+        );
+        assert_eq!(stream.read_failure(), Some("repository_activation_timeout"));
+    }
 
     #[test]
     fn rejects_non_objects_deep_or_large_frames() {

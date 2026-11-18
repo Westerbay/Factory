@@ -97,6 +97,16 @@ are public static resources; loading the interface does not require a remote fon
 
 ## Persistence and ownership
 
+- [The provider transport](../crates/adapters/src/json_stream.rs) shares the bounded
+  repository-readiness handshake between Claude and Codex Feature workers. The
+  [activation bootstrap](../crates/adapters/src/environments/feature_execution/activation.py)
+  runs the image's repository helper before native protocol initialization; keep this
+  gate when adding another provider that uses freshly prepared checkouts.
+  [Build cleanup](../crates/adapters/src/environments/feature_execution/build_cleanup.rs)
+  is shared by acknowledged worker exits, persisted check results and stopped-task
+  recovery. Call it only after ownership and process termination are established;
+  it preserves sources and reusable preparation caches.
+
 - [IdentityDatabase and PgIdentityStore](../crates/database/src/identity/mod.rs) own SQLx
   connection/readiness/close and transactional identity persistence. The
   [API database selector](../apps/api/src/bootstrap.rs) is shared by startup and the

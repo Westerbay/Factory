@@ -428,6 +428,13 @@ checkout read-only and uses a separate package-download relay without provider o
 credentials. Agent and check workers mount the cache read-only. Agent checkouts are
 writable for implementation and correction. Both provider CLIs run without command approval prompts inside the isolated
 worker.
+A fixed bootstrap embedded in the API activates each agent's repository environment
+using the image's existing helper, then emits a readiness frame before starting the
+native CLI. The transport waits up to ten minutes for activation before starting
+the provider's unchanged protocol handshake deadline. Activation failures retain a
+fixed, non-sensitive step in `agent.execution.failed` with phase `repository_activation`;
+a Claude handshake timeout reports `initialize_timeout` in phase `initialize`.
+Retained workspace images do not need a new on-disk bootstrap or CLI option.
 Workers use the relay for the selected provider, public GitHub HTTPS and the public
 npm registry. Loopback requests stay inside the worker so Playwright can reach a local
 app. The workspace image supplies the CLI and its matching Chromium browser.
@@ -444,6 +451,17 @@ before promoting a provisional repository into the owned feature checkout. Initi
 workspace creation and project deletion share a project lock. Deletion quarantines
 and removes owned feature workspaces. Worker checkouts share the member's Docker
 volume, whose capacity depends on the host storage configuration.
+
+After a writable agent has exited and its container is removed, or a check's exit
+has been durably acknowledged, a separate networkless cleanup worker mounts only
+that attempt's checkout. It removes top-level `target/` and `node_modules/` only
+when Git confirms they are ignored and contain no tracked files. A Rust cache marker
+is required for `target/`, and `node_modules/` requires a Node package manifest. Sources, Git
+metadata, checkpoints, attachments and the shared preparation cache remain intact.
+Recovery applies the same cleanup only after all workers for the settled launch
+are proved stopped and removed. Uncertain or active launches retain their files.
+Cleanup failures are logged as `feature.build_cleanup.failed` without changing a
+successful command's result; completed cleanup emits `feature.build_cleanup.completed`.
 
 Reviewers and trusted checks use the same committed snapshot. Integrated checks record
 their launch and outcome on that snapshot. A resumed review reconciles an outstanding

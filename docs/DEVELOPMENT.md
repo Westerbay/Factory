@@ -382,6 +382,20 @@ portable disk quota. The approved OpenAI and Anthropic destinations and GitHub S
 other-user access remain blocked. Package downloads and development-server publishing
 are not enabled. Full-access agents can use the SSH key with the member’s GitHub permissions.
 
+Feature workers reclaim ignored, untracked top-level `target/` and `node_modules/`
+after their stopped containers can safely be removed. Check workers retain exit evidence
+until the result is durably acknowledged. Sources, retry checkpoints and the shared
+manifest/image preparation cache remain available. Uncertain launches require recovery
+before cleanup. Monitor `feature.build_cleanup.failed` and host free space: historical
+attempts and shared caches are not subject to an age-based purge or a disk quota.
+Run the filesystem regressions with Python 3.11 or newer:
+`python3 -B -m unittest discover -s infra/environments -p test_build_cleanup.py`.
+The matching activation bootstrap tests use
+`python3 -B -m unittest discover -s infra/environments -p test_activation.py`.
+Repository activation has its own ten-minute startup budget; it does not consume
+Claude's 30-second protocol initialization deadline. Diagnose
+`agent.execution.failed` by its `repository_activation` or `initialize` phase.
+
 A prepared image with a different policy is not applied to existing containers. During
 local development, a fresh database creates new environments; existing Docker homes are
 not deleted by the database reset.

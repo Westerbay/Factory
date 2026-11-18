@@ -150,7 +150,7 @@ pub(crate) fn scoped_session(
     request: &FeatureRun,
 ) -> ExecutionSession {
     spawn_session(
-        JsonStream::new(process.input, process.output),
+        JsonStream::prepared(process.input, process.output),
         request.workspace.attempt_id,
         request.input.clone(),
         true,
@@ -239,7 +239,7 @@ fn result_http_status(frame: &Value) -> Option<u16> {
 
 async fn initialize(stream: &mut JsonStream) -> Result<Value, ExecutionError> {
     stream.send(json!({"type":"control_request","request_id":"factory-init","request":{"subtype":"initialize","hooks":{},"mcpServers":{}}})).await?;
-    tokio::time::timeout(IO_TIMEOUT, async {
+    let response = tokio::time::timeout(IO_TIMEOUT, async {
         for _ in 0..16 {
             let frame = stream.read().await?;
             // The pinned CLI can announce available commands before acknowledging
@@ -260,8 +260,11 @@ async fn initialize(stream: &mut JsonStream) -> Result<Value, ExecutionError> {
         }
         Err(ExecutionError::Protocol)
     })
-    .await
-    .map_err(|_| ExecutionError::Unavailable)?
+    .await;
+    if response.is_err() {
+        stream.record_timeout("initialize_timeout");
+    }
+    response.map_err(|_| ExecutionError::Unavailable)?
 }
 
 fn parse_models(response: &Value) -> Result<Vec<ExecutionModel>, ExecutionError> {
@@ -443,6 +446,9 @@ impl Worker {
         (result, self.stream, self.diagnostics)
     }
     async fn work(&mut self) -> Result<ExecutionEvent, ExecutionError> {
+        self.diagnostics.phase = "repository_activation";
+        self.stream.repository_ready().await?;
+        self.diagnostics.phase = "initialize";
         initialize(&mut self.stream).await?;
         self.diagnostics.phase = "start_turn";
         emit(
@@ -840,6 +846,74 @@ mod tests {
         }))
         .await
         .unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fresh_checkout_preparation_does_not_spend_claudes_initialization_deadline() {
+        let (client, server) = tokio::io::duplex(65536);
+        let (output_tx, output_rx) = mpsc::channel(16);
+        let output = stream::unfold(output_rx, |mut rx| async move {
+            rx.recv().await.map(|frame| (frame, rx))
+        });
+        let mut session = spawn_session(
+            JsonStream::prepared(Box::pin(client), Box::pin(output)),
+            Uuid::new_v4(),
+            "hello".into(),
+            true,
+            async { Ok(0) },
+        );
+        let mut input = BufReader::new(server);
+        tokio::task::yield_now().await;
+        // A cold checkout can take longer than Claude's unchanged 30-second
+        // handshake budget. It must not receive a protocol request yet.
+        tokio::time::advance(Duration::from_secs(45)).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1), read_request(&mut input))
+                .await
+                .is_err()
+        );
+        frame(&output_tx, json!({"type":"factory_repository_ready"})).await;
+        assert_eq!(read_request(&mut input).await["request_id"], "factory-init");
+        frame(&output_tx, json!({"type":"control_response","response":{"request_id":"factory-init","subtype":"success","response":{}}})).await;
+        assert!(matches!(
+            session.output.next().await.unwrap(),
+            Some(ExecutionEvent::ThreadReady { .. })
+        ));
+        // No provider turn or live credential is needed for the handshake test.
+        drop(session.control);
+        assert_eq!(
+            session.output.next().await.unwrap(),
+            Some(ExecutionEvent::Failed)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_native_claude_handshake_still_times_out_and_logs_the_exact_phase() {
+        let (logs, _subscriber) =
+            crate::execution_diagnostics::test_support::CapturedLogs::capture();
+        let (client, server) = tokio::io::duplex(65536);
+        let (output_tx, output_rx) = mpsc::channel(16);
+        let output = stream::unfold(output_rx, |mut rx| async move {
+            rx.recv().await.map(|frame| (frame, rx))
+        });
+        let mut session = spawn_session(
+            JsonStream::prepared(Box::pin(client), Box::pin(output)),
+            Uuid::new_v4(),
+            "hello".into(),
+            true,
+            async { Ok(0) },
+        );
+        frame(&output_tx, json!({"type":"factory_repository_ready"})).await;
+        let mut input = BufReader::new(server);
+        assert_eq!(read_request(&mut input).await["request_id"], "factory-init");
+        tokio::time::advance(Duration::from_secs(31)).await;
+        assert_eq!(
+            session.output.next().await.unwrap(),
+            Some(ExecutionEvent::Failed)
+        );
+        let record: Value = serde_json::from_str(logs.text().trim()).unwrap();
+        assert_eq!(record["fields"]["phase"], "initialize");
+        assert_eq!(record["fields"]["stream_error"], "initialize_timeout");
     }
 
     #[tokio::test]

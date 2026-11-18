@@ -209,7 +209,7 @@ pub(crate) fn scoped_session(
     request: &FeatureRun,
 ) -> ExecutionSession {
     spawn_session(
-        Transport::new(process.input, process.output),
+        Transport::prepared(process.input, process.output),
         SessionStart {
             model: request.model.clone(),
             effort: request.effort.clone(),
@@ -426,6 +426,9 @@ impl Worker {
     }
 
     async fn work(&mut self, previous: Option<String>) -> Result<ExecutionEvent, ExecutionError> {
+        self.diagnostics.phase = "repository_activation";
+        self.transport.repository_ready().await?;
+        self.diagnostics.phase = "initialize";
         self.transport.initialize().await?;
         self.diagnostics.phase = "open_thread";
         let requested_thread = previous.clone();

@@ -172,6 +172,21 @@ pub(super) fn prepared_command(readonly: bool, command: Vec<String>) -> Vec<Stri
     args
 }
 
+pub(super) fn prepared_agent_command(readonly: bool, command: Vec<String>) -> Vec<String> {
+    let mut args: Vec<_> = [
+        "/usr/bin/python3",
+        "-I",
+        "-c",
+        include_str!("activation.py"),
+        if readonly { "read" } else { "write" },
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    args.extend(command);
+    args
+}
+
 pub(crate) fn proof_command(checkout: &str) -> Vec<String> {
     launcher_args("proof", checkout)
 }
