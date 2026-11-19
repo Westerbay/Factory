@@ -779,7 +779,7 @@ class ProjectControllerTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'conflict')
         self.assertEqual(self.execute('delete', **request), 'deleted')
 
-    def test_integration_keeps_a_complete_preview_above_128_kib(self):
+    def test_integration_keeps_a_complete_preview_above_512_kib(self):
         origin = self.origin()
         self.clone(origin)
         feature = str(uuid.uuid4())
@@ -788,20 +788,21 @@ class ProjectControllerTests(unittest.TestCase):
         for path in ('first.txt', 'second.txt'):
             fields = {'attempt': str(uuid.uuid4()), 'base_oid': base, 'writable': True}
             self.feature(origin, feature, 'prepare', **fields)
-            (self.feature_checkout(feature, fields['attempt']) / path).write_text(('x' * 80 + '\n') * 1024)
+            (self.feature_checkout(feature, fields['attempt']) / path).write_text(('x' * 80 + '\n') * 4096)
             self.feature(origin, feature, 'checkpoint', scope=[path], **fields)
             current = self.feature(origin, feature, 'integrate', expected_head=current,
                                    scope=[path], **fields)
         snapshot = self.feature(origin, feature, 'snapshot')
         self.assertEqual(snapshot['git']['head_oid'], current)
         self.assertEqual(snapshot['changed_paths'], ['first.txt', 'second.txt'])
-        self.assertGreater(len(snapshot['patch'].encode()), 128 * 1024)
+        self.assertGreater(len(snapshot['patch'].encode()), 512 * 1024)
 
     def test_integration_keeps_previous_result_when_cumulative_diff_cannot_be_displayed(self):
         origin = self.origin()
         self.clone(origin)
         for limit, size, first_path, second_path, content in (
             ('FEATURE_PATCH_LIMIT', 1000, 'first.txt', 'second.txt', 'x' * 650 + '\n'),
+            ('FEATURE_RESPONSE_LIMIT', 1500, 'first.txt', 'second.txt', '\\' * 330 + '\n'),
             ('FEATURE_PATH_LIMIT', 160, 'first-' + 'x' * 85, 'second-' + 'x' * 85, 'short\n'),
         ):
             with self.subTest(limit=limit):

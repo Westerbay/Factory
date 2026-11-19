@@ -419,8 +419,9 @@ agent replies and computes revision fingerprints outside application policy.
 
 The [project controller](../infra/environments/project-controller.py) uses owned Git
 checkouts and validates a writer's paths and the cumulative diff before moving the
-integration branch. The full patch is bounded to 512 KiB within a 1 MiB controller
-response. The [feature execution adapter](../crates/adapters/src/environments/feature_execution/mod.rs)
+integration branch. Raw Git output and the complete serialized controller response
+are each bounded to 1 MiB. The response check includes JSON escaping and metadata;
+an oversized result leaves the integration branch unchanged. The [feature execution adapter](../crates/adapters/src/environments/feature_execution/mod.rs)
 mounts the verified attempt checkout and the project's tooling directory. A disposable
 preparation worker reads the repository manifests, installs supported tools and downloads
 dependencies into a cache scoped to those inputs and the workspace image. It mounts the
