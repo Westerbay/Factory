@@ -2,6 +2,7 @@ pub mod bundle;
 mod coordinator;
 mod delivery;
 pub(crate) mod discussion;
+mod discussion_context;
 mod profiles;
 mod recovery;
 mod review;
