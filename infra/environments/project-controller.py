@@ -837,8 +837,9 @@ FEATURE_FIELDS = {
 FEATURE_ID_FIELDS = {'op', 'project', 'operation', 'directory', 'repository', 'repository_id', 'feature'}
 FEATURE_REQUEST_LIMIT = 192 * 1024
 FEATURE_RESPONSE_LIMIT = 1024 * 1024
-# Leave space for JSON escaping and changed paths in the response envelope.
-FEATURE_PATCH_LIMIT = FEATURE_RESPONSE_LIMIT // 2
+# Bound raw Git output independently; snapshot_between also checks the exact
+# serialized response before integration moves the branch.
+FEATURE_PATCH_LIMIT = FEATURE_RESPONSE_LIMIT
 FEATURE_PATH_LIMIT = 32 * 1024
 PRE_PUSH = b"""#!/bin/sh
 IFS=' ' read -r local_ref local_oid remote_ref remote_oid || exit 1
