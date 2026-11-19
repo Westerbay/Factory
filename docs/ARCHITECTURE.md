@@ -417,6 +417,16 @@ fences. The [feature API](../apps/api/src/features/mod.rs) projects only member-
 state. The provider [codec](../crates/adapters/src/feature_codec.rs) translates structured
 agent replies and computes revision fingerprints outside application policy.
 
+[Feature discussion context](../crates/application/src/features/discussion_context.rs)
+keeps the canonical current proposals, current user input and attachment manifest in full
+within a 240,000-byte prompt budget. It includes a contiguous suffix of complete recent
+turns, with their attachment notes, and explicitly reports older turns omitted from the
+prompt. Stored history is unchanged. Incomplete history reads and pinned content that
+cannot fit still fail visibly. Initial discussions and retries use the same budget.
+Final reviewers receive the JSON delivery contract after the approved context, with all
+evidence inside findings; digest, completeness and schema validation remain strict.
+This prompt handling is compatible with existing workflow revisions and approvals.
+
 The [project controller](../infra/environments/project-controller.py) uses owned Git
 checkouts and validates a writer's paths and the cumulative diff before moving the
 integration branch. Raw Git output and the complete serialized controller response

@@ -1,6 +1,7 @@
 use super::{
     FeatureCoordinator, bundle, conversation_error,
     coordinator::{ReservedTask, TaskRequest},
+    discussion_context,
 };
 use crate::attachments::{AgentScope, Vantage};
 use factory_core::{
@@ -89,10 +90,13 @@ impl FeatureCoordinator {
             .staged_files(actor, conversation, &attachment_ids)
             .await
             .map_err(conversation_error)?;
-        let mut prompt = discussion_prompt(self.codec.as_ref(), &state, role, &history, &input)?;
-        if self.conversations.attachments().is_some() {
-            prompt.push_str(&Vantage::Worker.prompt_suffix(&files));
-        }
+        let suffix = if self.conversations.attachments().is_some() {
+            Vantage::Worker.prompt_suffix(&files)
+        } else {
+            String::new()
+        };
+        let prompt =
+            discussion_prompt(self.codec.as_ref(), &state, role, &history, &input, &suffix)?;
         let branch = self.initialize_verified(actor, &env, &project, id).await?;
         let task = internal_task(
             operation_id,
@@ -172,16 +176,19 @@ impl FeatureCoordinator {
         history
             .messages
             .retain(|message| message.run_id != failed_run);
-        let mut prompt = discussion_prompt(
+        let suffix = if self.conversations.attachments().is_some() {
+            Vantage::Worker.prompt_suffix(&files)
+        } else {
+            String::new()
+        };
+        let prompt = discussion_prompt(
             self.codec.as_ref(),
             state,
             prior.claim.task.role,
             &history,
             &input,
+            &suffix,
         )?;
-        if self.conversations.attachments().is_some() {
-            prompt.push_str(&Vantage::Worker.prompt_suffix(&files));
-        }
         let reserved = self
             .reserve_task(
                 actor,
@@ -538,10 +545,8 @@ fn discussion_prompt(
     role: TaskRole,
     history: &ConversationHistory,
     input: &str,
+    attachment_suffix: &str,
 ) -> Result<String, FeatureError> {
-    if history.messages_truncated {
-        return Err(FeatureError::Invalid);
-    }
     let scope = state.current_scope().map(|revision| &revision.content);
     let architecture = state
         .current_architecture()
@@ -551,7 +556,7 @@ fn discussion_prompt(
         plan.push_str(&codec.render_revision(proposal)?);
         plan.push('\n');
     }
-    let mut prompt = format!(
+    let prefix = format!(
         "{}\n\n{}\n\nCurrent proposals:\n{plan}\n\nVisible conversation:\n",
         bundle::role_instructions(role),
         if role == TaskRole::Architecture {
@@ -560,27 +565,12 @@ fn discussion_prompt(
             scope_protocol()
         },
     );
-    for message in &history.messages {
-        let role = match message.role {
-            MessageRole::User => "User",
-            MessageRole::Assistant => "Assistant",
-        };
-        prompt.push_str(role);
-        prompt.push_str(":\n");
-        prompt.push_str(&message.content);
-        prompt.push('\n');
-        prompt.push_str(&Vantage::Worker.history_note(&history.attachments, message.id));
-        prompt.push('\n');
-        if prompt.len() > PROMPT_LIMIT {
-            return Err(FeatureError::Invalid);
-        }
-    }
-    prompt.push_str("Current user message:\n");
-    prompt.push_str(input);
-    if prompt.len() > PROMPT_LIMIT {
-        return Err(FeatureError::Invalid);
-    }
-    Ok(prompt)
+    discussion_context::compose(
+        prefix,
+        history,
+        format!("Current user message:\n{input}{attachment_suffix}"),
+        PROMPT_LIMIT,
+    )
 }
 
 fn scope_protocol() -> &'static str {
@@ -753,8 +743,11 @@ mod tests {
             Ok("a".repeat(64))
         }
 
-        fn render_revision(&self, _: &GateContent) -> Result<String, FeatureError> {
-            unreachable!()
+        fn render_revision(&self, content: &GateContent) -> Result<String, FeatureError> {
+            Ok(match content {
+                GateContent::Scope { brief } => brief.clone(),
+                GateContent::Architecture { summary, .. } => summary.clone(),
+            })
         }
 
         fn parse_review(&self, _: &str) -> Result<FeatureReviewReply, FeatureError> {
@@ -764,6 +757,106 @@ mod tests {
         fn derived_id(&self, _: Uuid, _: &str) -> Uuid {
             Uuid::from_u128(12)
         }
+    }
+
+    #[test]
+    fn discussion_budgets_current_proposals_input_and_attachment_instructions_together() {
+        use factory_core::conversations::{Conversation, Message};
+        let id = Uuid::new_v4();
+        let now = chrono::Utc::now();
+        let mut state = FeatureState::new(Feature {
+            id,
+            user_id: id,
+            project_id: id,
+            conversation_id: id,
+            environment_id: id,
+            provider: "claude".into(),
+            workflow_revision: bundle::WORKFLOW_REVISION.into(),
+            title: "Feature".into(),
+            stage: FeatureStage::Architecture,
+            created_at: now,
+        });
+        let scope = RevisionKey {
+            id: Uuid::new_v4(),
+            digest: "a".repeat(64),
+        };
+        let design = RevisionKey {
+            id: Uuid::new_v4(),
+            digest: "b".repeat(64),
+        };
+        let brief = "Canonical approved brief";
+        let plan = format!("Canonical architecture {}", "p".repeat(28_000));
+        state.scope = Some(scope.clone());
+        state.architecture = Some(design.clone());
+        state.revisions = vec![
+            GateRevision {
+                key: scope.clone(),
+                content: GateContent::Scope {
+                    brief: brief.into(),
+                },
+                approval: None,
+            },
+            GateRevision {
+                key: design,
+                content: GateContent::Architecture {
+                    scope,
+                    summary: plan.clone(),
+                    diagrams: vec![],
+                    tasks: vec![],
+                },
+                approval: None,
+            },
+        ];
+        let history = ConversationHistory {
+            conversation: Conversation {
+                id,
+                user_id: id,
+                project_id: Some(id),
+                provider_thread: None,
+                created_at: now,
+            },
+            runs: vec![],
+            attachments: vec![],
+            requests: vec![],
+            runs_truncated: false,
+            messages_truncated: false,
+            requests_truncated: false,
+            messages: vec![Message {
+                id: Uuid::new_v4(),
+                run_id: Uuid::new_v4(),
+                role: MessageRole::User,
+                content: "old".repeat(71_000),
+                created_at: now,
+            }],
+        };
+        let input = "new proposal".repeat(1_500);
+        let suffix = Vantage::Worker.prompt_suffix(&[]);
+        let result = discussion_prompt(
+            &FixtureCodec,
+            &state,
+            TaskRole::Architecture,
+            &history,
+            &input,
+            &suffix,
+        )
+        .unwrap();
+        assert!(result.len() <= PROMPT_LIMIT);
+        assert!(result.contains(brief));
+        assert!(result.contains(&plan));
+        assert!(result.contains("1 older turns (1 messages) omitted"));
+        assert!(result.ends_with(&format!("Current user message:\n{input}{suffix}")));
+        // The manifest is pinned and budgeted, not appended after checking the cap.
+        assert_eq!(
+            discussion_prompt(
+                &FixtureCodec,
+                &state,
+                TaskRole::Architecture,
+                &history,
+                &input,
+                &"f".repeat(PROMPT_LIMIT)
+            ),
+            Err(FeatureError::Invalid),
+        );
     }
 
     #[test]

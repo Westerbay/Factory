@@ -106,6 +106,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn review_json_cannot_be_surrounded_by_prose() {
+        let reply = r#"{"patchDigest":"reviewed","coverage":"complete","findings":[]}"#;
+        for text in [
+            format!("Review complete.\n{reply}"),
+            format!("{reply}\nNo issues found."),
+            format!("Review complete.\n```json\n{reply}\n```\nNo issues found."),
+        ] {
+            assert!(JsonFeatureCodec.parse_review(&text).is_err());
+        }
+    }
+
+    #[test]
     fn structured_reply_cannot_claim_checks_or_approve_a_proposal() {
         assert!(
             JsonFeatureCodec
