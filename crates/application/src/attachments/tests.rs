@@ -1,7 +1,7 @@
 use super::{agent::derived_id, *};
 use crate::environments::{EnvironmentAvailability, EnvironmentService};
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use factory_core::{
     conversations::{Conversation, ConversationHistory, ConversationPage, Message, MessageRole},
     conversations::{ConversationStore, StartTurn},
@@ -60,6 +60,7 @@ impl EnvironmentStore for Env {
 struct Conversations {
     conversation: Conversation,
     messages: Mutex<Vec<(Uuid, String)>>,
+    fail_append: Mutex<bool>,
 }
 #[rustfmt::skip]
 #[async_trait]
@@ -71,13 +72,16 @@ impl ConversationStore for Conversations {
             Err(ConversationError::NotFound)
         }
     }
-    async fn append_assistant(&self, _: EnvironmentActor, _: Uuid, _: i64, _: Uuid, item: &str, text: &str) -> Result<(Message, bool), ConversationError> {
-        if text.is_empty() {
-            return Err(ConversationError::Invalid);
-        }
-        let message = Message { id: Uuid::new_v4(), run_id: Uuid::nil(), role: MessageRole::Assistant, content: text.to_owned(), created_at: Utc::now() };
-        self.messages.lock().unwrap().push((message.id, format!("{item}:{text}")));
-        Ok((message, true))
+    async fn append_assistant(&self, _: EnvironmentActor, _: Uuid, _: i64, run_id: Uuid, item: &str, text: &str) -> Result<(Message, bool), ConversationError> {
+        if *self.fail_append.lock().unwrap() { return Err(ConversationError::Unavailable); }
+        if text.is_empty() { return Err(ConversationError::Invalid); }
+        let mut messages = self.messages.lock().unwrap();
+        let existing = messages.iter().find(|(_, saved)| saved.starts_with(&format!("{item}:")));
+        let id = existing.map_or_else(Uuid::new_v4, |(id, _)| *id);
+        let inserted = existing.is_none();
+        let message = Message { id, run_id, role: MessageRole::Assistant, content: text.to_owned(), created_at: Utc::now() };
+        if inserted { messages.push((message.id, format!("{item}:{text}"))); }
+        Ok((message, inserted))
     }
     async fn reserve_model_probe(&self, _: EnvironmentActor, _: Uuid, _: i64, _: Uuid) -> Result<(), ConversationError> { unreachable!() }
     async fn settle_model_probe_launch(&self, _: Uuid, _: Uuid, _: i64) -> Result<(), ConversationError> { unreachable!() }
@@ -100,17 +104,22 @@ impl ConversationStore for Conversations {
 }
 
 #[derive(Default)]
-struct Rows(Mutex<Vec<Attachment>>);
+struct Rows {
+    rows: Mutex<Vec<Attachment>>,
+    conversation: Uuid,
+    fail_record: Mutex<bool>,
+    fail_after_commit: Mutex<bool>,
+}
 impl Rows {
     fn all(&self) -> Vec<Attachment> {
-        self.0.lock().unwrap().clone()
+        self.rows.lock().unwrap().clone()
     }
     fn change(
         &self,
         id: Uuid,
         change: impl FnOnce(&mut Attachment),
     ) -> Result<Attachment, AttachmentError> {
-        let mut rows = self.0.lock().unwrap();
+        let mut rows = self.rows.lock().unwrap();
         let row = rows
             .iter_mut()
             .find(|a| a.id == id)
@@ -124,14 +133,14 @@ impl Rows {
 impl AttachmentStore for Rows {
     async fn reserve(&self, _: EnvironmentActor, _: Uuid, _: i64, new: NewAttachment) -> Result<Attachment, AttachmentError> {
         let row = Attachment { id: new.id, conversation_id: new.conversation_id, run_id: None, message_id: None, source: AttachmentSource::User, state: AttachmentState::Uploading, name: new.name, media_type: OCTET_STREAM.into(), kind: MediaKind::File, size: 0, created_at: Utc::now() };
-        self.0.lock().unwrap().push(row.clone());
+        self.rows.lock().unwrap().push(row.clone());
         Ok(row)
     }
     async fn mark_staged(&self, _: EnvironmentActor, _: Uuid, _: i64, id: Uuid, file: StoredFile) -> Result<Attachment, AttachmentError> {
         self.change(id, |a| (a.state, a.media_type, a.kind, a.size) = (AttachmentState::Staged, file.media_type, file.kind, file.size))
     }
     async fn remove_staged(&self, _: EnvironmentActor, _: Uuid, _: i64, id: Uuid) -> Result<Attachment, AttachmentError> {
-        let mut rows = self.0.lock().unwrap();
+        let mut rows = self.rows.lock().unwrap();
         let index = rows.iter().position(|a| a.id == id).ok_or(AttachmentError::NotFound)?;
         if rows[index].state != AttachmentState::Staged {
             return Err(AttachmentError::Conflict);
@@ -139,7 +148,7 @@ impl AttachmentStore for Rows {
         Ok(rows.remove(index))
     }
     async fn expire_staged(&self, _: EnvironmentActor, before: chrono::DateTime<Utc>) -> Result<Vec<Attachment>, AttachmentError> {
-        let mut rows = self.0.lock().unwrap();
+        let mut rows = self.rows.lock().unwrap();
         let (old, kept) = rows.drain(..).partition(|a| a.created_at < before && matches!(a.state, AttachmentState::Staged | AttachmentState::Uploading));
         *rows = kept;
         Ok(old)
@@ -151,7 +160,12 @@ impl AttachmentStore for Rows {
         Ok(self.all().into_iter().filter(|a| a.conversation_id == conversation).collect())
     }
     async fn record_agent_attachments(&self, _: EnvironmentActor, _: Uuid, _: i64, run_id: Uuid, message_id: Uuid, files: Vec<AgentAttachment>) -> Result<Vec<Attachment>, AttachmentError> {
-        let mut rows = self.0.lock().unwrap();
+        if *self.fail_record.lock().unwrap() { return Err(AttachmentError::Unavailable); }
+        let mut rows = self.rows.lock().unwrap();
+        let existing: Vec<_> = rows.iter().filter(|row| row.message_id == Some(message_id)).cloned().collect();
+        if !existing.is_empty() {
+            return if existing.len() == files.len() && existing.iter().zip(&files).all(|(a,b)| a.id == b.id && a.name == b.name) { Ok(existing) } else { Err(AttachmentError::Conflict) };
+        }
         let mut recorded = Vec::new();
         for file in files {
             let (state, stored) = match file.capture {
@@ -159,13 +173,13 @@ impl AttachmentStore for Rows {
                 AgentCapture::Unavailable => (AttachmentState::Unavailable, None),
             };
             let row = Attachment {
-                id: file.id, conversation_id: Uuid::nil(), run_id: Some(run_id), message_id: Some(message_id), source: AttachmentSource::Agent, state, name: file.name,
+                id: file.id, conversation_id: self.conversation, run_id: Some(run_id), message_id: Some(message_id), source: AttachmentSource::Agent, state, name: file.name,
                 media_type: stored.as_ref().map_or(OCTET_STREAM.into(), |s| s.media_type.clone()), kind: stored.as_ref().map_or(MediaKind::File, |s| s.kind), size: stored.map_or(0, |s| s.size), created_at: Utc::now(),
             };
             rows.push(row.clone());
             recorded.push(row);
         }
-        Ok(recorded)
+        if *self.fail_after_commit.lock().unwrap() { Err(AttachmentError::Unavailable) } else { Ok(recorded) }
     }
 }
 
@@ -176,6 +190,10 @@ struct Files {
     sources: Mutex<HashMap<String, Vec<u8>>>,
     captures: Mutex<Vec<(String, Vec<String>)>>,
     stall: Mutex<bool>,
+    copy_started: tokio::sync::Notify,
+    copy_release: tokio::sync::Notify,
+    capture_error: Mutex<Option<AttachmentError>>,
+    delete_error: Mutex<Option<AttachmentError>>,
     max_put: Mutex<Option<usize>>,
     purged_projects: Mutex<Vec<Uuid>>,
 }
@@ -212,8 +230,13 @@ impl AttachmentFiles for Files {
     }
     async fn capture(&self, _: &Environment, location: &AttachmentLocation, reference: &str, roots: &[String]) -> Result<StoredFile, AttachmentError> {
         self.captures.lock().unwrap().push((reference.to_owned(), roots.to_vec()));
+        if let Some(error) = *self.capture_error.lock().unwrap() { return Err(error); }
         if *self.stall.lock().unwrap() {
-            pending::<()>().await;
+            self.copy_started.notify_one();
+            self.copy_release.notified().await;
+        }
+        if let Some(bytes) = self.stored.lock().unwrap().get(&location.file()) {
+            return Ok(Self::stored(bytes, &location.file()));
         }
         let bytes = self.sources.lock().unwrap().get(reference).cloned().ok_or(AttachmentError::NotFound)?;
         let stored = Self::stored(&bytes, &location.file());
@@ -226,6 +249,7 @@ impl AttachmentFiles for Files {
         Ok(bytes.iter().skip(offset as usize).take(length as usize).copied().collect())
     }
     async fn delete_attachment(&self, _: &Environment, location: &AttachmentLocation) -> Result<(), AttachmentError> {
+        if let Some(error) = *self.delete_error.lock().unwrap() { return Err(error); }
         self.stored.lock().unwrap().remove(&location.file());
         Ok(())
     }
@@ -248,8 +272,37 @@ fn chunks(bytes: &[u8]) -> Chunks {
     Chunks(bytes.chunks(7).map(<[u8]>::to_vec).collect())
 }
 
+#[derive(Default)]
+struct TestCaptureHost {
+    jobs: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    failures: Arc<Mutex<Vec<CaptureCleanupFailure>>>,
+}
+impl CaptureHost for TestCaptureHost {
+    fn spawn(&self, task: CaptureTask) {
+        let failures = self.failures.clone();
+        let job = tokio::spawn(async move {
+            if let Err(error) = task.await {
+                failures.lock().unwrap().push(error);
+            }
+        });
+        self.jobs.lock().unwrap().push(job);
+    }
+}
+impl TestCaptureHost {
+    async fn finish(&self) {
+        let jobs = std::mem::take(&mut *self.jobs.lock().unwrap());
+        for job in jobs {
+            tokio::time::timeout(std::time::Duration::from_secs(2), job)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
+}
+
 struct Fixture {
     service: AttachmentService,
+    host: Arc<TestCaptureHost>,
     rows: Arc<Rows>,
     files: Arc<Files>,
     conversations: Arc<Conversations>,
@@ -297,8 +350,13 @@ impl Fixture {
                 created_at: Utc::now(),
             },
             messages: Mutex::default(),
+            fail_append: Mutex::default(),
         });
-        let rows = Arc::new(Rows::default());
+        let rows = Arc::new(Rows {
+            conversation: conversations.conversation.id,
+            ..Rows::default()
+        });
+        let host = Arc::new(TestCaptureHost::default());
         let files = Arc::new(Files::default());
         let service = AttachmentService::new(
             Arc::new(ConversationService::new(
@@ -307,9 +365,11 @@ impl Fixture {
             )),
             rows.clone(),
             files.clone(),
+            host.clone(),
         );
         Self {
             service,
+            host,
             rows,
             files,
             conversations,
@@ -395,42 +455,59 @@ async fn names_must_be_one_path_component() {
 }
 
 #[tokio::test]
-async fn at_most_ten_files_are_staged_per_conversation() {
+async fn unsent_batches_do_not_block_later_messages_but_each_message_still_has_a_limit() {
     let f = Fixture::new();
-    let mut first = None;
-    for index in 0..MAX_ATTACHMENTS_PER_MESSAGE {
+    let mut ids = Vec::new();
+    for index in 0..MAX_ATTACHMENTS_PER_MESSAGE * 2 {
         let staged = f.upload(&format!("{index}.txt"), b"text").await.unwrap();
-        first.get_or_insert(staged.id);
+        ids.push(staged.id);
     }
     assert_eq!(
-        f.upload("extra.txt", b"text").await.unwrap_err(),
+        f.service
+            .staged(
+                f.actor,
+                f.conversation(),
+                &ids[..MAX_ATTACHMENTS_PER_MESSAGE + 1]
+            )
+            .await
+            .unwrap_err(),
         AttachmentError::TooMany
     );
-    f.service
-        .remove_staged(f.actor, first.unwrap())
+    let ready = f
+        .service
+        .staged(
+            f.actor,
+            f.conversation(),
+            &ids[MAX_ATTACHMENTS_PER_MESSAGE..],
+        )
         .await
         .unwrap();
-    f.upload("extra.txt", b"text").await.unwrap();
+    assert_eq!(ready.len(), MAX_ATTACHMENTS_PER_MESSAGE);
+    assert_eq!(f.rows.all().len(), MAX_ATTACHMENTS_PER_MESSAGE * 2);
 }
 
 #[tokio::test]
-async fn a_failed_upload_leaves_no_file_and_does_not_count_once_abandoned() {
+async fn failed_uploads_leave_no_files_and_do_not_block_later_uploads() {
     let f = Fixture::new();
     *f.files.max_put.lock().unwrap() = Some(3);
-    assert_eq!(
-        f.upload("big.bin", b"0123456789").await.unwrap_err(),
-        AttachmentError::TooLarge
-    );
+    for index in 0..MAX_ATTACHMENTS_PER_MESSAGE {
+        assert_eq!(
+            f.upload(&format!("big-{index}.bin"), b"0123456789")
+                .await
+                .unwrap_err(),
+            AttachmentError::TooLarge
+        );
+    }
     assert!(f.files.names().is_empty());
-    assert_eq!(f.rows.all()[0].state, AttachmentState::Uploading);
-    f.rows
-        .change(f.rows.all()[0].id, |a| {
-            a.created_at = Utc::now() - Duration::hours(1)
-        })
-        .unwrap();
+    assert!(
+        f.rows
+            .all()
+            .iter()
+            .all(|row| row.state == AttachmentState::Uploading)
+    );
     *f.files.max_put.lock().unwrap() = None;
     f.upload("small.txt", b"ok").await.unwrap();
-    assert_eq!(f.rows.all().len(), 2);
+    assert_eq!(f.rows.all().len(), MAX_ATTACHMENTS_PER_MESSAGE + 1);
 }
 
 #[tokio::test]
@@ -597,19 +674,11 @@ async fn an_agent_message_keeps_its_files_without_the_block_and_marks_unreachabl
         "/home/factory/.factory/attachments/chats/{}",
         f.conversation()
     )));
-    // Replaying the message reuses the same attachment IDs.
-    let again = f
-        .service
-        .capture_agent_files(
-            &f.env,
-            &scope,
-            run,
-            "item-1",
-            &["out/plot.png".into()],
-            finished(),
-        )
-        .await;
-    assert_eq!(again[0].id, rows[0].id);
+    // Replaying the persisted message does not capture or re-hash its bytes.
+    append(Box::pin(pending())).await.unwrap();
+    assert_eq!(f.rows.all(), rows);
+    assert_eq!(f.files.captures.lock().unwrap().len(), captures.len());
+    f.host.finish().await;
     assert_ne!(derived_id(run, "item-1", 1), derived_id(run, "item-1", 0));
     assert_ne!(derived_id(run, "item-2", 0), derived_id(run, "item-1", 0));
 }
@@ -632,7 +701,7 @@ async fn a_message_that_only_lists_files_is_stored_under_their_names() {
             &scope,
             "item",
             text,
-            finished(),
+            Box::pin(pending()),
         )
         .await
         .unwrap();
@@ -640,29 +709,353 @@ async fn a_message_that_only_lists_files_is_stored_under_their_names() {
 }
 
 #[tokio::test]
-async fn a_capture_past_its_deadline_is_unavailable_and_leaves_nothing_behind() {
+async fn capture_backpressure_preserves_the_completed_reply() {
+    for full_registry in [false, true] {
+        let f = Fixture::new();
+        let scope = AgentScope::chat(None, f.conversation());
+        let run = Uuid::new_v4();
+        let held = if full_registry {
+            (0..256)
+                .map(|_| f.service.captures.try_acquire(Uuid::new_v4()).unwrap())
+                .collect::<Vec<_>>()
+        } else {
+            vec![
+                f.service
+                    .captures
+                    .try_acquire(derived_id(run, "backpressure", usize::MAX))
+                    .unwrap(),
+            ]
+        };
+        let deadline: Deadline = if full_registry {
+            Box::pin(pending())
+        } else {
+            finished()
+        };
+        f.service
+            .append_message(
+                f.actor,
+                &f.env,
+                run,
+                &scope,
+                "backpressure",
+                "Finished reply.\n```factory-files\na.txt\nb.txt\n```",
+                deadline,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            f.conversations.messages.lock().unwrap()[0].1,
+            "backpressure:Finished reply."
+        );
+        let rows = f.rows.all();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].name, "a.txt");
+        assert_eq!(rows[1].name, "b.txt");
+        assert!(rows.iter().all(|a| a.state == AttachmentState::Unavailable));
+        assert!(f.files.captures.lock().unwrap().is_empty());
+        f.host.finish().await;
+        assert!(f.host.failures.lock().unwrap().is_empty());
+        drop(held);
+    }
+}
+
+#[tokio::test]
+async fn a_late_capture_is_cleaned_after_it_really_finishes() {
     let f = Fixture::new();
     *f.files.stall.lock().unwrap() = true;
-    let scope = AgentScope::chat(None, f.conversation());
-    let references = ["a.txt".to_owned(), "b.txt".to_owned()];
-    let files = f
-        .service
-        .capture_agent_files(
-            &f.env,
-            &scope,
-            Uuid::new_v4(),
-            "item",
-            &references,
-            finished(),
-        )
-        .await;
-    assert!(
-        files
-            .iter()
-            .all(|file| file.capture == AgentCapture::Unavailable)
+    f.files.sources.lock().unwrap().insert(
+        "/home/factory/Documents/a.txt".into(),
+        b"late bytes".to_vec(),
     );
-    // After the deadline the remaining references are not even attempted.
+    let scope = AgentScope::chat(None, f.conversation());
+    let (expire, expired) = tokio::sync::oneshot::channel::<()>();
+    let (result, ()) = tokio::join!(
+        f.service.append_message(
+            f.actor,
+            &f.env,
+            Uuid::new_v4(),
+            &scope,
+            "late",
+            "```factory-files\na.txt\nb.txt\n```",
+            Box::pin(async {
+                let _ = expired.await;
+            }),
+        ),
+        async {
+            f.files.copy_started.notified().await;
+            expire.send(()).unwrap();
+        }
+    );
+    result.unwrap();
+    assert!(
+        f.rows
+            .all()
+            .iter()
+            .all(|file| file.state == AttachmentState::Unavailable)
+    );
     assert_eq!(f.files.captures.lock().unwrap().len(), 1);
+    f.files.copy_release.notify_one();
+    f.host.finish().await;
+    assert!(f.files.names().is_empty());
+    assert!(f.host.failures.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn dropping_the_caller_does_not_abandon_its_started_copy() {
+    let f = Fixture::new();
+    let scope = AgentScope::chat(None, f.conversation());
+    *f.files.stall.lock().unwrap() = true;
+    f.files.sources.lock().unwrap().insert(
+        "/home/factory/Documents/a.txt".into(),
+        b"late bytes".to_vec(),
+    );
+    let mut request = Box::pin(f.service.append_message(
+        f.actor,
+        &f.env,
+        Uuid::new_v4(),
+        &scope,
+        "cancel",
+        "```factory-files\na.txt\n```",
+        Box::pin(pending()),
+    ));
+    tokio::select! {
+        _ = f.files.copy_started.notified() => {},
+        result = &mut request => panic!("copy should still be active: {result:?}"),
+    }
+    drop(request);
+    f.files.copy_release.notify_one();
+    f.host.finish().await;
+    assert!(f.files.names().is_empty());
+    assert!(f.rows.all().is_empty());
+    assert!(f.conversations.messages.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn cleanup_failures_are_reported_with_identifiers_and_no_content() {
+    let f = Fixture::new();
+    let scope = AgentScope::chat(None, f.conversation());
+    f.files.sources.lock().unwrap().insert(
+        "/home/factory/Documents/a.txt".into(),
+        b"uncommitted".to_vec(),
+    );
+    *f.rows.fail_record.lock().unwrap() = true;
+    *f.files.delete_error.lock().unwrap() = Some(AttachmentError::Unavailable);
+    let run = Uuid::new_v4();
+    assert_eq!(
+        f.service
+            .append_message(
+                f.actor,
+                &f.env,
+                run,
+                &scope,
+                "item",
+                "```factory-files\na.txt\n```",
+                Box::pin(pending())
+            )
+            .await,
+        Err(ConversationError::Unavailable)
+    );
+    f.host.finish().await;
+    let failures = f.host.failures.lock().unwrap();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].environment_id, f.env.id);
+    assert_eq!(failures[0].attachment_id, derived_id(run, "item", 0));
+    assert_eq!(failures[0].error, AttachmentError::Unavailable);
+}
+
+#[tokio::test]
+async fn uncertain_process_completion_is_reported_without_racing_deletion() {
+    let f = Fixture::new();
+    let scope = AgentScope::chat(None, f.conversation());
+    *f.files.capture_error.lock().unwrap() = Some(AttachmentError::Unavailable);
+    *f.files.delete_error.lock().unwrap() = Some(AttachmentError::Conflict);
+    f.service
+        .append_message(
+            f.actor,
+            &f.env,
+            Uuid::new_v4(),
+            &scope,
+            "item",
+            "```factory-files\na.txt\n```",
+            Box::pin(pending()),
+        )
+        .await
+        .unwrap();
+    f.host.finish().await;
+    assert_eq!(f.rows.all()[0].state, AttachmentState::Unavailable);
+    let failures = f.host.failures.lock().unwrap();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].error, AttachmentError::Unavailable);
+}
+
+#[tokio::test]
+async fn a_replay_preserves_stored_state_without_recapturing() {
+    let f = Fixture::new();
+    let scope = AgentScope::chat(None, f.conversation());
+    f.files.sources.lock().unwrap().insert(
+        "/home/factory/Documents/a.txt".into(),
+        b"first capture".to_vec(),
+    );
+    let run = Uuid::new_v4();
+    let text = "```factory-files\na.txt\nmissing.txt\n```";
+    f.service
+        .append_message(
+            f.actor,
+            &f.env,
+            run,
+            &scope,
+            "item",
+            text,
+            Box::pin(pending()),
+        )
+        .await
+        .unwrap();
+    f.host.finish().await;
+    let recorded = f.rows.all();
+    assert_eq!(
+        recorded.iter().map(|a| a.state).collect::<Vec<_>>(),
+        [AttachmentState::Attached, AttachmentState::Unavailable]
+    );
+    let count = f.files.captures.lock().unwrap().len();
+    f.files.sources.lock().unwrap().clear();
+    *f.files.stall.lock().unwrap() = true;
+    f.service
+        .append_message(f.actor, &f.env, run, &scope, "item", text, finished())
+        .await
+        .unwrap();
+    assert_eq!(f.rows.all(), recorded);
+    assert_eq!(f.files.captures.lock().unwrap().len(), count);
+    assert_eq!(f.files.names().len(), 1);
+    assert_eq!(f.conversations.messages.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn failed_metadata_persistence_cleans_the_uncommitted_capture() {
+    let f = Fixture::new();
+    let scope = AgentScope::chat(None, f.conversation());
+    f.files.sources.lock().unwrap().insert(
+        "/home/factory/Documents/a.txt".into(),
+        b"uncommitted".to_vec(),
+    );
+    *f.rows.fail_record.lock().unwrap() = true;
+    assert_eq!(
+        f.service
+            .append_message(
+                f.actor,
+                &f.env,
+                Uuid::new_v4(),
+                &scope,
+                "item",
+                "```factory-files\na.txt\n```",
+                Box::pin(pending())
+            )
+            .await,
+        Err(ConversationError::Unavailable)
+    );
+    f.host.finish().await;
+    assert!(f.files.names().is_empty());
+    assert!(f.rows.all().is_empty());
+}
+
+#[tokio::test]
+async fn a_lost_commit_reply_never_deletes_the_attached_file() {
+    let f = Fixture::new();
+    let scope = AgentScope::chat(None, f.conversation());
+    f.files.sources.lock().unwrap().insert(
+        "/home/factory/Documents/a.txt".into(),
+        b"committed".to_vec(),
+    );
+    *f.rows.fail_after_commit.lock().unwrap() = true;
+    assert_eq!(
+        f.service
+            .append_message(
+                f.actor,
+                &f.env,
+                Uuid::new_v4(),
+                &scope,
+                "item",
+                "```factory-files\na.txt\n```",
+                Box::pin(pending())
+            )
+            .await,
+        Err(ConversationError::Unavailable)
+    );
+    f.host.finish().await;
+    assert_eq!(f.rows.all()[0].state, AttachmentState::Attached);
+    assert_eq!(f.files.names().len(), 1);
+    assert!(f.host.failures.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn concurrent_replays_share_the_canonical_capture() {
+    let f = Fixture::new();
+    let scope = AgentScope::chat(None, f.conversation());
+    f.files
+        .sources
+        .lock()
+        .unwrap()
+        .insert("/home/factory/Documents/a.txt".into(), b"original".to_vec());
+    *f.files.stall.lock().unwrap() = true;
+    let run = Uuid::new_v4();
+    let text = "```factory-files\na.txt\n```";
+    let (first, replay) = tokio::join!(
+        f.service.append_message(
+            f.actor,
+            &f.env,
+            run,
+            &scope,
+            "item",
+            text,
+            Box::pin(pending())
+        ),
+        async {
+            f.files.copy_started.notified().await;
+            f.files.copy_release.notify_one();
+            f.service
+                .append_message(
+                    f.actor,
+                    &f.env,
+                    run,
+                    &scope,
+                    "item",
+                    text,
+                    Box::pin(pending()),
+                )
+                .await
+        }
+    );
+    first.unwrap();
+    replay.unwrap();
+    f.host.finish().await;
+    assert_eq!(f.files.captures.lock().unwrap().len(), 1);
+    assert_eq!(f.rows.all().len(), 1);
+    assert_eq!(f.conversations.messages.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn failed_message_persistence_cleans_the_uncommitted_capture() {
+    let f = Fixture::new();
+    let scope = AgentScope::chat(None, f.conversation());
+    f.files.sources.lock().unwrap().insert(
+        "/home/factory/Documents/a.txt".into(),
+        b"uncommitted".to_vec(),
+    );
+    *f.conversations.fail_append.lock().unwrap() = true;
+    assert_eq!(
+        f.service
+            .append_message(
+                f.actor,
+                &f.env,
+                Uuid::new_v4(),
+                &scope,
+                "item",
+                "```factory-files\na.txt\n```",
+                Box::pin(pending())
+            )
+            .await,
+        Err(ConversationError::Unavailable)
+    );
+    f.host.finish().await;
     assert!(f.files.names().is_empty());
 }
 
@@ -685,20 +1078,24 @@ async fn a_worker_reaches_only_its_mounted_directories() {
         "/workspace/checkout/src/lib.rs".to_owned(),
         "/workspace/outputs/../attachments/x/y".to_owned(),
     ];
-    let files = f
-        .service
-        .capture_agent_files(
+    let text = format!("```factory-files\n{}\n```", references.join("\n"));
+    f.service
+        .append_message(
+            f.actor,
             &f.env,
-            &scope,
             Uuid::new_v4(),
-            "item",
-            &references,
-            finished(),
+            &scope,
+            "worker",
+            &text,
+            Box::pin(pending()),
         )
-        .await;
-    let kinds: Vec<_> = files
+        .await
+        .unwrap();
+    let kinds: Vec<_> = f
+        .rows
+        .all()
         .iter()
-        .map(|file| matches!(file.capture, AgentCapture::Captured(_)))
+        .map(|file| file.state == AttachmentState::Attached)
         .collect();
     assert_eq!(kinds, [true, false, false]);
     let captures = f.files.captures.lock().unwrap().clone();
@@ -712,6 +1109,7 @@ async fn a_worker_reaches_only_its_mounted_directories() {
     );
     // `..` out of one mount into the other is still inside a root and is mapped.
     assert_eq!(captures[1].0, "/home/factory/.factory/attachments/p/c/x/y");
+    f.host.finish().await;
 }
 
 #[test]

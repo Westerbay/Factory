@@ -293,3 +293,16 @@ classification and file limits. The
 uploads and reads; the HTTP layer owns the response headers. The browser
 [media renderer](../apps/web/src/features/artifacts/media.tsx) renders the
 server-provided media kind and is shared by conversation attachment previews.
+
+Capture replays reuse the completed file's original bytes and metadata. The file adapter
+owns partial-write cleanup. Callers must preserve earlier captures when a replay fails.
+`AttachmentService` consults canonical rows before replay and retains newly copied bytes
+only after metadata persistence. Its `CaptureHost` runs owned jobs through caller
+cancellation, reports cleanup failures, and releases the per-message lease only after
+persistence or safe cleanup. Concrete execution and diagnostics stay in the API host.
+
+The [composer tray](../apps/web/src/features/conversations/attachment-tray.ts)
+owns bounded, abortable retries of explicit upload unavailability. Chat and feature
+discussions share this lifecycle; reuse the tray rather than adding retry loops in
+each consumer. Cancellation, authorization failures and uncertain network outcomes
+do not start another request.

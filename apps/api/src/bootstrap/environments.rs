@@ -275,6 +275,7 @@ impl EnvironmentHostFactory {
             conversation_service.clone(),
             Arc::new(self.database.attachment_store()),
             Arc::new(DockerAttachmentFiles::new(runtime.clone())),
+            Arc::new(crate::conversations::runtime::ApiHost),
         ));
         let project_runtime = Arc::new(ProjectsRuntime {
             environments: service.clone(),

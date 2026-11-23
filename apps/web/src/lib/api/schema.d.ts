@@ -2982,7 +2982,7 @@ export interface operations {
           "application/json": components["schemas"]["ApiError"]
         }
       }
-      /** @description Too many staged files or a changed conversation */
+      /** @description Changed conversation or project state */
       409: {
         headers: {
           [name: string]: unknown

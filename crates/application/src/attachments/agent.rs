@@ -1,5 +1,8 @@
 //! How the agent sees attachments (prompt manifest) and how its files are captured.
-use super::AttachmentService;
+use super::{
+    AttachmentService,
+    capture::{CaptureJob, PendingFiles},
+};
 use factory_core::{
     attachments::*,
     conversations::ConversationError,
@@ -9,6 +12,7 @@ use factory_core::{
 use std::{
     future::{Future, poll_fn},
     pin::{Pin, pin},
+    sync::Arc,
     task::Poll,
 };
 use uuid::Uuid;
@@ -194,7 +198,7 @@ pub(super) fn derived_id(run_id: Uuid, provider_item: &str, index: usize) -> Uui
 }
 
 /// `None` when the deadline passes first.
-async fn within<T>(deadline: &mut Deadline, work: impl Future<Output = T>) -> Option<T> {
+pub(super) async fn within<T>(deadline: &mut Deadline, work: impl Future<Output = T>) -> Option<T> {
     let mut work = pin!(work);
     poll_fn(|cx| {
         if let Poll::Ready(value) = work.as_mut().poll(cx) {
@@ -209,22 +213,25 @@ impl AttachmentService {
     /// Copy the files an agent referenced in one message into the store. Missing,
     /// out-of-scope, oversized or late files are returned as `Unavailable`, so the
     /// message can always be persisted. Run this before persisting the message.
-    pub async fn capture_agent_files(
+    #[allow(clippy::too_many_arguments)]
+    async fn capture_agent_files(
         &self,
+        actor: EnvironmentActor,
         env: &Environment,
         scope: &AgentScope,
         run_id: Uuid,
         provider_item: &str,
         references: &[String],
         mut deadline: Deadline,
-    ) -> Vec<AgentAttachment> {
+        lease: Arc<tokio::sync::OwnedSemaphorePermit>,
+    ) -> PendingFiles {
         let roots: Vec<String> = scope
             .roots
             .iter()
             .map(|root| scope.container_path(root))
             .collect();
         let mut expired = false;
-        let mut captured = Vec::with_capacity(references.len());
+        let mut captured = PendingFiles::default();
         for (index, reference) in references.iter().enumerate() {
             let id = derived_id(run_id, provider_item, index);
             let name = display_name_from_reference(reference);
@@ -234,17 +241,23 @@ impl AttachmentService {
             let path = resolve_reference(reference, &scope.base, &scope.roots);
             if let (false, Ok(location), Ok(path)) = (expired, location, path) {
                 let source = scope.container_path(&path);
-                let copy = self.files.capture(env, &location, &source, &roots);
+                let (copy, receipt) = self.launch_capture(CaptureJob {
+                    actor,
+                    environment: env.clone(),
+                    location,
+                    reference: source,
+                    roots: roots.clone(),
+                    lease: lease.clone(),
+                });
                 match within(&mut deadline, copy).await {
-                    Some(Ok(file)) => capture = AgentCapture::Captured(file),
-                    result => {
-                        expired = result.is_none();
-                        // Remove whatever a failed or abandoned copy left behind.
-                        let _ = self.files.delete_attachment(env, &location).await;
+                    Some(Ok(Ok(file))) => {
+                        capture = AgentCapture::Captured(file);
+                        captured.receipts.push(receipt);
                     }
+                    result => expired = result.is_none(),
                 }
             }
-            captured.push(AgentAttachment { id, name, capture });
+            captured.files.push(AgentAttachment { id, name, capture });
         }
         captured
     }
@@ -264,33 +277,100 @@ impl AttachmentService {
         deadline: Deadline,
     ) -> Result<(), ConversationError> {
         let extracted = extract_factory_files(visible);
-        let files = self
-            .capture_agent_files(
+        let text = if !extracted.text.trim().is_empty() {
+            extracted.text
+        } else if extracted.references.is_empty() {
+            visible.to_owned()
+        } else {
+            extracted
+                .references
+                .iter()
+                .map(|reference| display_name_from_reference(reference))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let mut prior = self
+            .recorded_message(
+                actor,
+                scope.conversation_id,
+                run_id,
+                provider_item,
+                &extracted.references,
+            )
+            .await
+            .map_err(super::attachment_error)?;
+        let mut deadline = deadline;
+        let lease = if prior.is_none() && !extracted.references.is_empty() {
+            let gate = derived_id(run_id, provider_item, usize::MAX);
+            let permit = within(&mut deadline, self.captures.acquire(gate))
+                .await
+                .and_then(Result::ok)
+                .map(Arc::new);
+            // A previous attempt may have committed while we waited for its lease.
+            prior = self
+                .recorded_message(
+                    actor,
+                    scope.conversation_id,
+                    run_id,
+                    provider_item,
+                    &extracted.references,
+                )
+                .await
+                .map_err(super::attachment_error)?;
+            permit
+        } else {
+            None
+        };
+        let pending = if let Some(lease) = lease
+            && prior.is_none()
+        {
+            self.capture_agent_files(
+                actor,
                 env,
                 scope,
                 run_id,
                 provider_item,
                 &extracted.references,
                 deadline,
+                lease,
             )
-            .await;
-        let text = if !extracted.text.trim().is_empty() {
-            extracted.text
-        } else if files.is_empty() {
-            visible.to_owned()
+            .await
         } else {
-            // The store rejects empty messages; a message that only lists files
-            // shows their names.
-            let names: Vec<&str> = files.iter().map(|file| file.name.as_str()).collect();
-            names.join("\n")
+            // Capture backpressure must not discard a completed provider reply.
+            // No new copy starts without a lease. The store preserves any rows a
+            // concurrent attempt already committed instead of replacing them.
+            PendingFiles {
+                files: extracted
+                    .references
+                    .iter()
+                    .enumerate()
+                    .map(|(index, reference)| AgentAttachment {
+                        id: derived_id(run_id, provider_item, index),
+                        name: display_name_from_reference(reference),
+                        capture: AgentCapture::Unavailable,
+                    })
+                    .collect(),
+                receipts: Vec::new(),
+            }
         };
         let (message, _) = self
             .conversations
             .append_assistant(actor, env, run_id, provider_item, &text)
             .await?;
-        self.record_agent_files(actor, env, run_id, message.id, files)
+        if let Some(previous) = prior {
+            return if message.id == previous {
+                Ok(())
+            } else {
+                Err(ConversationError::Conflict)
+            };
+        }
+        let recorded = self
+            .record_agent_files(actor, env, run_id, message.id, pending.files)
             .await
-            .map(|_| ())
-            .map_err(super::attachment_error)
+            .map_err(super::attachment_error)?;
+        for receipt in pending.receipts {
+            receipt.accept(&recorded);
+        }
+        Ok(())
     }
 }

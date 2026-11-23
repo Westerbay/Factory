@@ -1,5 +1,7 @@
 //! Host execution facilities and HTTP serialization for conversation policy.
 use super::contracts::{AnswerView, QuestionOptionView, QuestionView};
+use factory_application::attachments::Deadline;
+use factory_application::attachments::{CaptureHost, CaptureTask};
 pub use factory_application::conversations::coordinator::ConversationRuntime;
 use factory_application::conversations::coordinator::{
     ConversationCodec, ExecutionHost, ExecutionTicker, Task, Wait,
@@ -11,6 +13,21 @@ use factory_core::conversations::{
 use std::{sync::Arc, time::Duration};
 
 pub(crate) struct ApiHost;
+impl CaptureHost for ApiHost {
+    fn spawn(&self, task: CaptureTask) {
+        tokio::spawn(async move {
+            if let Err(failure) = task.await {
+                tracing::warn!(
+                    event = "attachment.capture_cleanup.failed",
+                    environment_id = %failure.environment_id,
+                    attachment_id = %failure.attachment_id,
+                    error = ?failure.error,
+                    "An abandoned capture could not be safely cleaned up"
+                );
+            }
+        });
+    }
+}
 impl ExecutionHost for ApiHost {
     fn spawn(&self, task: Task) {
         tokio::spawn(task);
@@ -18,7 +35,11 @@ impl ExecutionHost for ApiHost {
     fn ticker(&self) -> Box<dyn ExecutionTicker> {
         Box::new(ApiTicker(tokio::time::interval(Duration::from_secs(5))))
     }
+    fn sleep(&self, duration: Duration) -> Deadline {
+        Box::pin(tokio::time::sleep(duration))
+    }
 }
+
 struct ApiTicker(tokio::time::Interval);
 impl ExecutionTicker for ApiTicker {
     fn next<'a>(&'a mut self, output: &'a mut dyn ExecutionOutput) -> Wait<'a> {
@@ -118,6 +139,16 @@ mod tests {
     use super::*;
     use factory_core::conversations::execution::QuestionOption;
     use uuid::Uuid;
+
+    #[tokio::test]
+    async fn the_production_host_resolves_capture_deadlines() {
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            ApiHost.sleep(Duration::from_millis(1)),
+        )
+        .await
+        .expect("the production capture deadline must fire, even if the file operation stalls");
+    }
 
     #[test]
     fn codec_preserves_existing_question_and_answer_json() {

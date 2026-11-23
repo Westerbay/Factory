@@ -1881,6 +1881,7 @@ async fn deleting_a_project_purges_its_attachment_files_before_its_rows() {
         conversations,
         Arc::new(NoAttachmentRows),
         files.clone(),
+        Arc::new(crate::conversations::runtime::ApiHost),
     ));
     let runtime = Arc::new(runtime::ProjectsRuntime {
         environments,

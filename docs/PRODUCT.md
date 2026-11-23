@@ -175,6 +175,39 @@ A missing or stopped proxy makes Codex status/login unavailable. The local termi
 and local account cancellation/logout remain independent of proxy availability, subject
 to the active-run guard. Members can also deliberately run either CLI in the terminal.
 
+## Conversation attachments
+
+Members can attach files in free chats, project conversations and feature discussions
+with the composer's add button, drag and drop or paste. Any file type is accepted, up to
+50 MiB per file and 10 attachments per message. There is no global quota, no additional
+limit on the combined bytes in a message, and no cumulative cap across unsent drafts.
+Factory classifies the stored bytes and ignores the declared type.
+Temporary upload unavailability is retried briefly within a fixed limit. Removing a file
+or clearing the composer also cancels a pending retry. Other failures stay visible;
+requests with an unknown network outcome are not replayed automatically.
+Uploads not sent within 24 hours become eligible for best-effort cleanup during a later
+upload by the same member; there is no periodic purge.
+
+Images, videos, PDFs, text and HTML preview inline; every other type is offered as a
+download. HTML renders only as a static, isolated document without scripts or links, and
+SVG renders only as an isolated image, never inline in the page. Remote images are still
+not loaded automatically.
+
+Files live in the member's own container, so the agent reads them directly and they
+follow the conversation across Codex and Claude Code. The agent can create a file in its
+workspace, on its own or on request, and reference it in its reply; only referenced files
+appear as attachments, not everything that appears in the container. A reference that
+cannot be captured (missing, outside the allowed folders or too large) shows as an
+unavailable attachment with its name only. A transient capture error can also produce
+this state. Replaying the same assistant message preserves that result rather than
+recapturing a source that may have changed; a later message must reference the file again
+to attempt another capture.
+
+Deleting a project deletes the files of its conversations. The same cleanup rule must
+apply to individual conversation deletion when that capability is implemented; individual
+conversation deletion is not available yet. Uploading and reading require the member's
+environment to be running. While it is stopped, Factory reports the service as unavailable. Interactive HTML and browser previews are not offered.
+
 ## Features
 
 Overview links to Chat and Features. A member starts a feature in a ready project

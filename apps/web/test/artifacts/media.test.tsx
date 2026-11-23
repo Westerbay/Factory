@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it, vi } from "vitest"
+import * as documents from "../../src/features/artifacts/html-document"
 
 vi.mock("../../src/lib/theme/theme", () => ({ useTheme: () => "dark" }))
 
@@ -102,6 +103,29 @@ describe("media isolation", () => {
       const html = render(kind)
       expect(html).toContain("Loading…")
       expect(html).not.toContain("<iframe")
+    }
+  })
+
+  it("displays empty text and HTML without requesting an unsatisfiable range", () => {
+    const loadText = vi.fn(async () => {
+      throw new Error("An empty file has no byte range to load")
+    })
+    // HTML sanitization needs a browser DOM and is covered by the preview checks.
+    // This renderer test verifies that an empty document reaches that boundary.
+    const preview = vi
+      .spyOn(documents, "previewHtml")
+      .mockReturnValue("<!doctype html><html><body></body></html>")
+    try {
+      for (const kind of ["text", "html"] as const) {
+        const html = render(kind, { size: 0, loadText })
+        expect(html).not.toContain("Loading…")
+        expect(html).not.toContain("This file could not be displayed.")
+        expect(html).toContain(kind === "text" ? "<pre" : "<iframe")
+      }
+      expect(preview).toHaveBeenCalledWith("", "dark")
+      expect(loadText).not.toHaveBeenCalled()
+    } finally {
+      preview.mockRestore()
     }
   })
 

@@ -3440,7 +3440,7 @@
                 }
               }
             },
-            "description": "Too many staged files or a changed conversation"
+            "description": "Changed conversation or project state"
           },
           "413": {
             "content": {

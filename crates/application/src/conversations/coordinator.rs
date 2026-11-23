@@ -48,11 +48,8 @@ const CAPTURE_DELAY: Duration = Duration::from_secs(30);
 pub trait ExecutionHost: Send + Sync {
     fn spawn(&self, task: Task);
     fn ticker(&self) -> Box<dyn ExecutionTicker>;
-    /// Resolves after `duration`. Hosts must override this: without a timer a
-    /// capture is not time-bounded.
-    fn sleep(&self, _duration: Duration) -> Deadline {
-        Box::pin(std::future::pending())
-    }
+    /// Resolves after `duration`; capture deadlines require a real host timer.
+    fn sleep(&self, duration: Duration) -> Deadline;
 }
 /// Keeps durable wire-compatible encoding outside application policy.
 pub trait ConversationCodec: Send + Sync {
