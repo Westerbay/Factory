@@ -66,13 +66,18 @@ export function createOperationRegistry() {
   let currentScope: string | undefined
   const pending = new Map<string, string>()
   return {
-    get(scope: string, key: string): string {
+    get(
+      scope: string,
+      key: string,
+      observed: readonly { id: string }[] = []
+    ): string {
       if (scope !== currentScope) {
         pending.clear()
         currentScope = scope
       }
       const existing = pending.get(key)
-      if (existing) return existing
+      if (existing && !observed.some(({ id }) => id === existing))
+        return existing
       const operationId = crypto.randomUUID()
       pending.set(key, operationId)
       return operationId

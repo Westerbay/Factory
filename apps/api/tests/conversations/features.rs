@@ -565,6 +565,8 @@ enum WorkerAction {
 
 #[derive(Default)]
 struct WorkflowObservations {
+    fail_merge_resolution: bool,
+    resolution_release: Option<Arc<Notify>>,
     base: usize,
     launches: Vec<(Uuid, WorkerAction, String)>,
     candidates: HashMap<String, WorkerAction>,
@@ -699,7 +701,7 @@ impl FeatureExecutionRuntime for WorkflowWorkers {
         } else if run.input.contains("Task: Beta writer") {
             WorkerAction::Beta
         } else {
-            assert!(run.input.contains("fixture defect"));
+            assert!(run.merge_resolution || run.input.contains("fixture defect"));
             WorkerAction::Correction
         };
         let (first_beta, head) = {
@@ -747,7 +749,19 @@ impl FeatureExecutionRuntime for WorkflowWorkers {
                 });
             }
         }
-        events.push(if first_beta {
+        let (merge_failed, release) = {
+            let observed = self.observed.lock().unwrap();
+            (
+                run.merge_resolution && observed.fail_merge_resolution,
+                observed.resolution_release.clone(),
+            )
+        };
+        if run.merge_resolution
+            && let Some(release) = release
+        {
+            release.notified().await;
+        }
+        events.push(if first_beta || merge_failed {
             ExecutionEvent::Failed
         } else {
             ExecutionEvent::Completed

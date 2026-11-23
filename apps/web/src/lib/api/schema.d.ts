@@ -596,6 +596,22 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  "/api/features/{id}/resolve-merge-conflict": {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    post: operations["resolveFeatureMergeConflict"]
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   "/api/features/{id}/resume": {
     parameters: {
       query?: never
@@ -1242,8 +1258,11 @@ export interface components {
       architecture?: components["schemas"]["FeatureArchitectureView"] | null
       attempts: components["schemas"]["FeatureAttemptView"][]
       canContinue: boolean
+      canResolveMergeConflict?: boolean | null
       delivery?: components["schemas"]["FeatureDeliveryView"] | null
       feature: components["schemas"]["FeatureSummaryView"]
+      /** Format: uuid */
+      mergeResolutionAttemptId?: string | null
       review?: components["schemas"]["FeatureReviewView"] | null
       scope?: components["schemas"]["FeatureScopeView"] | null
     }
@@ -4381,6 +4400,92 @@ export interface operations {
     requestBody: {
       content: {
         "application/json": components["schemas"]["FeatureRevisionBody"]
+      }
+    }
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["FeatureView"]
+        }
+      }
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      401: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      404: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      429: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          "application/json": components["schemas"]["ApiError"]
+        }
+      }
+    }
+  }
+  resolveFeatureMergeConflict: {
+    parameters: {
+      query?: never
+      header: {
+        /** @description Exact configured frontend Origin required */
+        Origin: string
+        /** @description Session CSRF token required */
+        "X-CSRF-Token": string
+      }
+      path: {
+        id: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["FeatureSnapshotBody"]
       }
     }
     responses: {

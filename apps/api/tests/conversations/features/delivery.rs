@@ -16,6 +16,10 @@ struct RemoteObservation {
     advanced: bool,
     refresh_failures: usize,
     merge_conflict: bool,
+    resolution_staged: usize,
+    resolution_adopted: usize,
+    resolution_discarded: Vec<Uuid>,
+    advance_resolution_target: bool,
     replace_on_stage: bool,
     replace_on_lookup: Option<usize>,
     replaced: bool,
@@ -132,6 +136,78 @@ impl FeatureDeliveryRuntime for DeliveryGit {
         };
         self.workers.observed.lock().unwrap().base = new_base;
         self.workers.snapshot(env, project, feature_id).await
+    }
+
+    async fn stage_merge_resolution(
+        &self,
+        env: &Environment,
+        project: &Project,
+        workspace: &TaskWorkspace,
+        reviewed: &GitSnapshot,
+        paths: &[String],
+    ) -> Result<MergeResolutionCandidate, WorkspaceError> {
+        assert_eq!(
+            self.workers
+                .snapshot(env, project, workspace.feature_id)
+                .await?
+                .git,
+            *reviewed
+        );
+        assert_eq!(paths, ["src/"]);
+        let mut remote = self.remote.lock().unwrap();
+        assert!(remote.merge_conflict);
+        remote.resolution_staged += 1;
+        Ok(MergeResolutionCandidate {
+            target_oid: test_oid(remote.base),
+            paths: vec!["src/alpha.rs".into()],
+        })
+    }
+
+    async fn adopt_merge_resolution(
+        &self,
+        env: &Environment,
+        project: &Project,
+        workspace: &TaskWorkspace,
+        reviewed: &GitSnapshot,
+        candidate: &MergeResolutionCandidate,
+    ) -> Result<WorkspaceDiff, WorkspaceError> {
+        assert_eq!(
+            self.workers
+                .snapshot(env, project, workspace.feature_id)
+                .await?
+                .git,
+            *reviewed
+        );
+        let new_base = {
+            let mut remote = self.remote.lock().unwrap();
+            if remote.advance_resolution_target {
+                remote.base += 1;
+            }
+            if candidate.target_oid != test_oid(remote.base) {
+                return Err(WorkspaceError::Conflict);
+            }
+            remote.resolution_adopted += 1;
+            remote.base
+        };
+        self.workers.observed.lock().unwrap().base = new_base;
+        self.workers
+            .snapshot(env, project, workspace.feature_id)
+            .await
+    }
+    async fn discard_merge_resolution(
+        &self,
+        _: &Environment,
+        _: &Project,
+        workspace: &TaskWorkspace,
+        reviewed: &GitSnapshot,
+    ) -> Result<(), WorkspaceError> {
+        assert_eq!(workspace.base_oid, reviewed.head_oid);
+        self.remote
+            .lock()
+            .unwrap()
+            .resolution_discarded
+            .push(workspace.attempt_id);
+        Ok(())
     }
 }
 
@@ -383,6 +459,7 @@ fn ready_for_publication(
     apply(FeatureCommand::ApproveRevision(architecture.clone()));
     let feature_id = state.feature.id;
     state.attempts.push(TaskAttempt {
+        merge_resolution: None,
         claim: AttemptClaim {
             task,
             revision: Some(architecture.clone()),
@@ -554,6 +631,275 @@ async fn feature_reports_a_merge_conflict_without_publishing_or_replacing_the_re
         Some(reviewed.id)
     );
     assert!(git.remote.lock().unwrap().pushes.is_empty());
+    assert!(provider.posts.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn resolution_replays_once_and_requires_publication_of_the_new_review() {
+    let PublicationFixture {
+        f,
+        store,
+        git,
+        provider,
+        workers,
+        reviewed,
+        path,
+    } = publication_fixture(RemoteObservation {
+        base: 5,
+        merge_conflict: true,
+        ..Default::default()
+    })
+    .await;
+    let draft = format!("{path}/draft");
+    let resolve = format!("{path}/resolve-merge-conflict");
+    let rejection = f
+        .call("POST", &draft, 0, &draft_body(Uuid::new_v4(), reviewed.id))
+        .await;
+    assert_eq!(rejection.status(), StatusCode::CONFLICT);
+    let response = f.call("GET", &path, 0, "").await;
+    assert_eq!(body_json(response).await["canResolveMergeConflict"], true);
+
+    let operation = Uuid::new_v4();
+    let body = draft_body(operation, reviewed.id);
+    let (first, replay) = tokio::join!(
+        f.call("POST", &resolve, 0, &body),
+        f.call("POST", &resolve, 0, &body)
+    );
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(replay.status(), StatusCode::OK);
+    until(|| {
+        let state = store.inner.lock().unwrap();
+        state.feature.stage == FeatureStage::Result && state.current_review != Some(reviewed.id)
+    })
+    .await;
+    let state = store.inner.lock().unwrap().clone();
+    let resolved = &state.review().unwrap().snapshot;
+    assert_eq!(resolved.git.base_oid, test_oid(5));
+    assert!(state.reviews.iter().any(|round| round.snapshot == reviewed));
+    assert_eq!(git.remote.lock().unwrap().resolution_staged, 1);
+    assert_eq!(git.remote.lock().unwrap().resolution_adopted, 1);
+    until(|| git.remote.lock().unwrap().resolution_discarded == [operation]).await;
+    assert_eq!(
+        workers
+            .observed
+            .lock()
+            .unwrap()
+            .launches
+            .iter()
+            .filter(|entry| entry.0 == operation)
+            .count(),
+        1
+    );
+    assert_eq!(workers.observed.lock().unwrap().checks.len(), 1);
+    assert!(provider.posts.lock().unwrap().is_empty());
+
+    let stale = f
+        .call("POST", &draft, 0, &draft_body(Uuid::new_v4(), reviewed.id))
+        .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    let published = f
+        .call("POST", &draft, 0, &draft_body(Uuid::new_v4(), resolved.id))
+        .await;
+    assert_eq!(published.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(published).await["delivery"]["status"],
+        "published"
+    );
+}
+
+#[tokio::test]
+async fn review_cannot_refresh_the_comparison_during_a_merge_resolution() {
+    let PublicationFixture {
+        f,
+        store,
+        git,
+        workers,
+        reviewed,
+        path,
+        ..
+    } = publication_fixture(RemoteObservation {
+        base: 5,
+        merge_conflict: true,
+        ..Default::default()
+    })
+    .await;
+    let release = Arc::new(Notify::new());
+    workers.observed.lock().unwrap().resolution_release = Some(release.clone());
+    let stale = f
+        .call(
+            "POST",
+            &format!("{path}/draft"),
+            0,
+            &draft_body(Uuid::new_v4(), reviewed.id),
+        )
+        .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+
+    let operation = Uuid::new_v4();
+    let response = f
+        .call(
+            "POST",
+            &format!("{path}/resolve-merge-conflict"),
+            0,
+            &draft_body(operation, reviewed.id),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(store.inner.lock().unwrap().merge_resolution_active());
+    {
+        let mut remote = git.remote.lock().unwrap();
+        remote.base += 1;
+        remote.merge_conflict = false;
+        remote.head = Some(reviewed.git.head_oid.clone());
+        remote.managed = remote.head.clone();
+    }
+    let refresh = f
+        .call(
+            "POST",
+            &format!("{path}/review"),
+            0,
+            &draft_body(Uuid::new_v4(), reviewed.id),
+        )
+        .await;
+    assert_eq!(refresh.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(refresh).await["code"], "feature-conflict");
+    {
+        let remote = git.remote.lock().unwrap();
+        assert!(remote.staged.is_none());
+        assert_eq!(remote.confirmed, 0);
+        assert!(remote.resolution_discarded.is_empty());
+    }
+    release.notify_one();
+    until(|| {
+        store
+            .inner
+            .lock()
+            .unwrap()
+            .attempts
+            .iter()
+            .any(|attempt| attempt.id() == operation && attempt.status == AttemptStatus::Failed)
+    })
+    .await;
+    assert_eq!(
+        store.inner.lock().unwrap().current_review,
+        Some(reviewed.id)
+    );
+}
+
+#[tokio::test]
+async fn failed_resolution_worker_leaves_the_prior_result_available_for_a_fresh_attempt() {
+    let PublicationFixture {
+        f,
+        store,
+        git,
+        workers,
+        reviewed,
+        path,
+        ..
+    } = publication_fixture(RemoteObservation {
+        base: 5,
+        merge_conflict: true,
+        ..Default::default()
+    })
+    .await;
+    workers.observed.lock().unwrap().fail_merge_resolution = true;
+    let stale = f
+        .call(
+            "POST",
+            &format!("{path}/draft"),
+            0,
+            &draft_body(Uuid::new_v4(), reviewed.id),
+        )
+        .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    let operation = Uuid::new_v4();
+    let response = f
+        .call(
+            "POST",
+            &format!("{path}/resolve-merge-conflict"),
+            0,
+            &draft_body(operation, reviewed.id),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    until(|| {
+        store
+            .inner
+            .lock()
+            .unwrap()
+            .attempts
+            .iter()
+            .any(|attempt| attempt.id() == operation && attempt.status == AttemptStatus::Failed)
+    })
+    .await;
+
+    assert_eq!(
+        store.inner.lock().unwrap().current_review,
+        Some(reviewed.id)
+    );
+    assert_eq!(git.remote.lock().unwrap().resolution_adopted, 0);
+    until(|| git.remote.lock().unwrap().resolution_discarded == [operation]).await;
+    let response = f.call("GET", &path, 0, "").await;
+    let view = body_json(response).await;
+    assert_eq!(view["canResolveMergeConflict"], true);
+    assert_eq!(view["mergeResolutionAttemptId"], operation.to_string());
+}
+
+#[tokio::test]
+async fn resolution_keeps_the_previous_diff_when_the_target_moves() {
+    let PublicationFixture {
+        f,
+        store,
+        git,
+        provider,
+        reviewed,
+        path,
+        ..
+    } = publication_fixture(RemoteObservation {
+        base: 5,
+        merge_conflict: true,
+        advance_resolution_target: true,
+        ..Default::default()
+    })
+    .await;
+    let stale = f
+        .call(
+            "POST",
+            &format!("{path}/draft"),
+            0,
+            &draft_body(Uuid::new_v4(), reviewed.id),
+        )
+        .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    let operation = Uuid::new_v4();
+    let response = f
+        .call(
+            "POST",
+            &format!("{path}/resolve-merge-conflict"),
+            0,
+            &draft_body(operation, reviewed.id),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    until(|| {
+        store
+            .inner
+            .lock()
+            .unwrap()
+            .attempts
+            .iter()
+            .any(|attempt| attempt.id() == operation && attempt.status == AttemptStatus::Failed)
+    })
+    .await;
+    let diff = f.call("GET", &format!("{path}/diff"), 0, "").await;
+    let diff = body_json(diff).await;
+    assert_eq!(diff["baseOid"], reviewed.git.base_oid);
+    assert_eq!(diff["headOid"], reviewed.git.head_oid);
+    assert_eq!(
+        store.inner.lock().unwrap().current_review,
+        Some(reviewed.id)
+    );
+    assert_eq!(git.remote.lock().unwrap().resolution_adopted, 0);
     assert!(provider.posts.lock().unwrap().is_empty());
 }
 

@@ -53,8 +53,20 @@ export function useFeatureWorkspace({
   const csrf = session.status === "active" ? session.session.csrfToken : ""
   const registry = useMemo(createOperationRegistry, [])
   const lifetime = useRef<AbortController | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<unknown>()
+  const activeCommand = useRef<AbortSignal | null>(null)
+  const [pendingCommand, setPendingCommand] = useState<{
+    key: string
+    signal: AbortSignal
+    operationId: string
+  }>()
+  const [commandError, setError] = useState<{
+    scope: string
+    featureId: string | undefined
+    key: string
+    operationId: string
+    reason: unknown
+  }>()
+  const busy = Boolean(pendingCommand && !pendingCommand.signal.aborted)
   const enabled = available && Boolean(scope)
   const listKey = ["features", scope, "list", projectId ?? ""] as const
   const detailKey = ["features", scope, "detail", featureId ?? ""] as const
@@ -111,7 +123,7 @@ export function useFeatureWorkspace({
   }, [scope, registry])
   useEffect(() => {
     setError(undefined)
-  }, [featureId])
+  }, [featureId, scope])
   useEffect(() => {
     if (!available) void client.cancelQueries({ queryKey: ["features", scope] })
   }, [available, client, scope])
@@ -126,6 +138,34 @@ export function useFeatureWorkspace({
     await client.invalidateQueries({ queryKey: ["features", scope, "list"] })
   }, [client, scope, featureId])
 
+  const feature = detail.data
+  const resolutionPrefix = `resolve-merge-conflict:${featureId}:`
+  const resolutionKey = feature?.review
+    ? `${resolutionPrefix}${feature.review.snapshotId}`
+    : undefined
+  const scopedError =
+    commandError?.scope === scope && commandError.featureId === featureId
+      ? commandError
+      : undefined
+  const observedResolution =
+    scopedError?.key.startsWith(resolutionPrefix) &&
+    feature?.attempts.some((attempt) => attempt.id === scopedError.operationId)
+      ? scopedError
+      : undefined
+  const pendingResolution =
+    pendingCommand?.key === resolutionKey ? pendingCommand : undefined
+  useEffect(() => {
+    if (!observedResolution) return
+    registry.complete(
+      scope,
+      observedResolution.key,
+      observedResolution.operationId
+    )
+    setError((current) =>
+      current === observedResolution ? undefined : current
+    )
+  }, [observedResolution, registry, scope])
+
   async function command(
     key: string,
     action: (operationId: string, signal: AbortSignal) => Promise<api.Feature>,
@@ -133,7 +173,7 @@ export function useFeatureWorkspace({
   ) {
     const signal = lifetime.current?.signal
     if (
-      busy ||
+      activeCommand.current === signal ||
       !enabled ||
       !csrf ||
       !signal ||
@@ -141,8 +181,16 @@ export function useFeatureWorkspace({
       controller.getSnapshot().status !== "active"
     )
       return
-    const operationId = persistedId ?? registry.get(scope, key)
-    setBusy(true)
+    // The query can already confirm a lost response before the cleanup effect runs.
+    const operationId =
+      persistedId ??
+      registry.get(
+        scope,
+        key,
+        key === resolutionKey ? feature?.attempts : undefined
+      )
+    activeCommand.current = signal
+    setPendingCommand({ key, signal, operationId })
     setError(undefined)
     try {
       const value = await action(operationId, signal)
@@ -159,7 +207,17 @@ export function useFeatureWorkspace({
       return value
     } catch (reason) {
       if (!signal.aborted) {
-        setError(reason)
+        if (
+          key === resolutionKey &&
+          reason instanceof api.FeatureFailure &&
+          [
+            "feature-merge-resolution-unsupported",
+            "feature-stale-snapshot",
+            "feature-conflict",
+          ].includes(reason.code)
+        )
+          registry.complete(scope, key, operationId)
+        setError({ scope, featureId, key, operationId, reason })
         if (
           reason instanceof ApiFailure &&
           (reason.status === 401 || reason.status === 403)
@@ -168,11 +226,32 @@ export function useFeatureWorkspace({
         else await refresh()
       }
     } finally {
-      if (!signal.aborted) setBusy(false)
+      if (activeCommand.current === signal) activeCommand.current = null
+      if (!signal.aborted) setPendingCommand(undefined)
     }
   }
 
-  const feature = detail.data
+  const error = observedResolution ? undefined : scopedError
+  const reason = error?.reason
+  const needsRepositoryReconnect =
+    reason instanceof api.FeatureFailure &&
+    reason.code === "feature-repository-authorization-required"
+  const resolutionFailed = error?.key.startsWith(resolutionPrefix)
+  const showResolutionError =
+    error?.key === resolutionKey && Boolean(error) && !needsRepositoryReconnect
+  let mergeResolutionError: string | undefined
+  if (showResolutionError) {
+    switch (reason instanceof api.FeatureFailure ? reason.code : undefined) {
+      case "feature-merge-resolution-unsupported":
+        mergeResolutionError = m.feature_merge_resolution_unsupported()
+        break
+      case "feature-stale-snapshot":
+        mergeResolutionError = m.feature_merge_resolution_moved()
+        break
+      default:
+        mergeResolutionError = m.feature_merge_resolution_unconfirmed()
+    }
+  }
   return {
     feature,
     features: features.data?.pages.flatMap((page) => page.items) ?? [],
@@ -181,10 +260,20 @@ export function useFeatureWorkspace({
     loadingFeature: detail.isPending,
     featureError: detail.isError,
     busy,
-    message: error ? problem(error) : "",
-    needsRepositoryReconnect:
-      error instanceof api.FeatureFailure &&
-      error.code === "feature-repository-authorization-required",
+    message:
+      error && (!resolutionFailed || needsRepositoryReconnect)
+        ? problem(reason)
+        : "",
+    needsRepositoryReconnect,
+    mergeResolutionPending:
+      busy &&
+      Boolean(
+        pendingResolution &&
+        !feature?.attempts.some(
+          (attempt) => attempt.id === pendingResolution.operationId
+        )
+      ),
+    mergeResolutionError,
     hasMore: features.hasNextPage,
     loadingMore: features.isFetchingNextPage,
     loadMore: () => void features.fetchNextPage(),
@@ -245,6 +334,18 @@ export function useFeatureWorkspace({
       featureId &&
       command(`review:${featureId}:${snapshotId}`, (operationId, signal) =>
         api.review(featureId, { operationId, snapshotId }, csrf, signal)
+      ),
+    resolveMergeConflict: (snapshotId: string) =>
+      featureId &&
+      feature?.canResolveMergeConflict &&
+      feature.review?.snapshotId === snapshotId &&
+      command(`${resolutionPrefix}${snapshotId}`, (operationId, signal) =>
+        api.resolveMergeConflict(
+          featureId,
+          { operationId, snapshotId },
+          csrf,
+          signal
+        )
       ),
     draft: (snapshotId: string) =>
       featureId &&

@@ -185,6 +185,11 @@ class CheckoutProofTest(unittest.TestCase):
             directory = os.open(home, os.O_RDONLY | os.O_DIRECTORY)
             try:
                 self.assertEqual(checkout_proof(directory, relative), f"{info.st_dev}:{info.st_ino}")
+                seal = checkout.parent / "resolution-discarded"
+                seal.write_text('{"version": 1}')
+                with self.assertRaisesRegex(ValueError, "discarded"):
+                    checkout_proof(directory, relative)
+                seal.unlink()
                 moved = checkout.rename(checkout.parent / "moved")
                 checkout.mkdir()
                 with self.assertRaises(ValueError):

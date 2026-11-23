@@ -236,6 +236,12 @@ export function FeatureWorkspace({
                 onReview={(id) => {
                   void state.review(id)
                 }}
+                onResolveMergeConflict={(id) => {
+                  void state.resolveMergeConflict(id)
+                }}
+                onRefreshMergeResolution={() => void state.refresh()}
+                mergeResolutionPending={state.mergeResolutionPending}
+                mergeResolutionError={state.mergeResolutionError}
                 onDraft={(id) => {
                   void state.draft(id)
                 }}

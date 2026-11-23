@@ -95,6 +95,9 @@ pub struct FeatureRun {
     pub model: String,
     pub effort: Option<String>,
     pub input: String,
+    /// The verified merge checkout may contain unresolved toolchain manifests.
+    /// Use the image tools until the normal checks run on the resolved tree.
+    pub merge_resolution: bool,
     /// Conversation whose attachments the worker may read and whose outputs it fills.
     pub conversation_id: Option<Uuid>,
 }
@@ -276,6 +279,13 @@ pub struct FeatureRemoteRefs {
     pub managed_head_oid: Option<String>,
 }
 
+/// The privately staged target revision and exact paths the worker may resolve.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MergeResolutionCandidate {
+    pub target_oid: String,
+    pub paths: Vec<String>,
+}
+
 /// Trusted Git operations used only by authenticated draft delivery.
 #[async_trait]
 pub trait FeatureDeliveryRuntime: Send + Sync {
@@ -315,4 +325,41 @@ pub trait FeatureDeliveryRuntime: Send + Sync {
         expected: &GitSnapshot,
         proposed: &GitSnapshot,
     ) -> Result<WorkspaceDiff, WorkspaceError>;
+
+    /// Prepare the eligible conflict in the attempt's isolated checkout. The
+    /// reviewed head is the workspace identity, not the staged checkout's tree.
+    async fn stage_merge_resolution(
+        &self,
+        _environment: &Environment,
+        _project: &Project,
+        _workspace: &TaskWorkspace,
+        _reviewed: &GitSnapshot,
+        _approved_paths: &[String],
+    ) -> Result<MergeResolutionCandidate, WorkspaceError> {
+        Err(WorkspaceError::Unavailable)
+    }
+
+    /// Seal the attempt and remove its scratch after the launch and worker settle.
+    async fn discard_merge_resolution(
+        &self,
+        _environment: &Environment,
+        _project: &Project,
+        _workspace: &TaskWorkspace,
+        _reviewed: &GitSnapshot,
+    ) -> Result<(), WorkspaceError> {
+        Err(WorkspaceError::Unavailable)
+    }
+
+    /// Read the worker's resolved files and adopt only the exact staged candidate.
+    /// An exact replay after adoption returns the same local comparison.
+    async fn adopt_merge_resolution(
+        &self,
+        _environment: &Environment,
+        _project: &Project,
+        _workspace: &TaskWorkspace,
+        _reviewed: &GitSnapshot,
+        _candidate: &MergeResolutionCandidate,
+    ) -> Result<WorkspaceDiff, WorkspaceError> {
+        Err(WorkspaceError::Unavailable)
+    }
 }

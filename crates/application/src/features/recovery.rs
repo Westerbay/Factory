@@ -136,6 +136,16 @@ impl FeatureCoordinator {
             return Err(FeatureError::Conflict);
         }
 
+        if prior.merge_resolution.is_some() {
+            if !reconciled {
+                return Err(FeatureError::Conflict);
+            }
+            // A stopped worker is not relaunched against an old target. If a
+            // confirmed local adoption already happened, drive its new review.
+            self.schedule(actor, id);
+            return Ok(state);
+        }
+
         if prior.claim.workspace.access == WorkspaceAccess::Write && prior.checkpoint.is_none() {
             if !reconciled
                 && (self.is_attempt_locally_active(id, attempt_id)

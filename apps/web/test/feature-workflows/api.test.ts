@@ -127,12 +127,14 @@ describe("feature API", () => {
     await api.resume(featureId, attempt, "csrf", signal)
     await api.review(featureId, snapshot, "csrf", signal)
     await api.draft(featureId, snapshot, "csrf", signal)
+    await api.resolveMergeConflict(featureId, snapshot, "csrf", signal)
     for (const [index, [path, body]] of [
       ["approve", revision],
       ["reopen", revision],
       ["resume", attempt],
       ["review", snapshot],
       ["draft", snapshot],
+      ["resolve-merge-conflict", snapshot],
     ].entries()) {
       expect(post).toHaveBeenNthCalledWith(
         index + 1,
@@ -147,6 +149,32 @@ describe("feature API", () => {
         }
       )
     }
+  })
+
+  it("keeps optional merge resolution authority and classifies unsupported conflicts", async () => {
+    const signal = new AbortController().signal
+    const body = { operationId, snapshotId: revisionId }
+    const updated: api.Feature = {
+      ...feature,
+      canResolveMergeConflict: false,
+      mergeResolutionAttemptId: operationId,
+    }
+    vi.spyOn(apiClient, "POST")
+      .mockResolvedValueOnce(ok(updated))
+      .mockResolvedValueOnce({
+        error: { code: "feature-merge-resolution-unsupported" },
+        response: new Response(null, { status: 409 }),
+      } as never)
+
+    await expect(
+      api.resolveMergeConflict(featureId, body, "csrf", signal)
+    ).resolves.toEqual(updated)
+    await expect(
+      api.resolveMergeConflict(featureId, body, "csrf", signal)
+    ).rejects.toMatchObject({
+      code: "feature-merge-resolution-unsupported",
+      status: 409,
+    })
   })
 
   it("sends discussion through the workflow endpoint without choosing a client model", async () => {

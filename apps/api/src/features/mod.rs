@@ -82,6 +82,7 @@ pub(crate) fn documented_router(
         .routes(routes!(diff))
         .routes(routes!(review))
         .routes(routes!(draft))
+        .routes(routes!(resolve_merge_conflict))
         .layer(DefaultBodyLimit::max(80 * 1024))
         .with_state(StateData { auth, runtime })
 }
@@ -114,6 +115,9 @@ fn error(e: FeatureError) -> Response {
         FeatureError::ExecutionUncertain => (StatusCode::CONFLICT, "feature-execution-uncertain"),
         FeatureError::ReviewBlocked => (StatusCode::CONFLICT, "feature-review-blocked"),
         FeatureError::StaleSnapshot => (StatusCode::CONFLICT, "feature-stale-snapshot"),
+        FeatureError::MergeResolutionUnsupported => {
+            (StatusCode::CONFLICT, "feature-merge-resolution-unsupported")
+        }
         FeatureError::Unavailable => (StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
     };
     (
@@ -286,13 +290,19 @@ async fn resume(
     let actor = state.actor(&headers, true).await?;
     let id = feature_id(path).map_err(error)?;
     let body = payload(body).map_err(error)?;
-    let coordinator = state.runtime().map_err(error)?.coordinator.clone();
+    let runtime = state.runtime().map_err(error)?;
+    let coordinator = runtime.coordinator.clone();
+    let delivery = runtime.delivery.clone();
     command(async move {
         match body.attempt_id {
             Some(attempt_id) => {
-                coordinator
+                let state = coordinator
                     .resume(actor, id, body.operation_id, attempt_id)
-                    .await
+                    .await?;
+                if let Some(delivery) = delivery {
+                    delivery.cleanup_recovered_resolution(actor, &state, attempt_id);
+                }
+                Ok(state)
             }
             None => {
                 coordinator
@@ -384,6 +394,30 @@ async fn draft(
     command(async move {
         delivery
             .publish(actor, id, body.operation_id, body.snapshot_id)
+            .await
+    })
+    .await
+}
+
+#[utoipa::path(post,path="/api/features/{id}/resolve-merge-conflict",operation_id="resolveFeatureMergeConflict",request_body=FeatureSnapshotBody,params(("id"=Uuid,Path),("Origin"=String,Header,description="Exact configured frontend Origin required"),("X-CSRF-Token"=String,Header,description="Session CSRF token required")),security(("sessionCookie"=[])),responses((status=200,body=FeatureView),(status=400,body=ApiError),(status=401,body=ApiError),(status=403,body=ApiError),(status=404,body=ApiError),(status=409,body=ApiError),(status=429,body=ApiError),(status=503,body=ApiError)))]
+async fn resolve_merge_conflict(
+    State(state): State<StateData>,
+    path: Result<Path<Uuid>, PathRejection>,
+    headers: HeaderMap,
+    body: Result<Json<FeatureSnapshotBody>, JsonRejection>,
+) -> Result<Json<FeatureView>, Response> {
+    let actor = state.actor(&headers, true).await?;
+    let id = feature_id(path).map_err(error)?;
+    let body = payload(body).map_err(error)?;
+    let delivery = state
+        .runtime()
+        .map_err(error)?
+        .delivery
+        .clone()
+        .ok_or_else(|| error(FeatureError::Unavailable))?;
+    command(async move {
+        delivery
+            .resolve_merge_conflict(actor, id, body.operation_id, body.snapshot_id)
             .await
     })
     .await

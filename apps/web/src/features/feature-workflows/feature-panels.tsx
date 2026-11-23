@@ -41,6 +41,10 @@ export type FeaturePanelsProps = {
   onReopen: (revision: Revision) => void
   onResume: (attemptId?: string) => void
   onReview: (snapshotId: string) => void
+  onResolveMergeConflict: (snapshotId: string) => void
+  onRefreshMergeResolution?: () => void
+  mergeResolutionPending?: boolean
+  mergeResolutionError?: string
   onDraft: (snapshotId: string) => void
   onReloadDiff: () => void
   onDiscuss: () => void
@@ -124,6 +128,15 @@ function deliveryLabel(status: NonNullable<Feature["delivery"]>["status"]) {
   return labels[status]()
 }
 
+const mergeResolutionStatus = {
+  starting: m.feature_merge_resolution_starting,
+  running: m.feature_merge_resolution_running,
+  validated: m.feature_merge_resolution_validated,
+  failed: m.feature_merge_resolution_failed,
+  interrupted: m.feature_merge_resolution_failed,
+  uncertain: m.feature_uncertain_attempt,
+}
+
 function draftLink(value: string | null | undefined): string | undefined {
   if (!value) return undefined
   try {
@@ -172,6 +185,10 @@ export function FeaturePanels({
   onReopen,
   onResume,
   onReview,
+  onResolveMergeConflict,
+  onRefreshMergeResolution,
+  mergeResolutionPending = false,
+  mergeResolutionError,
   onDraft,
   onReloadDiff,
   onDiscuss,
@@ -196,6 +213,24 @@ export function FeaturePanels({
         architectureAttempt.status === "interrupted"))
   const review = feature.review
   const delivery = feature.delivery
+  const resolutionAttempt = feature.attempts.find(
+    (item) => item.id === feature.mergeResolutionAttemptId
+  )
+  const resolutionStatus = mergeResolutionPending
+    ? m.feature_merge_resolution_starting()
+    : (mergeResolutionError ??
+      (resolutionAttempt && mergeResolutionStatus[resolutionAttempt.status]()))
+  const previousPublication =
+    delivery?.status === "failed" &&
+    review &&
+    delivery.snapshotId !== review.snapshotId
+  const reviewingUpdatedDiff =
+    stage === "review" &&
+    previousPublication &&
+    review &&
+    !review.ready &&
+    !review.findings.length &&
+    !review.checks.length
   const publishedStale = delivery?.status === "publishedStale"
   const published = delivery?.status === "published" || publishedStale
   const gate = viewStage === "scope" ? scope : architecture
@@ -505,7 +540,7 @@ export function FeaturePanels({
               <p className="feature-panel-empty">{m.feature_review_empty()}</p>
             ) : (
               <>
-                <div className="feature-result-verdict">
+                <div className="feature-result-verdict" role="status">
                   {readyForDelivery ? (
                     <Check size={18} aria-hidden="true" />
                   ) : (
@@ -516,7 +551,9 @@ export function FeaturePanels({
                       ? m.feature_delivery_stale()
                       : readyForDelivery
                         ? m.feature_review_ready()
-                        : m.feature_review_pending()}
+                        : reviewingUpdatedDiff
+                          ? m.feature_review_updated_diff_pending()
+                          : m.feature_review_pending()}
                   </h3>
                 </div>
                 {identity && (
@@ -768,11 +805,52 @@ export function FeaturePanels({
             )}
             {delivery && (
               <section className="feature-result-section feature-delivery">
-                <h4>{m.feature_draft_receipt()}</h4>
+                <h4>
+                  {previousPublication
+                    ? m.feature_delivery_previous_request()
+                    : m.feature_draft_receipt()}
+                </h4>
                 <p className="feature-delivery-status">
                   {deliveryLabel(delivery.status)}
                 </p>
                 {delivery.reason && <p>{translateMessage(delivery.reason)}</p>}
+                <div role="status" aria-atomic="true">
+                  {resolutionStatus && <p>{resolutionStatus}</p>}
+                </div>
+                {resolutionAttempt?.activity &&
+                  (resolutionAttempt.status === "failed" ||
+                    resolutionAttempt.status === "interrupted") && (
+                    <p>{translateMessage(resolutionAttempt.activity)}</p>
+                  )}
+                {current && feature.canResolveMergeConflict && review && (
+                  <Button
+                    disabled={busy || unsettled || mergeResolutionPending}
+                    onClick={() => onResolveMergeConflict(review.snapshotId)}
+                  >
+                    {m.feature_merge_resolution_attempt()}
+                  </Button>
+                )}
+                {current && resolutionAttempt?.canResume && (
+                  <Button
+                    disabled={busy}
+                    onClick={() => onResume(resolutionAttempt.id)}
+                  >
+                    {m.feature_merge_resolution_recover()}
+                  </Button>
+                )}
+                {current &&
+                  onRefreshMergeResolution &&
+                  (mergeResolutionError ||
+                    (resolutionAttempt?.status === "uncertain" &&
+                      !resolutionAttempt.canResume)) && (
+                    <Button
+                      variant="ghost"
+                      disabled={busy}
+                      onClick={onRefreshMergeResolution}
+                    >
+                      {m.feature_refresh()}
+                    </Button>
+                  )}
                 {url && (
                   <a href={url} target="_blank" rel="noopener noreferrer">
                     {m.feature_open_draft()}

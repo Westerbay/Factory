@@ -3,7 +3,8 @@ use async_trait::async_trait;
 use factory_core::{
     environments::Environment,
     features::{
-        FeatureDeliveryRuntime, FeatureRemoteRefs, GitSnapshot, WorkspaceDiff, WorkspaceError,
+        FeatureDeliveryRuntime, FeatureRemoteRefs, GitSnapshot, MergeResolutionCandidate,
+        TaskWorkspace, WorkspaceDiff, WorkspaceError,
     },
     projects::Project,
 };
@@ -57,6 +58,51 @@ impl FeatureDeliveryRuntime for DockerProjectRuntime {
         proposed: &GitSnapshot,
     ) -> Result<WorkspaceDiff, WorkspaceError> {
         self.confirm_feature_refresh(env, project, id, candidate, expected, proposed)
+            .await
+    }
+
+    async fn stage_merge_resolution(
+        &self,
+        env: &Environment,
+        project: &Project,
+        workspace: &TaskWorkspace,
+        reviewed: &GitSnapshot,
+        approved_paths: &[String],
+    ) -> Result<MergeResolutionCandidate, WorkspaceError> {
+        self.stage_feature_merge_resolution(env, project, workspace, reviewed, approved_paths)
+            .await
+    }
+
+    async fn discard_merge_resolution(
+        &self,
+        env: &Environment,
+        project: &Project,
+        workspace: &TaskWorkspace,
+        reviewed: &GitSnapshot,
+    ) -> Result<(), WorkspaceError> {
+        let result = self
+            .discard_feature_merge_resolution(env, project, workspace, reviewed)
+            .await;
+        if let Err(error) = result {
+            tracing::warn!(
+                feature_id = %workspace.feature_id,
+                attempt_id = %workspace.attempt_id,
+                workspace_error = %error,
+                "feature merge resolution scratch cleanup failed"
+            );
+        }
+        result
+    }
+
+    async fn adopt_merge_resolution(
+        &self,
+        env: &Environment,
+        project: &Project,
+        workspace: &TaskWorkspace,
+        reviewed: &GitSnapshot,
+        candidate: &MergeResolutionCandidate,
+    ) -> Result<WorkspaceDiff, WorkspaceError> {
+        self.adopt_feature_merge_resolution(env, project, workspace, reviewed, candidate)
             .await
     }
 }
