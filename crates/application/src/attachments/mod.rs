@@ -1,15 +1,17 @@
 //! Attachment use cases. Files live in the member's container; the store keeps their
 //! metadata. Every call is fenced by the current running environment.
 mod agent;
+mod capture;
 mod gates;
 
 #[cfg(test)]
 mod tests;
 
 pub use agent::{AgentScope, DOCUMENTS, Deadline, HOME, Vantage};
+pub use capture::{CaptureCleanupFailure, CaptureHost, CaptureTask};
 
 use crate::conversations::ConversationService;
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use factory_core::{
     attachments::*,
     conversations::ConversationError,
@@ -21,16 +23,13 @@ use uuid::Uuid;
 
 const UPLOADS_PER_USER: usize = 4;
 const READS_PER_USER: usize = 4;
-/// An `Uploading` row younger than this is a transfer in progress; older ones were
-/// abandoned and no longer count against the staged limit.
-const UPLOADING_MINUTES: i64 = 15;
 
 pub struct AttachmentService {
     conversations: Arc<ConversationService>,
     store: Arc<dyn AttachmentStore>,
     files: Arc<dyn AttachmentFiles>,
-    /// Counting staged files and reserving a new one must not interleave.
-    reservations: Gates,
+    capture_host: Arc<dyn CaptureHost>,
+    captures: Gates,
     uploads: Gates,
     reads: Gates,
 }
@@ -62,12 +61,14 @@ impl AttachmentService {
         conversations: Arc<ConversationService>,
         store: Arc<dyn AttachmentStore>,
         files: Arc<dyn AttachmentFiles>,
+        capture_host: Arc<dyn CaptureHost>,
     ) -> Self {
         Self {
             conversations,
             store,
             files,
-            reservations: Gates::new(1),
+            capture_host,
+            captures: Gates::new(1),
             uploads: Gates::new(UPLOADS_PER_USER),
             reads: Gates::new(READS_PER_USER),
         }
@@ -117,31 +118,14 @@ impl AttachmentService {
         self.purge_expired(actor, &env).await;
         let id = Uuid::new_v4();
         let location = AttachmentLocation::new(conversation.project_id, conversation_id, id, name)?;
-        {
-            let _slot = self.reservations.acquire(actor.user_id).await?;
-            let recent = Utc::now() - Duration::minutes(UPLOADING_MINUTES);
-            let staged = self
-                .store
-                .list(actor, env.id, env.generation, conversation_id)
-                .await?
-                .iter()
-                .filter(|a| {
-                    a.state == AttachmentState::Staged
-                        || (a.state == AttachmentState::Uploading && a.created_at > recent)
-                })
-                .count();
-            if staged >= MAX_ATTACHMENTS_PER_MESSAGE {
-                return Err(AttachmentError::TooMany);
-            }
-            let new = NewAttachment {
-                id,
-                conversation_id,
-                name: name.to_owned(),
-            };
-            self.store
-                .reserve(actor, env.id, env.generation, new)
-                .await?;
-        }
+        let new = NewAttachment {
+            id,
+            conversation_id,
+            name: name.to_owned(),
+        };
+        self.store
+            .reserve(actor, env.id, env.generation, new)
+            .await?;
         let staged = match self.files.put(&env, &location, source).await {
             Ok(file) => {
                 self.store
@@ -193,8 +177,8 @@ impl AttachmentService {
     }
 
     /// Remove a staged upload. The row goes first so a concurrent send cannot attach
-    /// a file that is being deleted; files that cannot be deleted now are purged with
-    /// the conversation.
+    /// a file that is being deleted. Byte cleanup is best effort; individual
+    /// conversation deletion is not implemented.
     pub async fn remove_staged(
         &self,
         actor: EnvironmentActor,

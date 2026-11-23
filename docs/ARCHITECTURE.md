@@ -551,3 +551,39 @@ transaction. The application uses attachment store and file ports from
 receive their conversation's files read-only and an attempt-specific writable
 output directory. The API checks ownership on reads and serves each media kind
 with its own response policy.
+
+Each composer queues at most four active transfers and skips queued files removed
+from the composer. The [composer tray](../apps/web/src/features/conversations/attachment-tray.ts)
+owns bounded, abortable backoff for explicit HTTP 503 responses while transfers settle.
+Long-running uploads elsewhere or prolonged service unavailability can exhaust this
+budget and leave a visible failed upload. Authorization, validation, rate-limit and
+unknown network failures are not replayed. The service limits concurrent transfers,
+not cumulative staged files:
+abandoned drafts cannot consume the next message's ten-file allowance.
+Project deletion removes its attachment rows and directories. Individual conversation
+deletion is not implemented. Expired unsent uploads are cleaned up on a later upload by
+the same member, on a best-effort basis rather than by a periodic job.
+Writers hold a nonblocking exclusive lock on the attachment directory. Capture retries
+may remove an owned regular `.partial` left by a dead writer only while holding that
+lock; active writers and symlinked partials are never replaced.
+
+The application checks canonical message attachment rows before replaying a capture.
+Recorded attached and unavailable states are reused without copying or re-hashing files.
+New captures run as owned `CaptureHost` jobs and keep a per-message lease until their
+metadata is committed or cleanup settles. A deadline or caller cancellation drops its
+acceptance receipt, not the running copy. Once that copy has definitely finished, the
+job rechecks metadata and deletes only uncommitted bytes. The database implementation's
+metadata write and lookup both acquire the member row lock through `authorize_actor`;
+the lookup reads attachment rows only after the previous transaction settles. A lost
+commit reply therefore cannot delete an attached file; alternative stores must preserve
+this serialization contract. Failed cleanup or uncertain process completion is reported as
+`attachment.capture_cleanup.failed` with identifiers and a classified error; uncertain
+work is not raced with deletion. Lease acquisition uses the caller deadline. Message
+gates have a bounded registry. Gate saturation or a lease deadline saves the completed
+reply with unavailable references without starting another copy; canonical rows from a
+concurrent attempt remain unchanged. The Docker adapter separately bounds process start,
+controller exchange and exit confirmation; a caller deadline does not remove these
+adapter limits. API shutdown, including deployment, cancels capture jobs without draining
+them and can leave files needing retry or operator cleanup without a final log. There is
+no periodic orphan collector. Project deletion removes the entire project attachment
+directory, including files without metadata; free chats have no project cleanup.

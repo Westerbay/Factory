@@ -1,10 +1,13 @@
 #!/usr/bin/python3
 """Local synthetic filesystem regressions for the attachment controller; no network."""
 import hashlib
+import fcntl
 import importlib.util
 import io
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
@@ -125,8 +128,9 @@ class AttachmentControllerTests(unittest.TestCase):
         self.assertEqual(sorted(path.name for path in directory.iterdir()), ['note.txt'])
 
     def test_stale_partial_file_is_not_adopted(self):
+        self.assertTrue(self.put()['ok'])
         directory = self.store() / self.attachment
-        directory.mkdir(parents=True, mode=0o700)
+        (directory / 'note.txt').unlink()
         (directory / '.partial').write_bytes(b'stale')
         self.assertEqual(self.error({'op': 'put', **self.location()}, frames(b'new')), 'conflict')
         self.assertEqual((directory / '.partial').read_bytes(), b'stale')
@@ -237,6 +241,87 @@ class AttachmentControllerTests(unittest.TestCase):
         self.assertEqual(response['result']['sha256'], hashlib.sha256(data).hexdigest())
         self.assertEqual((self.store() / self.attachment / 'chart.png').read_bytes(), data)
         self.assertEqual(source.read_bytes(), data)
+
+    def test_replaying_capture_keeps_the_first_bytes_and_metadata(self):
+        source = self.work / 'note.txt'
+        source.write_bytes(b'first capture')
+        first = self.capture(source)
+        self.assertTrue(first['ok'], first)
+        source.write_bytes(b'changed since the original message')
+        self.assertEqual(self.capture(source), first)
+        self.assertEqual((self.store() / self.attachment / 'note.txt').read_bytes(), b'first capture')
+        # Existing output never bypasses the source path's allowed-root check.
+        outside = self.home / 'outside.txt'
+        outside.write_bytes(b'not allowed')
+        self.assertEqual(self.capture(outside)['error'], 'invalid')
+
+    def test_replaying_capture_does_not_require_the_original_source_to_remain(self):
+        source = self.work / 'note.txt'
+        source.write_bytes(b'first capture')
+        first = self.capture(source)
+        self.assertTrue(first['ok'], first)
+        source.unlink()
+        self.assertEqual(self.capture(source), first)
+        self.assertEqual((self.store() / self.attachment / 'note.txt').read_bytes(), b'first capture')
+
+    def test_replaying_capture_never_follows_a_replaced_destination_symlink(self):
+        source = self.work / 'note.txt'
+        source.write_bytes(b'first capture')
+        self.assertTrue(self.capture(source)['ok'])
+        target = self.store() / self.attachment / 'note.txt'
+        target.unlink()
+        other = self.home / 'private-fixture.txt'
+        other.write_bytes(b'keep private')
+        target.symlink_to(other)
+        self.assertEqual(self.capture(source)['error'], 'conflict')
+        self.assertTrue(target.is_symlink())
+        self.assertEqual(other.read_bytes(), b'keep private')
+
+    def test_capture_recovers_partial_left_by_a_killed_writer(self):
+        source = self.work / 'note.txt'
+        source.write_bytes(b'complete capture')
+        self.assertTrue(self.put()['ok'])
+        directory = self.store() / self.attachment
+        (directory / 'note.txt').unlink()
+        # A separate writer dies without running Output.abort or releasing its lock.
+        script = ('import fcntl,os,signal,sys; '
+                  'fd=os.open(sys.argv[1],os.O_RDONLY|os.O_DIRECTORY); '
+                  'fcntl.flock(fd,fcntl.LOCK_EX); '
+                  'open(sys.argv[1]+"/.partial","wb").write(b"unfinished"); '
+                  'os.kill(os.getpid(),signal.SIGKILL)')
+        stopped = subprocess.run([sys.executable, '-c', script, str(directory)], check=False)
+        self.assertLess(stopped.returncode, 0)
+        self.assertEqual((directory / '.partial').read_bytes(), b'unfinished')
+        result = self.capture(source)
+        self.assertTrue(result['ok'], result)
+        self.assertEqual((directory / 'note.txt').read_bytes(), b'complete capture')
+        self.assertFalse((directory / '.partial').exists())
+
+    def test_capture_does_not_remove_a_live_writers_partial(self):
+        source = self.work / 'note.txt'
+        source.write_bytes(b'complete capture')
+        self.assertTrue(self.put()['ok'])
+        directory = self.store() / self.attachment
+        (directory / 'note.txt').unlink()
+        (directory / '.partial').write_bytes(b'in progress')
+        fd = os.open(directory, controller.DIRECTORY_FLAGS)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertEqual(self.capture(source)['error'], 'conflict')
+            self.assertEqual((directory / '.partial').read_bytes(), b'in progress')
+        finally:
+            os.close(fd)
+
+    def test_capture_does_not_remove_a_symlinked_partial(self):
+        source = self.work / 'note.txt'
+        source.write_bytes(b'complete capture')
+        self.assertTrue(self.put()['ok'])
+        directory = self.store() / self.attachment
+        (directory / 'note.txt').unlink()
+        (directory / '.partial').symlink_to(source)
+        self.assertEqual(self.capture(source)['error'], 'conflict')
+        self.assertTrue((directory / '.partial').is_symlink())
+        self.assertEqual(source.read_bytes(), b'complete capture')
 
     def test_capture_requires_a_path_strictly_inside_a_root(self):
         (self.work / 'a.txt').write_text('a')

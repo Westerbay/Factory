@@ -63,6 +63,24 @@ The TypeScript execution packages remain tested porting references. Fresh instal
 use the current database schema. An explicit local upgrade from schema version 4 to
 version 5 preserves existing records and adds feature state.
 
+Conversations, project conversations and feature discussions support file attachments
+and agent-produced media stored in the member's container. Files are available only
+while the environment runs. Interactive HTML and browser preview are not supported;
+only the rendering foundation exists.
+Individual conversation deletion is not implemented yet; project deletion removes its
+conversations' files. Unsent uploads expire after 24 hours, but cleanup is best-effort
+on a later upload by the same member, so expired files can remain indefinitely without
+another upload. There is no periodic attachment purge. A capture interrupted by process
+death is recovered on its next attempt under an exclusive directory lock; abandoning
+the capture without retrying can leave its temporary file. Free chats have no project
+cleanup or individual conversation deletion, so those leftovers can remain indefinitely.
+While the API runs, owned capture jobs clean up late successful copies and copies whose
+message or attachment metadata could not be persisted, after checking that no attached
+row owns the file. API shutdown, including a routine deployment, cancels these jobs;
+they are not drained by environment supervision. Shutdown, uncertain Docker completion
+or failed cleanup can leave files behind; cleanup failures observed while the API runs
+are logged, but shutdown cannot guarantee a log. No periodic orphan collector exists.
+
 Local PostgreSQL ownership checks support Linux Docker Engine and Windows Docker Desktop
 using exact checkout paths and the local socket or named pipe. Windows database support
 alone does not establish live Codex execution. The workspace image pins native Codex

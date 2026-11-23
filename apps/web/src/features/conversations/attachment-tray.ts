@@ -4,6 +4,32 @@ import {
   type Attachment,
 } from "./attachments"
 
+// Bound each composer's long transfers; the server also enforces a per-user gate.
+const concurrentUploads = 4
+// A server still finishing a cancelled transfer answers 503; retry briefly.
+const busyRetries = 8
+const busyBackoffMs = 500
+
+function isBusy(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { status?: unknown }).status === 503
+  )
+}
+
+function pause(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(done, ms)
+    function done() {
+      clearTimeout(timer)
+      signal.removeEventListener("abort", done)
+      resolve()
+    }
+    signal.addEventListener("abort", done)
+  })
+}
+
 export type TrayItem = {
   key: string
   name: string
@@ -39,6 +65,12 @@ export function createAttachmentTray(deps: TrayDependencies) {
   let rejections: TrayRejection[] = []
   let snapshot: TraySnapshot = { items, rejections }
   const aborts = new Map<string, AbortController>()
+  const queued: {
+    key: string
+    file: File
+    controller: AbortController
+  }[] = []
+  let activeUploads = 0
   const listeners = new Set<() => void>()
   let sequence = 0
 
@@ -56,11 +88,18 @@ export function createAttachmentTray(deps: TrayDependencies) {
   async function send(key: string, file: File, controller: AbortController) {
     try {
       const conversation = await deps.conversation()
-      const attachment = await deps.upload(
-        conversation,
-        file,
-        controller.signal
-      )
+      if (controller.signal.aborted) return
+      let attachment: Attachment | undefined
+      for (let attempt = 0; !attachment; attempt++) {
+        try {
+          attachment = await deps.upload(conversation, file, controller.signal)
+        } catch (error) {
+          if (controller.signal.aborted) return
+          if (!isBusy(error) || attempt >= busyRetries) throw error
+          await pause(busyBackoffMs * (attempt + 1), controller.signal)
+          if (controller.signal.aborted) return
+        }
+      }
       if (controller.signal.aborted) {
         // Removed while in flight: do not leave the staged file behind.
         await deps.remove(conversation, attachment.id).catch(() => undefined)
@@ -71,6 +110,21 @@ export function createAttachmentTray(deps: TrayDependencies) {
       if (!controller.signal.aborted) update(key, { status: "failed" })
     } finally {
       aborts.delete(key)
+    }
+  }
+
+  function drain() {
+    while (activeUploads < concurrentUploads && queued.length > 0) {
+      const next = queued.shift()!
+      if (next.controller.signal.aborted) {
+        aborts.delete(next.key)
+        continue
+      }
+      activeUploads++
+      void send(next.key, next.file, next.controller).finally(() => {
+        activeUploads--
+        drain()
+      })
     }
   }
 
@@ -116,8 +170,9 @@ export function createAttachmentTray(deps: TrayDependencies) {
       for (const { key, file } of accepted) {
         const controller = new AbortController()
         aborts.set(key, controller)
-        void send(key, file, controller)
+        queued.push({ key, file, controller })
       }
+      drain()
     },
     /** Removes an item; a staged upload is also deleted from the server. */
     async remove(key: string) {
@@ -139,6 +194,7 @@ export function createAttachmentTray(deps: TrayDependencies) {
     clear() {
       for (const controller of aborts.values()) controller.abort()
       aborts.clear()
+      queued.length = 0
       items = []
       rejections = []
       publish()

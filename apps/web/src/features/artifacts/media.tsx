@@ -74,13 +74,13 @@ type TextState =
 
 function useBoundedText(source: MediaSource): TextState | "too-large" {
   const { loadText, size, contentUrl } = source
-  const tooLarge = size > maxMediaTextBytes || !loadText
+  const tooLarge = size > maxMediaTextBytes || (!loadText && size !== 0)
   const [state, setState] = useState<{ key: string; value: TextState } | null>(
     null
   )
 
   useEffect(() => {
-    if (tooLarge || !loadText) return
+    if (tooLarge || !loadText || size === 0) return
     const controller = new AbortController()
     loadText(maxMediaTextBytes, controller.signal).then(
       (text) => {
@@ -93,8 +93,9 @@ function useBoundedText(source: MediaSource): TextState | "too-large" {
       }
     )
     return () => controller.abort()
-  }, [loadText, tooLarge, contentUrl])
+  }, [loadText, tooLarge, contentUrl, size])
 
+  if (size === 0) return { status: "ready", text: "" }
   if (tooLarge) return "too-large"
   return state?.key === contentUrl ? state.value : { status: "loading" }
 }
@@ -131,7 +132,12 @@ function TextMedia({
       </>
     )
   return (
-    <pre className="media-text" tabIndex={0} aria-label={source.name}>
+    <pre
+      className="media-text"
+      role="region"
+      tabIndex={0}
+      aria-label={source.name}
+    >
       <code>{state.text}</code>
     </pre>
   )

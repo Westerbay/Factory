@@ -5,7 +5,7 @@ use axum::{
     http::{HeaderMap, Method, header},
     response::Response,
 };
-use factory_application::attachments::AttachmentService;
+use factory_application::attachments::{AttachmentService, CaptureHost, CaptureTask};
 use factory_core::attachments::{
     AgentAttachment, Attachment, AttachmentError, AttachmentFiles, AttachmentLocation,
     AttachmentSource, AttachmentState, AttachmentStore, ByteSource, MAX_ATTACHMENT_BYTES,
@@ -14,6 +14,13 @@ use factory_core::attachments::{
 use std::collections::BTreeMap;
 
 type Stored = Arc<Mutex<BTreeMap<Uuid, Vec<u8>>>>;
+
+struct NoCaptures;
+impl CaptureHost for NoCaptures {
+    fn spawn(&self, _: CaptureTask) {
+        panic!("Attachment HTTP routes must not launch agent captures");
+    }
+}
 
 /// Attachment rows held in memory. Ownership follows the fixture's conversation.
 struct Rows {
@@ -273,6 +280,7 @@ impl AttachmentFixture {
             base.conversation_service.clone(),
             rows.clone(),
             files.clone(),
+            Arc::new(NoCaptures),
         ));
         let app = factory_api::attachments::router(base.auth.clone(), Some(service));
         Self {
@@ -497,7 +505,7 @@ async fn attachments_are_private_to_the_owner_and_the_conversation_in_the_path()
 }
 
 #[tokio::test]
-async fn upload_enforces_the_size_and_count_limits() {
+async fn upload_enforces_size_without_a_cumulative_staged_cap() {
     let f = AttachmentFixture::new().await;
     let uri = format!("{}?name=big.bin", f.url());
     // A declared length over the limit is refused before the body is read.
@@ -537,12 +545,17 @@ async fn upload_enforces_the_size_and_count_limits() {
     f.files.stored.lock().unwrap().clear();
     f.rows.rows.lock().unwrap().clear();
 
+    let mut first = None;
     for index in 0..10 {
-        f.upload(&format!("file-{index}.bin"), pattern(8)).await;
+        let id = f.upload(&format!("file-{index}.bin"), pattern(8)).await;
+        first.get_or_insert(id);
     }
     let eleventh = f.upload_as(0, "overflow.bin", pattern(8)).await;
-    assert_eq!(eleventh.status(), StatusCode::CONFLICT);
-    assert_eq!(body_json(eleventh).await["code"], "too-many-attachments");
+    assert_eq!(eleventh.status(), StatusCode::CREATED);
+    assert_eq!(
+        bytes(f.read(first.unwrap(), "", None).await).await.as_ref(),
+        pattern(8)
+    );
 }
 
 #[tokio::test]

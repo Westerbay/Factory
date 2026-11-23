@@ -7,6 +7,7 @@ descriptors. The caller owns authorization, environment fencing and classificati
 """
 import ctypes
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -177,7 +178,7 @@ class Output:
                 pass
 
 
-def store(root, request, chunks):
+def store(root, request, chunks, recover_capture=False):
     project = optional_project(request['project'])
     conversation = parse_uuid(request['conversation'])
     attachment = parse_uuid(request['attachment'])
@@ -187,6 +188,18 @@ def store(root, request, chunks):
     try:
         parent = directory(conversation_fd, attachment, True)
         opened.append(parent)
+        # The directory lock survives neither process death nor descriptor close.
+        # A replay may discard our reserved partial only after excluding a live writer.
+        fcntl.flock(parent, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if recover_capture:
+            try:
+                partial = os.stat(PARTIAL, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                if not stat.S_ISREG(partial.st_mode) or partial.st_uid != os.geteuid():
+                    raise Problem('conflict')
+                os.unlink(PARTIAL, dir_fd=parent)
         output = Output(parent, name)
         try:
             for chunk in chunks():
@@ -232,12 +245,17 @@ def components(path):
     return parts
 
 
-def open_source(reference, roots):
+def source_parts(reference, roots):
     parts = components(reference)
     if (not isinstance(roots, list) or not 1 <= len(roots) <= MAX_ROOTS
             or not any(len(parts) > len(root_parts) and parts[:len(root_parts)] == root_parts
                        for root_parts in map(components, roots))):
         raise Problem('invalid')
+    return parts
+
+
+def open_source(reference, roots):
+    parts = source_parts(reference, roots)
     parent = os.open('/', DIRECTORY_FLAGS)
     try:
         try:
@@ -263,8 +281,46 @@ def open_source(reference, roots):
     return fd
 
 
+def previous_capture(root, request):
+    """A replay keeps the first completed capture, even if its source disappeared."""
+    names = conversation_names(optional_project(request['project']), parse_uuid(request['conversation']))
+    name = file_name(request['name'])
+    try:
+        parent, opened = open_chain(root, names + [parse_uuid(request['attachment'])])
+    except FileNotFoundError:
+        return None
+    opened.append(parent)
+    try:
+        try:
+            fd = regular(parent, name)
+        except FileNotFoundError:
+            return None
+    finally:
+        close_all(opened)
+    try:
+        size, digest, head = 0, hashlib.sha256(), bytearray()
+        while True:
+            data = os.read(fd, CHUNK)
+            if not data:
+                break
+            size += len(data)
+            if size > MAX_BYTES:
+                raise Problem('too_large')
+            digest.update(data)
+            if len(head) < MAX_HEAD:
+                head += data[:MAX_HEAD - len(head)]
+        return {'size': size, 'sha256': digest.hexdigest(), 'head': bytes(head).hex()}
+    finally:
+        os.close(fd)
+
+
 def capture(root, request):
     check_fields(request, {'project', 'conversation', 'attachment', 'name', 'reference', 'roots'})
+    # Reuse is not permission to accept a reference outside the allowed roots.
+    source_parts(request['reference'], request['roots'])
+    existing = previous_capture(root, request)
+    if existing is not None:
+        return existing
     source = open_source(request['reference'], request['roots'])
     try:
         def chunks():
@@ -274,7 +330,7 @@ def capture(root, request):
                 if not data:
                     return
                 yield data
-        return store(root, request, chunks)
+        return store(root, request, chunks, recover_capture=True)
     finally:
         os.close(source)
 

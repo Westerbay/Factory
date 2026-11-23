@@ -88,6 +88,10 @@ pub trait AttachmentStore: Send + Sync {
         before: DateTime<Utc>,
     ) -> Result<Vec<Attachment>, AttachmentError>;
 
+    /// Read canonical metadata after any already-started metadata write for this
+    /// actor settles, including an uncertain commit. Cleanup relies on `NotFound`
+    /// proving that such a write cannot later attach the file. Fail unavailable
+    /// rather than return a stale absence when that serialization cannot be confirmed.
     async fn get(&self, actor: EnvironmentActor, id: Uuid) -> Result<Attachment, AttachmentError>;
 
     /// Attachments of an owned conversation, oldest first.
@@ -134,8 +138,11 @@ pub trait AttachmentFiles: Send + Sync {
     ) -> Result<StoredFile, AttachmentError>;
 
     /// Copy `reference` (already resolved by `resolve_reference`) into the store after
-    /// resolving symlinks and rechecking it against `roots`. `NotFound` when absent,
-    /// `Invalid` when outside the roots or not a regular file.
+    /// rejecting symlinks and rechecking it against `roots`. `NotFound` when absent,
+    /// `Invalid` when outside the roots or not a regular file. Replaying a completed
+    /// location keeps its original bytes and metadata, even if the source is gone.
+    /// Implementations own partial-write cleanup; a failed capture must not cause
+    /// the caller to delete a file captured by an earlier invocation.
     async fn capture(
         &self,
         environment: &Environment,
