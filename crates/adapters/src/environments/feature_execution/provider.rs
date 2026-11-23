@@ -37,7 +37,8 @@ impl ScopedProvider {
     }
 
     pub(super) fn from_request(request: &FeatureRun) -> Result<Self, ExecutionError> {
-        if request.input.is_empty()
+        if (request.merge_resolution && request.workspace.access != WorkspaceAccess::Write)
+            || request.input.is_empty()
             || request.input.len() > 256 * 1024
             || request.input.contains('\0')
             || request.model.is_empty()
@@ -74,7 +75,12 @@ impl ScopedProvider {
             }
             .into(),
         );
-        args.push(include_str!("activation.py").into());
+        let activation = if request.merge_resolution {
+            include_str!("merge_activation.py")
+        } else {
+            include_str!("activation.py")
+        };
+        args.push(activation.into());
         let native = match self {
             Self::Codex => vec![
                 "--disable",
@@ -201,4 +207,46 @@ fn launcher_args(action: &str, value: &str) -> Vec<String> {
         .into_iter()
         .map(str::to_owned)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use factory_core::features::TaskWorkspace;
+
+    #[test]
+    fn the_conflict_worker_uses_image_tools_only_with_a_writable_workspace() {
+        let mut request = FeatureRun {
+            workspace: TaskWorkspace {
+                feature_id: Uuid::new_v4(),
+                attempt_id: Uuid::new_v4(),
+                base_oid: "a".repeat(40),
+                access: WorkspaceAccess::Write,
+            },
+            provider: "codex".into(),
+            model: "test-model".into(),
+            effort: None,
+            input: "Resolve the approved conflict.".into(),
+            merge_resolution: true,
+            conversation_id: None,
+        };
+        let provider = ScopedProvider::from_request(&request).unwrap();
+        let resolution = provider.command(&request);
+        request.merge_resolution = false;
+        let ordinary = provider.command(&request);
+        let activation = ordinary
+            .iter()
+            .position(|item| item == include_str!("activation.py"))
+            .unwrap();
+        assert_eq!(resolution[activation], include_str!("merge_activation.py"));
+        assert_eq!(ordinary[..activation], resolution[..activation]);
+        assert_eq!(ordinary[activation + 1..], resolution[activation + 1..]);
+
+        request.workspace.access = WorkspaceAccess::ReadOnly;
+        request.merge_resolution = true;
+        assert!(matches!(
+            ScopedProvider::from_request(&request),
+            Err(ExecutionError::Invalid)
+        ));
+    }
 }

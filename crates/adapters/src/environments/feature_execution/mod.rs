@@ -239,8 +239,10 @@ impl FeatureExecutionRuntime for DockerFeatureExecutionRuntime {
             ScopedProvider::Codex => "/workspace",
             ScopedProvider::Claude => CHECKOUT,
         };
-        self.prepare_repository(env, project, &request.workspace)
-            .await?;
+        if !request.merge_resolution {
+            self.prepare_repository(env, project, &request.workspace)
+                .await?;
+        }
         let body = identity.body(env, cwd, provider.command(request))?;
         let (process, exit) = self
             .start(

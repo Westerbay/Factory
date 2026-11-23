@@ -1,10 +1,13 @@
+mod merge_resolution;
+
 use super::{FeatureCoordinator, workspace_error};
 use crate::identity::RepositoryAccessService;
 use factory_core::{
     environments::{Environment, EnvironmentActor},
     features::{
         DeliveryStatus, FeatureCommand, FeatureDeliveryRuntime, FeatureError, FeatureRemoteRefs,
-        FeatureStage, FeatureState, GitSnapshot, WorkspaceDiff, WorkspaceError,
+        FeatureStage, FeatureState, GitSnapshot, MERGE_CONFLICT_REASON, WorkspaceDiff,
+        WorkspaceError,
     },
     identity::{
         RepositoryAccessError, RepositoryActor, RepositoryDraft, RepositoryDraftDiffTarget,
@@ -161,6 +164,9 @@ impl FeatureDeliveryService {
         let lock = self.lock_for(feature_id)?;
         let _serial = lock.lock().await;
         let (env, project, state) = self.features.context(actor, feature_id).await?;
+        if state.merge_resolution_active() {
+            return Err(FeatureError::Conflict);
+        }
         let Some(review) = state.review().filter(|review| {
             state.feature.stage == FeatureStage::Review
                 && review.snapshot.id == snapshot_id
@@ -182,15 +188,28 @@ impl FeatureDeliveryService {
             .snapshot(&env, &project, feature_id)
             .await
             .map_err(workspace_error)?;
-        if current.git != *approved
-            || self
-                .refresh_stale_base(actor, &env, &project, feature_id, approved)
-                .await
-                == BaseRefresh::Refreshed
+        if current.git != *approved {
+            return Ok(());
+        }
+        match self
+            .refresh_stale_base(actor, &env, &project, feature_id, approved)
+            .await
         {
-            Ok(())
-        } else {
-            Err(FeatureError::StaleSnapshot)
+            BaseRefresh::Refreshed => Ok(()),
+            BaseRefresh::MergeConflict => {
+                self.features
+                    .store
+                    .apply(
+                        actor,
+                        &env,
+                        feature_id,
+                        Uuid::new_v4(),
+                        FeatureCommand::MarkDeliveryMergeConflict { snapshot_id },
+                    )
+                    .await?;
+                Err(FeatureError::StaleSnapshot)
+            }
+            BaseRefresh::Unavailable => Err(FeatureError::StaleSnapshot),
         }
     }
 
@@ -301,9 +320,7 @@ impl FeatureDeliveryService {
                     BaseRefresh::Refreshed => {
                         "The reviewed diff changed. Review the current result before publishing."
                     }
-                    BaseRefresh::MergeConflict => {
-                        "The target branch has changes that conflict with this feature. Resolve the conflicts against the current target branch before opening a draft."
-                    }
+                    BaseRefresh::MergeConflict => MERGE_CONFLICT_REASON,
                     BaseRefresh::Unavailable => {
                         "The reviewed diff is stale. Factory could not prepare the current comparison."
                     }
@@ -311,6 +328,7 @@ impl FeatureDeliveryService {
                 (
                     DeliveryStatus::Failed {
                         reason: reason.into(),
+                        merge_conflict: refresh == BaseRefresh::MergeConflict,
                     },
                     Some(refresh == BaseRefresh::Refreshed),
                 )
@@ -318,6 +336,7 @@ impl FeatureDeliveryService {
             Publication::Failed(reason) => (
                 DeliveryStatus::Failed {
                     reason: reason.into(),
+                    merge_conflict: false,
                 },
                 None,
             ),

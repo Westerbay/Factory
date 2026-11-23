@@ -285,6 +285,17 @@ in [`apps/web/src/lib/i18n`](../apps/web/src/lib/i18n/) selects the browser lang
 when available and persists explicit choices locally. Use generated messages for interface
 copy; provider output remains user content.
 
+## Feature merge resolution
+
+[Feature delivery](../crates/application/src/features/delivery.rs) owns draft
+eligibility, repository rechecks and resolution orchestration. The
+[project controller](../infra/environments/project-controller.py) owns the
+candidate checkout, scope validation and atomic local ref updates. Use the
+typed [delivery port](../crates/core/src/features/ports.rs) to stage and adopt
+a candidate and reclaim its scratch space once the exact worker has stopped.
+The normal feature worker and integrated review own execution
+and verification.
+
 ## Conversation attachments
 
 [Core attachment policy](../crates/core/src/attachments/mod.rs) owns media

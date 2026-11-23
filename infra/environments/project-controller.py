@@ -23,6 +23,7 @@ import sys
 import tempfile
 import time
 import uuid
+from collections import Counter
 
 HOME = '/home/factory'
 MAX_REQUEST = 8192
@@ -61,11 +62,11 @@ def regular(parent, name, mode=None):
     return fd
 
 
-def read_json_file(parent, name, private=False):
+def read_json_file(parent, name, private=False, limit=MAX_REQUEST):
     fd = regular(parent, name, 0o077 if private else None)
     try:
-        data = os.read(fd, MAX_REQUEST + 1)
-        if len(data) > MAX_REQUEST:
+        data = os.read(fd, limit + 1)
+        if len(data) > limit:
             raise Problem('conflict')
         return json.loads(data)
     finally:
@@ -663,6 +664,20 @@ def delete(factory, documents, project_id, operation, name):
         return delete_project_workspace(factory, documents, project_id, operation, name)
 
 
+def remove_verified_directory(parent, name, target, info):
+    # Use the verified directory descriptor while removing its contents.
+    for entry in os.listdir(target):
+        child = os.stat(entry, dir_fd=target, follow_symlinks=False)
+        if stat.S_ISDIR(child.st_mode):
+            shutil.rmtree(entry, dir_fd=target)
+        else:
+            os.unlink(entry, dir_fd=target)
+    current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+        raise Problem('conflict')
+    os.rmdir(name, dir_fd=parent)
+
+
 def delete_project_workspace(factory, documents, project_id, operation, name):
     # Isolate the exact marked directory before recursive deletion. A receipt lives
     # independently of the DB so a retry cannot delete a newly created namesake.
@@ -799,18 +814,7 @@ def delete_project_workspace(factory, documents, project_id, operation, name):
                     info = os.fstat(target)
                     if not isinstance(receipt, dict) or receipt.get('identity') != [info.st_dev, info.st_ino]:
                         raise Problem('conflict')
-                    # Keep an open descriptor for the verified inode while removing its
-                    # contents; never follow a swapped directory or symlink.
-                    for entry in os.listdir(target):
-                        child = os.stat(entry, dir_fd=target, follow_symlinks=False)
-                        if stat.S_ISDIR(child.st_mode):
-                            shutil.rmtree(entry, dir_fd=target)
-                        else:
-                            os.unlink(entry, dir_fd=target)
-                    current = os.stat(item, dir_fd=record, follow_symlinks=False)
-                    if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
-                        raise Problem('conflict')
-                    os.rmdir(item, dir_fd=record)
+                    remove_verified_directory(record, item, target, info)
                 finally:
                     os.close(target)
             os.fsync(record)
@@ -832,6 +836,9 @@ FEATURE_FIELDS = {
     'feature_remote': set(),
     'feature_stage_refresh': {'candidate', 'base_oid', 'head_oid', 'patch_digest'},
     'feature_confirm_refresh': {'candidate', 'base_oid', 'head_oid', 'patch_digest', 'proposed_snapshot'},
+    'feature_stage_resolution': {'attempt', 'base_oid', 'head_oid', 'patch_digest', 'scope'},
+    'feature_adopt_resolution': {'attempt', 'base_oid', 'head_oid', 'patch_digest', 'target_oid', 'paths'},
+    'feature_discard_resolution': {'attempt', 'base_oid', 'head_oid', 'patch_digest'},
     'feature_push': {'base_oid', 'head_oid', 'patch_digest'},
 }
 FEATURE_ID_FIELDS = {'op', 'project', 'operation', 'directory', 'repository', 'repository_id', 'feature'}
@@ -841,6 +848,13 @@ FEATURE_RESPONSE_LIMIT = 1024 * 1024
 # serialized response before integration moves the branch.
 FEATURE_PATCH_LIMIT = FEATURE_RESPONSE_LIMIT
 FEATURE_PATH_LIMIT = 32 * 1024
+RESOLUTION_SEED_REF = 'refs/factory/resolution-seed'
+RESOLUTION_RESULT_REF = 'refs/factory/resolution-result'
+RESOLUTION_SCOPE_LIMIT = 64 * 128
+RESOLUTION_SCRATCH_LIMIT = 4
+REGULAR_BLOB_MODES = {'100644', '100755'}
+CONFLICT_MARKER = re.compile(rb'^(?:<{7,}(?:[ \r]|$)|>{7,}(?:[ \r]|$)|\|{7,}(?:[ \r]|$))', re.MULTILINE)
+CONFLICT_SEPARATOR = re.compile(rb'^={7,}\r?\n?$')
 PRE_PUSH = b"""#!/bin/sh
 IFS=' ' read -r local_ref local_oid remote_ref remote_oid || exit 1
 [ "$local_oid" = "$FACTORY_PUSH_OID" ] && [ "$remote_ref" = "$FACTORY_PUSH_REF" ] || exit 1
@@ -1177,13 +1191,13 @@ def record_attempt(stack, record, request, prepare):
     return slot, attempt, base
 
 
-def prepare_feature_task(repo, slot, base):
+def prepare_feature_task(repo, slot, base, refs=('refs/heads/', 'refs/factory/attempts/')):
     try:
         ready = read_json_file(slot, 'ready', private=True)
     except FileNotFoundError:
         if (get_ref(repo, base) != base
                 or not git_text(['for-each-ref', '--count=1', '--contains=' + base,
-                                 '--format=%(refname)', 'refs/heads/', 'refs/factory/attempts/'],
+                                 '--format=%(refname)', *refs],
                                 repository_fd=repo)):
             raise Problem('conflict')
         if not shutil.rmtree.avoids_symlink_attacks:
@@ -1245,7 +1259,7 @@ def changed_feature_paths(repo, base, head, scope=None):
     return paths
 
 
-def record_checkpoint(repo, slot, attempt, base, scope):
+def checkpoint_tree(repo, slot, base):
     checkout = checked_checkout(slot, read_json_file(slot, 'ready', private=True))
     try:
         # A nested repository can change git-add semantics. The controller reads
@@ -1267,6 +1281,11 @@ def record_checkpoint(repo, slot, attempt, base, scope):
             tree = oid(git_text([*opts, 'write-tree'], **kwargs))
     finally:
         os.close(checkout)
+    return tree
+
+
+def record_checkpoint(repo, slot, attempt, base, scope):
+    tree = checkpoint_tree(repo, slot, base)
     paths = changed_feature_paths(repo, base, tree, scope)
     checkpoint_ref = 'refs/factory/attempts/' + attempt
     existing = get_ref(repo, checkpoint_ref)
@@ -1436,6 +1455,339 @@ def confirm_feature_refresh(record, repo, remote, branch, repository_id, candida
         os.close(candidate)
 
 
+def resolution_scope(paths):
+    if not isinstance(paths, list) or not 1 <= len(paths) <= RESOLUTION_SCOPE_LIMIT:
+        raise Problem('invalid')
+    return sorted({feature_path(path, directory_scope=True) for path in paths})
+
+
+def resolution_receipt(slot, name):
+    try:
+        return read_json_file(slot, name, private=True, limit=FEATURE_PATH_LIMIT)
+    except FileNotFoundError:
+        return None
+
+
+def write_resolution_receipt(slot, name, value):
+    data = json.dumps(value).encode()
+    if len(data) > FEATURE_PATH_LIMIT:
+        raise Problem('diff_unrenderable')
+    temporary = '.pending-' + str(uuid.uuid4())
+    create_file(slot, temporary, data)
+    try:
+        rename_atomic(slot, temporary, slot, name)
+    except OSError:
+        os.unlink(temporary, dir_fd=slot)
+        raise
+    os.fsync(slot)
+
+
+def check_resolution_capacity(attempts, slot):
+    try:
+        os.stat('resolution.git', dir_fd=slot, follow_symlinks=False)
+        return  # Replaying an existing slot does not consume another one.
+    except FileNotFoundError:
+        pass
+
+    retained = 0
+    with os.scandir(attempts) as entries:
+        for entry in entries:
+            try:
+                attempt = parse_uuid(entry.name)
+            except Problem:
+                continue
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+            other = directory(attempts, attempt, private=True)
+            try:
+                os.stat('resolution.git', dir_fd=other, follow_symlinks=False)
+                retained += 1
+                if retained >= RESOLUTION_SCRATCH_LIMIT:
+                    raise Problem('unavailable')
+            except FileNotFoundError:
+                continue
+            finally:
+                os.close(other)
+
+
+def remove_resolution_scratch(slot, name, checkout_proof=None):
+    try:
+        if checkout_proof is not None:
+            fd = checked_checkout(slot, checkout_proof)
+        else:
+            fd = directory(slot, name, private=True)
+    except FileNotFoundError:
+        return
+    try:
+        if not shutil.rmtree.avoids_symlink_attacks:
+            raise Problem('unavailable')
+        remove_verified_directory(slot, name, fd, os.fstat(fd))
+        os.fsync(slot)
+    finally:
+        os.close(fd)
+
+
+def discard_merge_resolution(slot):
+    seal = {'version': 1}
+    previous = resolution_receipt(slot, 'resolution-discarded')
+    if previous is None:
+        write_resolution_receipt(slot, 'resolution-discarded', seal)
+    elif previous != seal:
+        raise Problem('conflict')
+
+    checkout_proof = resolution_receipt(slot, 'ready')
+    remove_resolution_scratch(slot, 'checkout', checkout_proof)
+    remove_resolution_scratch(slot, 'resolution.git')
+    return {'discarded': True}
+
+
+def resolution_remote(record, repo, remote, branch, reviewed):
+    checked_refresh_snapshot(repo, branch, reviewed)
+    observed = observed_feature_remote(record, remote, branch)
+    if observed['base_oid'] in (None, reviewed['base_oid']):
+        raise Problem('conflict')
+    previous = observed['head_oid']
+    if previous is not None and (previous != observed['managed_head_oid']
+                                 or not is_ancestor(repo, previous, reviewed['head_oid'])):
+        raise Problem('conflict')
+    return observed
+
+
+def checked_text_blob(repo, blob):
+    data = git_command(['cat-file', 'blob', oid(blob)], repository_fd=repo,
+                       output_limit=FEATURE_PATCH_LIMIT, output_error='merge_conflict')[1]
+    if b'\x00' in data:
+        raise Problem('merge_conflict')
+    try:
+        data.decode('utf-8')
+    except UnicodeError as error:
+        raise Problem('merge_conflict') from error
+    return data
+
+
+def resolution_tree_blob(repo, tree, path):
+    output = git_command(['--literal-pathspecs', 'ls-tree', '--full-tree', '-z', tree, '--', path],
+                         repository_fd=repo, output_limit=FEATURE_PATH_LIMIT)[1]
+    header, separator, name = output.partition(b'\t')
+    if not separator or name != path.encode() + b'\0':
+        raise Problem('scope_violation')
+    mode, kind, blob = header.decode('ascii').split(' ')
+    if kind != 'blob' or mode not in REGULAR_BLOB_MODES:
+        raise Problem('scope_violation')
+    return mode, oid(blob)
+
+
+def conflict_separators(data):
+    lines = data.splitlines(keepends=True)
+    return Counter((lines[index - 1] if index else b'', line)
+                   for index, line in enumerate(lines) if CONFLICT_SEPARATOR.fullmatch(line))
+
+
+def check_resolved_text(repo, tree, path, original_mode, old_head, target):
+    mode, blob = resolution_tree_blob(repo, tree, path)
+    if mode != original_mode:
+        raise Problem('scope_violation')
+    contents = checked_text_blob(repo, blob)
+    if CONFLICT_MARKER.search(contents):
+        raise Problem('merge_conflict')
+    separators = conflict_separators(contents)
+    if separators:
+        # A bare Git separator is also valid text, such as a reStructuredText
+        # underline. Preserve existing separators in their shared line context.
+        for parent in (old_head, target):
+            _, parent_blob = resolution_tree_blob(repo, parent, path)
+            if separators - conflict_separators(checked_text_blob(repo, parent_blob)):
+                raise Problem('merge_conflict')
+
+
+def merge_conflict_tree(repo, old_head, target, scope):
+    status, output = git_command(['merge-tree', '--write-tree', '-z', '--messages', old_head, target],
+                                 repository_fd=repo, check=False,
+                                 output_limit=FEATURE_PATH_LIMIT, output_error='merge_conflict')
+    if status == 0:
+        # The existing refresh path owns clean merges.
+        raise Problem('conflict')
+    if status != 1:
+        raise Problem('unavailable')
+    try:
+        entries, separator, messages = output.decode('utf-8').partition('\0\0')
+        tree, *records = entries.split('\0')
+    except UnicodeError as error:
+        raise Problem('merge_conflict') from error
+    if not separator or not messages.endswith('\0'):
+        raise Problem('merge_conflict')
+    conflicts = {}
+    try:
+        for record in records:
+            metadata, path = record.split('\t', 1)
+            mode, blob, stage = metadata.split(' ')
+            path = feature_path(path)
+            if mode not in REGULAR_BLOB_MODES or stage not in ('1', '2', '3'):
+                raise Problem('merge_conflict')
+            stages = conflicts.setdefault(path, {})
+            if stage in stages:
+                raise Problem('merge_conflict')
+            stages[stage] = (mode, oid(blob))
+    except (Problem, ValueError) as error:
+        raise Problem('merge_conflict') from error
+    if not 1 <= len(conflicts) <= 128:
+        raise Problem('merge_conflict')
+
+    # The second section carries stable conflict types. Stage presence alone
+    # cannot rule out structural or rename conflicts.
+    reported = set()
+    messages = iter(messages[:-1].split('\0'))
+    try:
+        for count in messages:
+            path_count = int(count)
+            if not 1 <= path_count <= 128:
+                raise Problem('merge_conflict')
+            paths = [next(messages) for _ in range(path_count)]
+            conflict_type = next(messages)
+            next(messages)  # Discard the human-oriented diagnostic.
+            if conflict_type == 'Auto-merging':
+                continue
+            if conflict_type != 'CONFLICT (contents)' or len(paths) != 1 or paths[0] not in conflicts:
+                raise Problem('merge_conflict')
+            reported.add(paths[0])
+    except (StopIteration, ValueError) as error:
+        raise Problem('merge_conflict') from error
+    if reported != set(conflicts):
+        raise Problem('merge_conflict')
+
+    tree = oid(tree)
+    modes = {}
+    for path, stages in sorted(conflicts.items()):
+        if not any(item == path or item.endswith('/') and path.startswith(item) for item in scope):
+            raise Problem('scope_violation')
+        if not {'2', '3'} <= stages.keys():
+            raise Problem('merge_conflict')
+        mode, blob = resolution_tree_blob(repo, tree, path)
+        for staged_mode, staged_blob in stages.values():
+            if mode != staged_mode:
+                raise Problem('merge_conflict')
+            checked_text_blob(repo, staged_blob)
+        # Verify the actual generated markers, not pre-existing marker-like
+        # text. Reject custom markers too short for the final content check.
+        data = checked_text_blob(repo, blob)
+        opening = rb'^<{7,} ' + old_head.encode() + rb'\r?$'
+        closing = rb'^>{7,} ' + target.encode() + rb'\r?$'
+        if not re.search(opening, data, re.MULTILINE) or not re.search(closing, data, re.MULTILINE):
+            raise Problem('merge_conflict')
+        modes[path] = mode
+    return tree, modes
+
+
+def stage_merge_resolution(record, repo, attempts, slot, remote, branch, reviewed, paths):
+    if resolution_receipt(slot, 'resolution-discarded') is not None:
+        raise Problem('conflict')
+    scope = resolution_scope(paths)
+    check_resolution_capacity(attempts, slot)
+    observed = resolution_remote(record, repo, remote, branch, reviewed)
+    identity = {'remote': observed, 'scope_digest': hashlib.sha256(json.dumps(scope).encode()).hexdigest()}
+    previous = resolution_receipt(slot, 'resolution-input')
+    if previous is None:
+        write_resolution_receipt(slot, 'resolution-input', identity)
+    elif previous != identity:
+        raise Problem('conflict')
+
+    candidate = directory(slot, 'resolution.git', create=True, private=True)
+    try:
+        staged = resolution_receipt(slot, 'resolution-candidate')
+        fresh_candidate = staged is None
+        if fresh_candidate:
+            # The two parent histories and marker tree live only in this bare
+            # repository until the trusted controller adopts an exact result.
+            git_command(['init', '--bare', fd_path(candidate)], descriptors=(candidate,))
+            old_head, target = reviewed['head_oid'], observed['base_oid']
+            git_command(['fetch', '--no-write-fetch-head', '--no-tags', '--no-recurse-submodules',
+                         '--', fd_path(repo), old_head], repository_fd=candidate,
+                        descriptors=(repo,), timeout=240)
+            git_command(['fetch', '--no-tags', '--no-recurse-submodules', '--', remote, branch['base_ref']],
+                        repository_fd=candidate, timeout=240)
+            if get_ref(candidate, 'FETCH_HEAD') != target or not is_ancestor(candidate, reviewed['base_oid'], target):
+                raise Problem('conflict')
+            tree, modes = merge_conflict_tree(candidate, old_head, target, scope)
+            changed_feature_paths(candidate, target, tree, scope)
+            seed = feature_commit(candidate, tree, (old_head, target), 'Stage Factory merge conflict')
+            git_command(['update-ref', RESOLUTION_SEED_REF, seed], repository_fd=candidate)
+            staged = {'seed': seed, 'modes': modes}
+            write_resolution_receipt(slot, 'resolution-candidate', staged)
+        if get_ref(candidate, RESOLUTION_SEED_REF) != staged['seed']:
+            raise Problem('conflict')
+        prepare_feature_task(candidate, slot, staged['seed'], (RESOLUTION_SEED_REF,))
+        if observed_feature_remote(record, remote, branch) != observed:
+            # Nothing can launch this new checkout before staging returns.
+            # An existing candidate may already have been returned to a caller.
+            if fresh_candidate:
+                discard_merge_resolution(slot)
+            raise Problem('conflict')
+        return {'target_oid': observed['base_oid'], 'paths': sorted(staged['modes'])}
+    except Exception:
+        # A rejected preflight will never be launched. Do not retain a full
+        # repository for each unsupported attempt. Keep durable candidates for replay.
+        if resolution_receipt(slot, 'resolution-candidate') is None:
+            remove_resolution_scratch(slot, 'resolution.git')
+        raise
+    finally:
+        os.close(candidate)
+
+
+def adopt_merge_resolution(record, repo, slot, remote, branch, reviewed, proposed):
+    identity = resolution_receipt(slot, 'resolution-input')
+    staged = resolution_receipt(slot, 'resolution-candidate')
+    if identity is None or staged is None:
+        raise Problem('conflict')
+    observed = identity['remote']
+    target, old_head = observed['base_oid'], reviewed['head_oid']
+    if proposed != {'target_oid': target, 'paths': sorted(staged['modes'])}:
+        raise Problem('conflict')
+
+    settled = resolution_receipt(slot, 'resolution-result')
+    current = feature_snapshot(repo, branch)
+    if settled is not None and current['git'] == settled:
+        # Exact acknowledgement replay. The caller must still verify the
+        # current target before publishing this now-reviewed comparison.
+        return current
+    if (resolution_receipt(slot, 'resolution-discarded') is not None
+            or current['git'] != reviewed or observed_feature_remote(record, remote, branch) != observed):
+        raise Problem('conflict')
+
+    candidate = directory(slot, 'resolution.git', private=True)
+    try:
+        seed = staged['seed']
+        if get_ref(candidate, RESOLUTION_SEED_REF) != seed:
+            raise Problem('conflict')
+        if settled is None:
+            tree = checkpoint_tree(candidate, slot, seed)
+            changed_feature_paths(candidate, seed, tree, proposed['paths'])
+            for path, original_mode in staged['modes'].items():
+                check_resolved_text(candidate, tree, path, original_mode, old_head, target)
+            new_head = feature_commit(candidate, tree, (old_head, target), 'Resolve Factory feature conflict')
+            result = snapshot_between(candidate, target, new_head)
+            git_command(['update-ref', RESOLUTION_RESULT_REF, new_head], repository_fd=candidate)
+            write_resolution_receipt(slot, 'resolution-result', result['git'])
+        else:
+            new_head = settled['head_oid']
+            if get_ref(candidate, RESOLUTION_RESULT_REF) != new_head:
+                raise Problem('conflict')
+            result = snapshot_between(candidate, target, new_head)
+            if result['git'] != settled:
+                raise Problem('conflict')
+
+        git_command(['fetch', '--no-write-fetch-head', '--no-tags', '--no-recurse-submodules',
+                     '--', fd_path(candidate), RESOLUTION_RESULT_REF], repository_fd=repo,
+                    descriptors=(candidate,), timeout=240)
+        if get_ref(repo, new_head) != new_head or observed_feature_remote(record, remote, branch) != observed:
+            raise Problem('conflict')
+        updates = (f"start\nupdate {branch['head_ref']} {new_head} {old_head}\n"
+                   f"update refs/factory/base {target} {reviewed['base_oid']}\nprepare\ncommit\n").encode()
+        git_command(['update-ref', '--stdin'], repository_fd=repo, input_data=updates)
+        return result
+    finally:
+        os.close(candidate)
+
+
 def publish_feature(record, repo, remote, branch, expected):
     if feature_snapshot(repo, branch)['git'] != expected:
         raise Problem('conflict')
@@ -1548,6 +1900,28 @@ def execute_feature(request, root):
                 return stage_feature_refresh(record, repo, remote, branch, repository_id, candidate_id, snapshot)
             return confirm_feature_refresh(record, repo, remote, branch, repository_id, candidate_id, snapshot,
                                            request['proposed_snapshot'])
+        if op in ('feature_stage_resolution', 'feature_adopt_resolution', 'feature_discard_resolution'):
+            snapshot = {key: request[key] for key in ('base_oid', 'head_oid', 'patch_digest')}
+            attempt = parse_uuid(request['attempt'])
+            oid(snapshot['base_oid'])
+            oid(snapshot['head_oid'])
+            if not isinstance(snapshot['patch_digest'], str) or not re.fullmatch(r'[a-f0-9]{64}', snapshot['patch_digest']):
+                raise Problem('invalid')
+            create_slot = op != 'feature_adopt_resolution'
+            attempts = opened(record, 'attempts', create_slot)
+            identity = {'version': 1, 'kind': 'merge-resolution', 'attempt': attempt,
+                        'repository_id': repository_id, 'reviewed': snapshot}
+            slot = feature_record(attempts, attempt, 'attempt', identity, create_slot)
+            stack.callback(os.close, slot)
+            if op == 'feature_discard_resolution':
+                return discard_merge_resolution(slot)
+            if op == 'feature_stage_resolution':
+                result = stage_merge_resolution(record, repo, attempts, slot, remote, branch, snapshot, request['scope'])
+                tooling = feature_record(group, '.tooling', 'feature', tooling_marker(project, operation), True)
+                os.close(tooling)
+                return result
+            proposed = {'target_oid': oid(request['target_oid']), 'paths': request['paths']}
+            return adopt_merge_resolution(record, repo, slot, remote, branch, snapshot, proposed)
         if op == 'feature_push':
             return publish_feature(record, repo, remote, branch,
                                    {key: request[key] for key in ('base_oid', 'head_oid', 'patch_digest')})

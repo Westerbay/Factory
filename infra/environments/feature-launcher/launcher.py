@@ -312,6 +312,12 @@ def checkout_proof(home, checkout):
             child = owned_directory(slot, name, private=False)
             os.close(slot)
             slot = child
+        try:
+            os.stat("resolution-discarded", dir_fd=slot, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise ValueError("checkout was discarded")
         receipt = os.open(
             "ready", os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, dir_fd=slot
         )

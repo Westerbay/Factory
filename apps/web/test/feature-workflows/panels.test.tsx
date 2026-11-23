@@ -5,6 +5,7 @@ vi.mock("../../src/lib/theme/theme", () => ({ useTheme: () => "dark" }))
 
 import type {
   Feature,
+  FeatureAttempt,
   FeatureDiff,
 } from "../../src/features/feature-workflows/api"
 import { FeaturePanels } from "../../src/features/feature-workflows/feature-panels"
@@ -62,6 +63,8 @@ function render(
     diffError?: boolean
     diff?: FeatureDiff
     viewStage?: Feature["feature"]["stage"]
+    mergeResolutionPending?: boolean
+    mergeResolutionError?: string
   } = {}
 ) {
   return renderToStaticMarkup(
@@ -76,6 +79,10 @@ function render(
       onReopen={() => {}}
       onResume={() => {}}
       onReview={() => {}}
+      onResolveMergeConflict={() => {}}
+      onRefreshMergeResolution={() => {}}
+      mergeResolutionPending={options.mergeResolutionPending}
+      mergeResolutionError={options.mergeResolutionError}
       onDraft={() => {}}
       onReloadDiff={() => {}}
       onDiscuss={() => {}}
@@ -106,6 +113,24 @@ const reviewedDiff: FeatureDiff = {
   baseOid: reviewedFeature.review!.baseOid,
   headOid: reviewedFeature.review!.headOid,
   patchDigest: reviewedFeature.review!.patchDigest,
+}
+const conflicted: Feature = {
+  ...reviewedFeature,
+  feature: { ...reviewedFeature.feature, stage: "review" },
+  delivery: {
+    ...receipt,
+    status: "failed",
+    reason:
+      "The target branch has changes that conflict with this feature. Resolve the conflicts against the current target branch before opening a draft.",
+  },
+}
+const resolution: FeatureAttempt = {
+  id: "resolution",
+  title: "Resolve merge conflicts",
+  role: "correction",
+  assignedModel: "codex",
+  status: "running",
+  canResume: false,
 }
 
 describe("architecture preparation", () => {
@@ -269,24 +294,115 @@ describe("feature result actions", () => {
   })
 
   it("explains a target branch conflict without offering to publish the previous patch", () => {
-    const html = render(
-      {
-        ...reviewedFeature,
-        feature: { ...reviewedFeature.feature, stage: "review" },
-        delivery: {
-          ...receipt,
-          status: "failed",
-          reason:
-            "The target branch has changes that conflict with this feature. Resolve the conflicts against the current target branch before opening a draft.",
-        },
-      },
-      { diff: reviewedDiff }
-    )
+    const html = render(conflicted, { diff: reviewedDiff })
     expect(html).toContain(
       "Resolve the conflicts against the current target branch"
     )
     expect(html).not.toContain("Publish the reviewed draft")
+    expect(html).not.toContain("Attempt resolution")
     expect(html).toContain('aria-label="Previous reviewed snapshot"')
+  })
+
+  it("offers one eligible action and keeps it guarded while the request is pending", () => {
+    const eligible = { ...conflicted, canResolveMergeConflict: true }
+    const html = render(eligible, { diff: reviewedDiff })
+    expect(html.match(/Attempt resolution/g)).toHaveLength(1)
+    expect(html).toMatch(/<button type="button"[^>]*>Attempt resolution/)
+    expect(html).not.toContain("Publish the reviewed draft")
+
+    const pending = render(eligible, {
+      diff: reviewedDiff,
+      mergeResolutionPending: true,
+    })
+    expect(pending).toMatch(/<button disabled=""[^>]*>Attempt resolution/)
+    expect(pending).toContain(
+      'role="status" aria-atomic="true"><p>Preparing conflict resolution'
+    )
+  })
+
+  it("shows the named attempt while retaining the previous review on failure", () => {
+    const value = {
+      ...conflicted,
+      mergeResolutionAttemptId: resolution.id,
+      attempts: [
+        resolution,
+        { ...resolution, id: "unrelated", status: "failed" as const },
+      ],
+    }
+    const running = render(value, { diff: reviewedDiff })
+    expect(running).toContain("An agent is resolving the conflicts")
+    expect(running).not.toContain("Attempt resolution")
+    expect(running).not.toContain("Publish the reviewed draft")
+    const failed = render(
+      {
+        ...value,
+        canResolveMergeConflict: true,
+        attempts: [
+          { ...resolution, status: "failed", activity: "The target changed." },
+        ],
+      },
+      { diff: reviewedDiff }
+    )
+    expect(failed).toContain("Try again or resolve the conflicts manually")
+    expect(failed).toContain("The target changed.")
+    expect(failed).toContain('aria-label="Previous reviewed snapshot"')
+    expect(failed).toContain("Prior snapshot typecheck")
+    expect(failed).toContain("Attempt resolution")
+    expect(failed).not.toContain("Publish the reviewed draft")
+  })
+
+  it("offers recovery for an uncertain resolution, and a status check for a rejected request", () => {
+    const uncertain = render(
+      {
+        ...conflicted,
+        mergeResolutionAttemptId: resolution.id,
+        attempts: [{ ...resolution, status: "uncertain", canResume: true }],
+      },
+      { diff: reviewedDiff }
+    )
+    expect(uncertain).toContain("Recover the resolution attempt")
+    expect(uncertain).not.toContain("Attempt resolution")
+
+    const rejected = render(conflicted, {
+      diff: reviewedDiff,
+      mergeResolutionError: "Resolve these conflicts manually.",
+    })
+    expect(rejected).toContain(
+      'role="status" aria-atomic="true"><p>Resolve these conflicts manually.'
+    )
+    expect(rejected).toContain("Check feature status")
+  })
+
+  it("waits for review of the updated diff before offering explicit publication", () => {
+    const updated: Feature = {
+      ...conflicted,
+      review: {
+        ...feature.review!,
+        snapshotId: "updated",
+        baseOid: diff.baseOid,
+        headOid: diff.headOid,
+        patchDigest: diff.patchDigest,
+        ready: false,
+      },
+      attempts: [{ ...resolution, status: "validated" }],
+    }
+    const reviewing = render(updated, { diff })
+    expect(reviewing).toContain("Reviewing the updated diff")
+    expect(reviewing).toContain("Previous publication attempt")
+    expect(reviewing).not.toContain("Attempt resolution")
+    expect(reviewing).not.toContain("Publish the reviewed draft")
+    const ready = render(
+      {
+        ...updated,
+        feature: { ...updated.feature, stage: "result" },
+        review: { ...updated.review!, ready: true },
+      },
+      { diff }
+    )
+    expect(ready).toContain("Ready for your review")
+    expect(ready).toMatch(
+      /<button type="button"[^>]*>Publish the reviewed draft/
+    )
   })
 
   it("offers reopening a settled result and only exposes step continuation projected by the server", () => {

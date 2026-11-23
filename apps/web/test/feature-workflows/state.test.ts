@@ -281,6 +281,24 @@ describe("session operation registry", () => {
     ).not.toBe(id)
   })
 
+  it("reuses an unconfirmed resolution until detail records that exact attempt", () => {
+    const registry = createOperationRegistry()
+    const scope = "session-1"
+    const key = `resolve-merge-conflict:${feature.feature.id}:${snapshotId}`
+    const olderFailure: FeatureAttempt = { ...attempt, status: "failed" }
+    const lostResponse = registry.get(scope, key)
+
+    expect(registry.get(scope, key, [olderFailure])).toBe(lostResponse)
+
+    const running: FeatureAttempt = { ...attempt, id: lostResponse }
+    const failed: FeatureAttempt = { ...running, status: "failed" }
+    const retry = registry.get(scope, key, [olderFailure, failed])
+    expect(retry).not.toBe(lostResponse)
+
+    registry.complete(scope, key, running.id)
+    expect(registry.get(scope, key, [olderFailure, failed])).toBe(retry)
+  })
+
   it("discards another security scope and ignores late responses from that scope", () => {
     const registry = createOperationRegistry()
     const previous = registry.get("session-1", "draft:feature:snapshot")

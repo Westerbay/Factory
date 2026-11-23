@@ -135,7 +135,7 @@ python3 -c 'import json, os, sys; path=sys.argv[1]; info=os.stat(path); json.dum
             let (proof_code, proof_output) = execute(&runtime, main_id, &proof_args.iter().map(String::as_str).collect::<Vec<_>>()).await;
             assert_eq!(proof_code, 0);
             let proof = parse_proof(&proof_output).unwrap();
-            let request = FeatureRun { workspace: workspace.clone(), provider: provider.into(), model: model.into(), effort: None, input: "Fixture never begins a provider turn".into(), conversation_id: None };
+            let request = FeatureRun { workspace: workspace.clone(), provider: provider.into(), model: model.into(), effort: None, input: "Fixture never begins a provider turn".into(), merge_resolution: false, conversation_id: None };
             let provider = ScopedProvider::from_request(&request).unwrap();
             let relay = runtime.docker.create_exec(main_id, CreateExecOptions {
                 cmd: Some(relay_command(RelayAccess::Provider(provider), workspace.attempt_id)), user: Some("10000:10000".to_owned()),
@@ -225,6 +225,7 @@ except OSError as error:
                 // must remain available for recovery, including repeated reads.
                 let feature_runtime = DockerFeatureExecutionRuntime::new(runtime.clone());
                 let mut prior = TaskAttempt {
+                    merge_resolution: None,
                     claim: AttemptClaim {
                         task: FeatureTask {
                             id: Uuid::new_v4(), title: "fixture".into(), instructions: "fixture".into(),
@@ -372,6 +373,7 @@ python3 -c 'import json, os, sys; path=sys.argv[1]; info=os.stat(path); json.dum
             model: "gpt-5.4".into(),
             effort: None,
             input: "Fixture stops before a provider turn".into(),
+            merge_resolution: false,
             conversation_id: None,
         }).await.unwrap();
         let ready = tokio::time::timeout(Duration::from_secs(35), agent.session.output.next()).await;

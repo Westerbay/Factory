@@ -392,7 +392,7 @@ impl From<DeliveryReceipt> for FeatureDeliveryView {
         let (status, reason, draft_url) = match receipt.status {
             DeliveryStatus::Claimed => (View::Claimed, None, None),
             DeliveryStatus::Uncertain => (View::Uncertain, None, None),
-            DeliveryStatus::Failed { reason } => (View::Failed, Some(reason), None),
+            DeliveryStatus::Failed { reason, .. } => (View::Failed, Some(reason), None),
             DeliveryStatus::Published { draft_url } => (View::Published, None, Some(draft_url)),
             DeliveryStatus::PublishedStale { draft_url } => {
                 (View::PublishedStale, None, Some(draft_url))
@@ -417,6 +417,9 @@ pub struct FeatureView {
     pub attempts: Vec<FeatureAttemptView>,
     pub review: Option<FeatureReviewView>,
     pub delivery: Option<FeatureDeliveryView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub can_resolve_merge_conflict: Option<bool>,
+    pub merge_resolution_attempt_id: Option<Uuid>,
     pub can_continue: bool,
 }
 
@@ -535,6 +538,20 @@ impl FeatureView {
                     && review_count >= 2 + state.additional_review_rounds as usize,
             }
         });
+        let can_resolve_merge_conflict = (!driver_active
+            && state
+                .current_review
+                .is_some_and(|id| state.can_resolve_merge_conflict(id)))
+        .then_some(true);
+        let merge_resolution_attempt_id = state
+            .attempts
+            .iter()
+            .rev()
+            .find(|attempt| {
+                attempt.merge_resolution.is_some()
+                    && attempt.claim.snapshot_id == state.current_review
+            })
+            .map(|attempt| attempt.id());
         let mut seen = HashSet::new();
         let mut attempts: Vec<_> = state
             .attempts
@@ -569,15 +586,23 @@ impl FeatureView {
                     }
                     FeatureStage::Result | FeatureStage::Draft => false,
                 };
-                let can_resume = seen.insert(key)
-                    && matches_stage
-                    && match attempt.status {
-                        AttemptStatus::Failed | AttemptStatus::Interrupted => {
-                            attempt.launch_settled
+                let can_resume = if attempt.merge_resolution.is_some() {
+                    stage == FeatureStage::Review
+                        && attempt.status.holds_reservation()
+                        && !is_locally_active(attempt.id())
+                } else {
+                    seen.insert(key)
+                        && matches_stage
+                        && match attempt.status {
+                            AttemptStatus::Failed | AttemptStatus::Interrupted => {
+                                attempt.launch_settled
+                            }
+                            status if status.holds_reservation() => {
+                                !is_locally_active(attempt.id())
+                            }
+                            _ => false,
                         }
-                        status if status.holds_reservation() => !is_locally_active(attempt.id()),
-                        _ => false,
-                    };
+                };
                 FeatureAttemptView::new(attempt, can_resume)
             })
             .collect();
@@ -595,6 +620,8 @@ impl FeatureView {
             attempts,
             review,
             delivery: state.deliveries.pop().map(Into::into),
+            can_resolve_merge_conflict,
+            merge_resolution_attempt_id,
             can_continue,
         }
     }

@@ -9,6 +9,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub const MERGE_CONFLICT_REASON: &str = "The target branch has changes that conflict with this feature. Resolve the conflicts against the current target branch before opening a draft.";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum FeatureError {
     #[error("An active session is required")]
@@ -27,6 +29,8 @@ pub enum FeatureError {
     ReviewBlocked,
     #[error("The reviewed diff changed")]
     StaleSnapshot,
+    #[error("This merge conflict needs manual resolution")]
+    MergeResolutionUnsupported,
     #[error("Feature service is unavailable")]
     Unavailable,
 }
@@ -215,6 +219,8 @@ pub struct AttemptClaim {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskAttempt {
     pub claim: AttemptClaim,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_resolution: Option<MergeResolutionCandidate>,
     pub generation: i64,
     pub status: AttemptStatus,
     pub launch_settled: bool,
@@ -357,9 +363,17 @@ pub struct DeliveryReceipt {
 pub enum DeliveryStatus {
     Claimed,
     Uncertain,
-    Failed { reason: String },
-    Published { draft_url: String },
-    PublishedStale { draft_url: String },
+    Failed {
+        reason: String,
+        #[serde(default)]
+        merge_conflict: bool,
+    },
+    Published {
+        draft_url: String,
+    },
+    PublishedStale {
+        draft_url: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -367,6 +381,13 @@ pub enum FeatureCommand {
     ProposeRevision(GateRevision),
     ApproveRevision(RevisionKey),
     ClaimAttempt(AttemptClaim),
+    ClaimMergeResolution {
+        claim: AttemptClaim,
+        candidate: MergeResolutionCandidate,
+    },
+    MarkDeliveryMergeConflict {
+        snapshot_id: Uuid,
+    },
     RecordAttempt {
         attempt_id: Uuid,
         update: AttemptUpdate,

@@ -242,8 +242,12 @@ can inspect the result and explicitly request one draft pull request. If its tar
 branch changes, Factory prepares the current comparison for another review. When the
 comparison is temporarily unavailable, the member can retry it. If the changes conflict
 with the target branch, Factory reports the conflict and preserves the reviewed snapshot.
-The conflicting changes must be resolved before opening a draft. The member can check
-an ambiguous publication again. When Factory confirms no draft exists and cannot
+For supported text conflicts, the member can request one agent resolution attempt at a
+time and follow its status in the result panel. If the attempt fails or the conflict is
+unsupported, the result panel keeps the last reviewed snapshot and explains how to
+proceed. A successful attempt starts fresh checks and a new review of the updated diff.
+The member then explicitly requests the draft based on that reviewed diff. The member
+can check an ambiguous publication again. When Factory confirms no draft exists and cannot
 attribute the exact remote branch to its own push, it closes the request without
 changing the remote branch. Findings and checks identify the snapshot they cover,
 including a previous result that is still being corrected.

@@ -829,13 +829,13 @@ class ProjectControllerTests(unittest.TestCase):
                     self.assertEqual(snapshot['git']['head_oid'], current)
                     self.assertEqual(snapshot['changed_paths'], [first_path])
 
-    def ready_feature_snapshot(self, origin, feature):
+    def ready_feature_snapshot(self, origin, feature, feature_content='ready for review\n'):
         branch = self.feature(origin, feature, 'initialize')
         base = branch['base_oid']
         fields = {'attempt': str(uuid.uuid4()), 'base_oid': base, 'writable': True}
         self.feature(origin, feature, 'prepare', **fields)
         checkout = self.feature_checkout(feature, fields['attempt'])
-        (checkout / 'file.txt').write_text('ready for review\n')
+        (checkout / 'file.txt').write_text(feature_content)
         self.feature(origin, feature, 'checkpoint', scope=['file.txt'], **fields)
         self.feature(origin, feature, 'integrate', expected_head=base, scope=['file.txt'], **fields)
         return branch, self.feature(origin, feature, 'snapshot')
@@ -954,6 +954,298 @@ class ProjectControllerTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'merge_conflict')
         self.assertEqual(self.feature(origin, feature, 'snapshot'), result)
         self.assertIsNone(self.feature(origin, feature, 'remote')['head_oid'])
+
+    def resolution_fixture(self, upstream_content=b'conflicting upstream edit\n', feature_content='ready for review\n'):
+        origin = self.origin()
+        self.clone(origin)
+        feature = str(uuid.uuid4())
+        branch, reviewed = self.ready_feature_snapshot(origin, feature, feature_content)
+        (origin / 'file.txt').write_bytes(upstream_content)
+        (origin / 'upstream.txt').write_text('carry clean upstream work through the merge\n')
+        remote_git = ['git', '-C', str(origin)]
+        subprocess.run([*remote_git, 'add', 'file.txt', 'upstream.txt'], check=True)
+        subprocess.run([*remote_git, 'commit', '-qm', 'upstream advance'], check=True)
+        attempt = str(uuid.uuid4())
+        fields = {**reviewed['git'], 'attempt': attempt}
+        return origin, feature, branch, reviewed, fields, self.feature_checkout(feature, attempt)
+
+    def test_feature_merge_resolution_adopts_only_a_scoped_result_and_replays_exactly(self):
+        origin, feature, branch, reviewed, fields, checkout = self.resolution_fixture()
+        proposed = self.feature(origin, feature, 'stage_resolution', **fields, scope=['file.txt'])
+        observed_head = subprocess.check_output(['git', '-C', str(origin), 'rev-parse', 'HEAD'], text=True).strip()
+        self.assertEqual(proposed, {'target_oid': observed_head, 'paths': ['file.txt']})
+        self.assertIn('<<<<<<< ', (checkout / 'file.txt').read_text())
+        self.assertIn('carry clean upstream', (checkout / 'upstream.txt').read_text())
+        self.assertEqual(self.feature(origin, feature, 'snapshot'), reviewed)
+        self.assertIsNone(self.feature(origin, feature, 'remote')['head_oid'])
+
+        # Ordinary workspace writes cannot claim the resolution checkout.
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'prepare', attempt=fields['attempt'],
+                         base_oid=reviewed['git']['head_oid'], writable=True)
+        self.assertEqual(caught.exception.code, 'conflict')
+
+        inode = checkout.stat().st_ino
+        (checkout / 'file.txt').write_text('combined changes\n')
+        self.assertEqual(self.feature(origin, feature, 'stage_resolution', **fields, scope=['file.txt']), proposed)
+        self.assertEqual(checkout.stat().st_ino, inode)
+        self.assertEqual((checkout / 'file.txt').read_text(), 'combined changes\n')
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'stage_resolution', **fields, scope=['file.txt', 'upstream.txt'])
+        self.assertEqual(caught.exception.code, 'conflict')
+
+        result = self.feature(origin, feature, 'adopt_resolution', **fields, **proposed)
+        self.assertEqual(result, self.feature(origin, feature, 'snapshot'))
+        self.assertEqual(result['git']['base_oid'], observed_head)
+        self.assertEqual(result['changed_paths'], ['file.txt'])
+        self.assertIn('+combined changes', result['patch'])
+        integration = checkout.parents[2] / 'integration.git'
+        parents = subprocess.check_output(['git', '--git-dir', str(integration), 'show', '-s', '--format=%P',
+                                           result['git']['head_oid']], text=True).split()
+        self.assertEqual(parents, [reviewed['git']['head_oid'], observed_head])
+        self.assertEqual(self.feature(origin, feature, 'initialize'), {**branch, 'base_oid': observed_head})
+        self.assertIsNone(self.feature(origin, feature, 'remote')['head_oid'])
+
+        # Replaying a lost acknowledgement cannot ingest later checkout edits.
+        (checkout / 'file.txt').write_text('not part of the verified proposal\n')
+        self.assertEqual(self.feature(origin, feature, 'adopt_resolution', **fields, **proposed), result)
+
+        slot = checkout.parent
+        self.assertEqual(self.feature(origin, feature, 'discard_resolution', **fields), {'discarded': True})
+        self.assertEqual(self.feature(origin, feature, 'discard_resolution', **fields), {'discarded': True})
+        self.assertFalse(checkout.exists())
+        self.assertFalse((slot / 'resolution.git').exists())
+        for receipt in ('attempt', 'resolution-input', 'resolution-candidate', 'resolution-result'):
+            self.assertTrue((slot / receipt).is_file(), receipt)
+        self.assertEqual(self.feature(origin, feature, 'adopt_resolution', **fields, **proposed), result)
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'stage_resolution', **fields, scope=['file.txt'])
+        self.assertEqual(caught.exception.code, 'conflict')
+
+    def test_discarded_merge_resolution_fences_launch_and_keeps_other_slots(self):
+        origin, feature, _, reviewed, fields, checkout = self.resolution_fixture()
+        proposal = self.feature(origin, feature, 'stage_resolution', **fields, scope=['file.txt'])
+        normal = {'attempt': str(uuid.uuid4()), 'base_oid': fields['head_oid'], 'writable': True}
+        self.feature(origin, feature, 'prepare', **normal)
+        witness = self.feature_checkout(feature, normal['attempt']) / 'file.txt'
+        witness_bytes = witness.read_bytes()
+        (checkout / 'fixture-link').symlink_to(witness)
+        (checkout / 'file.txt').write_text('a pending resolution\n')
+
+        wrong_review = {**fields, 'patch_digest': '0' * 64}
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'discard_resolution', **wrong_review)
+        self.assertEqual(caught.exception.code, 'conflict')
+        self.assertTrue(checkout.exists())
+
+        with patch.object(controller.shutil, 'rmtree', side_effect=PermissionError):
+            with self.assertRaises(PermissionError):
+                self.feature(origin, feature, 'discard_resolution', **fields)
+        self.assertTrue((checkout.parent / 'resolution-discarded').is_file())
+        self.assertTrue(checkout.exists())
+        for op, arguments in (('stage_resolution', {'scope': ['file.txt']}), ('adopt_resolution', proposal)):
+            with self.assertRaises(controller.Problem) as caught:
+                self.feature(origin, feature, op, **fields, **arguments)
+            self.assertEqual(caught.exception.code, 'conflict')
+        self.assertEqual(self.feature(origin, feature, 'discard_resolution', **fields), {'discarded': True})
+        self.assertEqual(witness.read_bytes(), witness_bytes)
+        self.assertEqual(self.feature(origin, feature, 'snapshot'), reviewed)
+
+        # The controller can receive an in-flight stage request after cleanup.
+        absent = {**fields, 'attempt': str(uuid.uuid4())}
+        self.assertEqual(self.feature(origin, feature, 'discard_resolution', **absent), {'discarded': True})
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'stage_resolution', **absent, scope=['file.txt'])
+        self.assertEqual(caught.exception.code, 'conflict')
+
+    def test_discard_refuses_replacement_checkout_without_following_its_symlink(self):
+        origin, feature, _, _, fields, checkout = self.resolution_fixture()
+        self.feature(origin, feature, 'stage_resolution', **fields, scope=['file.txt'])
+        renamed = checkout.rename(checkout.parent / 'renamed')
+        checkout.symlink_to(renamed)
+        with self.assertRaises(OSError):
+            self.feature(origin, feature, 'discard_resolution', **fields)
+        self.assertTrue((renamed / 'file.txt').is_file())
+        self.assertTrue(checkout.is_symlink())
+        self.assertTrue((checkout.parent / 'resolution-discarded').is_file())
+        checkout.unlink()
+        renamed.rename(checkout)
+        self.assertEqual(self.feature(origin, feature, 'discard_resolution', **fields), {'discarded': True})
+
+    def test_merge_resolution_capacity_allows_replay_and_frees_discarded_scratch(self):
+        origin, feature, _, reviewed, fields, checkout = self.resolution_fixture()
+        scope = ['file.txt', *[f'approved-{index}.txt' for index in range(130)]]
+        proposed = self.feature(origin, feature, 'stage_resolution', **fields, scope=scope)
+        self.assertEqual(proposed['paths'], ['file.txt'])
+        for _ in range(controller.RESOLUTION_SCRATCH_LIMIT - 1):
+            other = {**fields, 'attempt': str(uuid.uuid4())}
+            self.feature(origin, feature, 'stage_resolution', **other, scope=scope)
+
+        another = {**fields, 'attempt': str(uuid.uuid4())}
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'stage_resolution', **another, scope=scope)
+        self.assertEqual(caught.exception.code, 'unavailable')
+        self.assertEqual(self.feature(origin, feature, 'stage_resolution', **fields, scope=scope), proposed)
+        self.assertEqual(self.feature(origin, feature, 'discard_resolution', **fields), {'discarded': True})
+        self.assertFalse((checkout.parent / 'resolution.git').exists())
+        self.assertEqual(self.feature(origin, feature, 'stage_resolution', **another, scope=scope), proposed)
+        self.assertEqual(self.feature(origin, feature, 'snapshot'), reviewed)
+
+    def test_merge_resolution_preserves_shared_text_underlines_without_accepting_markers(self):
+        section = 'Common section\n==============\n\nShared paragraph.\n'
+        origin, feature, _, reviewed, fields, checkout = self.resolution_fixture(
+            ('upstream text\n\n' + section).encode(), 'feature text\n\n' + section)
+        proposed = self.feature(origin, feature, 'stage_resolution', **fields, scope=['file.txt'])
+
+        path = checkout / 'file.txt'
+        resolved = 'resolved text\n\n' + section
+        path.write_text(resolved + '\n=======\n')
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'adopt_resolution', **fields, **proposed)
+        self.assertEqual(caught.exception.code, 'merge_conflict')
+        self.assertEqual(self.feature(origin, feature, 'snapshot'), reviewed)
+
+        path.write_text(resolved)
+        result = self.feature(origin, feature, 'adopt_resolution', **fields, **proposed)
+        self.assertIn('+resolved text', result['patch'])
+        self.assertIn(' ==============', result['patch'])
+
+    def test_feature_merge_resolution_rejects_unresolved_scope_and_type_changes(self):
+        origin, feature, _, reviewed, fields, checkout = self.resolution_fixture()
+        proposed = self.feature(origin, feature, 'stage_resolution', **fields, scope=['file.txt'])
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'adopt_resolution', **fields, **proposed)
+        self.assertEqual(caught.exception.code, 'merge_conflict')
+        self.assertEqual(self.feature(origin, feature, 'snapshot'), reviewed)
+
+        (checkout / 'file.txt').write_text('resolved text\n')
+        upstream = checkout / 'upstream.txt'
+        clean_contents = upstream.read_bytes()
+        upstream.write_text('attempt to overwrite the clean automatic merge\n')
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'adopt_resolution', **fields, **proposed)
+        self.assertEqual(caught.exception.code, 'scope_violation')
+        upstream.write_bytes(clean_contents)
+        for change in ('mode', 'delete', 'symlink'):
+            with self.subTest(change=change):
+                affected = checkout / 'file.txt'
+                if change == 'mode':
+                    affected.chmod(0o755)
+                else:
+                    affected.unlink()
+                    if change == 'symlink':
+                        affected.symlink_to(upstream)
+                with self.assertRaises(controller.Problem) as caught:
+                    self.feature(origin, feature, 'adopt_resolution', **fields, **proposed)
+                self.assertEqual(caught.exception.code, 'scope_violation')
+                self.assertEqual(self.feature(origin, feature, 'snapshot'), reviewed)
+                if affected.is_symlink():
+                    affected.unlink()
+                affected.write_text('resolved text\n')
+                affected.chmod(0o644)
+
+    def test_merge_resolution_discards_a_new_candidate_when_preflight_observes_a_moved_target(self):
+        origin, feature, _, reviewed, fields, checkout = self.resolution_fixture()
+        observed = self.feature(origin, feature, 'remote')
+        moved = {**observed, 'base_oid': reviewed['git']['base_oid']}
+        with patch.object(controller, 'observed_feature_remote', side_effect=[observed, moved]):
+            with self.assertRaises(controller.Problem) as caught:
+                self.feature(origin, feature, 'stage_resolution', **fields, scope=['file.txt'])
+        self.assertEqual(caught.exception.code, 'conflict')
+        self.assertFalse(checkout.exists())
+        self.assertFalse((checkout.parent / 'resolution.git').exists())
+        self.assertTrue((checkout.parent / 'resolution-discarded').is_file())
+
+        retry = {**fields, 'attempt': str(uuid.uuid4())}
+        self.feature(origin, feature, 'stage_resolution', **retry, scope=['file.txt'])
+        with patch.object(controller, 'observed_feature_remote', side_effect=[observed, moved]):
+            with self.assertRaises(controller.Problem) as caught:
+                self.feature(origin, feature, 'stage_resolution', **retry, scope=['file.txt'])
+        self.assertEqual(caught.exception.code, 'conflict')
+        self.assertTrue(self.feature_checkout(feature, retry['attempt']).is_dir())
+        self.assertEqual(self.feature(origin, feature, 'snapshot'), reviewed)
+
+    def test_feature_merge_resolution_rejects_a_later_target_and_wrong_proposal(self):
+        origin, feature, _, reviewed, fields, checkout = self.resolution_fixture()
+        proposed = self.feature(origin, feature, 'stage_resolution', **fields, scope=['file.txt'])
+        (checkout / 'file.txt').write_text('resolved text\n')
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'adopt_resolution', **fields,
+                         **{**proposed, 'paths': ['file.txt', 'upstream.txt']})
+        self.assertEqual(caught.exception.code, 'conflict')
+        (origin / 'upstream.txt').write_text('upstream advanced while the worker was resolving\n')
+        subprocess.run(['git', '-C', str(origin), 'commit', '-qam', 'advance again'], check=True)
+        for kind, keywords in (('stage_resolution', {'scope': ['file.txt']}), ('adopt_resolution', proposed)):
+            with self.subTest(kind=kind):
+                with self.assertRaises(controller.Problem) as caught:
+                    self.feature(origin, feature, kind, **fields, **keywords)
+                self.assertEqual(caught.exception.code, 'conflict')
+        self.assertEqual(self.feature(origin, feature, 'snapshot'), reviewed)
+        self.assertEqual((checkout / 'file.txt').read_text(), 'resolved text\n')
+
+    def test_feature_merge_resolution_handles_add_add_text_conflicts(self):
+        origin = self.origin()
+        self.clone(origin)
+        feature = str(uuid.uuid4())
+        base = self.feature(origin, feature, 'initialize')['base_oid']
+        fields = {'attempt': str(uuid.uuid4()), 'base_oid': base, 'writable': True}
+        self.feature(origin, feature, 'prepare', **fields)
+        (self.feature_checkout(feature, fields['attempt']) / 'shared.txt').write_text('feature addition\n')
+        self.feature(origin, feature, 'checkpoint', scope=['shared.txt'], **fields)
+        self.feature(origin, feature, 'integrate', expected_head=base, scope=['shared.txt'], **fields)
+        reviewed = self.feature(origin, feature, 'snapshot')
+        (origin / 'shared.txt').write_text('upstream addition\n')
+        remote_git = ['git', '-C', str(origin)]
+        subprocess.run([*remote_git, 'add', 'shared.txt'], check=True)
+        subprocess.run([*remote_git, 'commit', '-qm', 'upstream add'], check=True)
+
+        attempt = str(uuid.uuid4())
+        inputs = {**reviewed['git'], 'attempt': attempt}
+        proposal = self.feature(origin, feature, 'stage_resolution', **inputs, scope=['shared.txt'])
+        self.assertEqual(proposal['paths'], ['shared.txt'])
+        (self.feature_checkout(feature, attempt) / 'shared.txt').write_text('both additions\n')
+        result = self.feature(origin, feature, 'adopt_resolution', **inputs, **proposal)
+        self.assertEqual(result['changed_paths'], ['shared.txt'])
+        self.assertIn('+both additions', result['patch'])
+
+    def test_feature_merge_resolution_rechecks_the_target_after_materializing_the_result(self):
+        origin, feature, _, reviewed, fields, checkout = self.resolution_fixture()
+        proposed = self.feature(origin, feature, 'stage_resolution', **fields, scope=['file.txt'])
+        (checkout / 'file.txt').write_text('resolved text\n')
+        observe = controller.observed_feature_remote
+        calls = 0
+
+        def advance_during_adoption(*args):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                (origin / 'upstream.txt').write_text('advanced during candidate verification\n')
+                subprocess.run(['git', '-C', str(origin), 'commit', '-qam', 'advance again'], check=True)
+            return observe(*args)
+
+        with patch.object(controller, 'observed_feature_remote', side_effect=advance_during_adoption):
+            with self.assertRaises(controller.Problem) as caught:
+                self.feature(origin, feature, 'adopt_resolution', **fields, **proposed)
+        self.assertEqual(caught.exception.code, 'conflict')
+        self.assertEqual(self.feature(origin, feature, 'snapshot'), reviewed)
+        self.assertIsNone(self.feature(origin, feature, 'remote')['head_oid'])
+
+    def test_feature_merge_resolution_rejects_binary_and_outside_scope_conflicts(self):
+        origin, feature, _, reviewed, fields, checkout = self.resolution_fixture(b'upstream\x00binary\n')
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'stage_resolution', **fields, scope=['file.txt'])
+        self.assertEqual(caught.exception.code, 'merge_conflict')
+        self.assertFalse(checkout.exists())
+        self.assertFalse((checkout.parent / 'resolution.git').exists())
+        self.assertEqual(self.feature(origin, feature, 'snapshot'), reviewed)
+
+        (origin / 'file.txt').write_text('upstream text\n')
+        subprocess.run(['git', '-C', str(origin), 'commit', '-qam', 'text conflict'], check=True)
+        with self.assertRaises(controller.Problem) as caught:
+            self.feature(origin, feature, 'stage_resolution', **{**fields, 'attempt': str(uuid.uuid4())},
+                         scope=['unrelated.txt'])
+        self.assertEqual(caught.exception.code, 'scope_violation')
+        self.assertEqual(self.feature(origin, feature, 'snapshot'), reviewed)
 
     def test_refresh_rejects_a_replacement_repository_with_shared_ancestry(self):
         origin = self.origin()

@@ -1,5 +1,6 @@
 use super::{
-    FeatureCoordinator, LocalAttempt, bundle, conversation_error, profiles, workspace_error,
+    FeatureCoordinator, FeatureDeliveryService, LocalAttempt, bundle, conversation_error, profiles,
+    workspace_error,
 };
 use factory_core::{
     attachments::WorkerDirectories,
@@ -44,8 +45,35 @@ impl FeatureCoordinator {
         feature: &FeatureState,
         request: TaskRequest,
     ) -> Result<ReservedTask, FeatureError> {
+        self.reserve_task_with_resolution(actor, feature, request, None)
+            .await
+    }
+
+    pub(super) async fn reserve_task_with_resolution(
+        &self,
+        actor: EnvironmentActor,
+        feature: &FeatureState,
+        request: TaskRequest,
+        resolution: Option<(&Environment, &Project, MergeResolutionCandidate)>,
+    ) -> Result<ReservedTask, FeatureError> {
         let id = feature.feature.id;
         let (env, project, state) = self.context(actor, id).await?;
+        let candidate = match resolution {
+            Some((staged_env, staged_project, candidate)) => {
+                if env.id != staged_env.id
+                    || env.generation != staged_env.generation
+                    || env.image_id != staged_env.image_id
+                    || env.policy_version != staged_env.policy_version
+                    || project.id != staged_project.id
+                    || project.repository_id != staged_project.repository_id
+                    || project.cloned_full_name != staged_project.cloned_full_name
+                {
+                    return Err(FeatureError::StaleSnapshot);
+                }
+                Some(candidate)
+            }
+            None => None,
+        };
         let provider = state.feature.provider;
         if state.feature.workflow_revision != bundle::WORKFLOW_REVISION {
             return Err(FeatureError::Unavailable);
@@ -133,24 +161,23 @@ impl FeatureCoordinator {
         // Publish the local reservation before persisting the claim. A resume
         // request can otherwise see Starting while this process is still launching it.
         let local_attempt = self.local_attempts.claim((id, request.attempt_id))?;
+        let claim = AttemptClaim {
+            task: request.task,
+            revision: request.revision,
+            workspace,
+            snapshot_id: request.snapshot_id,
+            model,
+            effort,
+            skill_revision: bundle::WORKFLOW_REVISION.into(),
+            retry_of: request.retry_of,
+        };
+        let command = match candidate {
+            Some(candidate) => FeatureCommand::ClaimMergeResolution { claim, candidate },
+            None => FeatureCommand::ClaimAttempt(claim),
+        };
         let receipt = self
             .store
-            .apply(
-                actor,
-                &env,
-                id,
-                request.operation_id,
-                FeatureCommand::ClaimAttempt(AttemptClaim {
-                    task: request.task,
-                    revision: request.revision,
-                    workspace,
-                    snapshot_id: request.snapshot_id,
-                    model,
-                    effort,
-                    skill_revision: bundle::WORKFLOW_REVISION.into(),
-                    retry_of: request.retry_of,
-                }),
-            )
+            .apply(actor, &env, id, request.operation_id, command)
             .await?;
         let mut reserved = ReservedTask {
             actor,
@@ -228,10 +255,12 @@ impl FeatureCoordinator {
         conversation_id: Option<Uuid>,
     ) -> Result<(ExecutionSession, Option<WorkerDirectories>), ExecutionError> {
         let workspace = &task.attempt.claim.workspace;
-        if let Err(error) = self
-            .workspaces
-            .prepare_task(&task.env, &task.project, workspace)
-            .await
+        let merge_resolution = task.attempt.merge_resolution.is_some();
+        if !merge_resolution
+            && let Err(error) = self
+                .workspaces
+                .prepare_task(&task.env, &task.project, workspace)
+                .await
         {
             self.fail_before_launch(task, &error.to_string())
                 .await
@@ -280,6 +309,7 @@ impl FeatureCoordinator {
             model: task.attempt.claim.model.clone(),
             effort: task.attempt.claim.effort.clone(),
             input: task.input.clone(),
+            merge_resolution,
             conversation_id: worker.as_ref().and(conversation_id),
         };
         match self
@@ -342,6 +372,14 @@ impl FeatureCoordinator {
     pub(super) async fn run_reserved(
         &self,
         task: ReservedTask,
+    ) -> Result<TaskResult, FeatureError> {
+        self.run_reserved_with_delivery(task, None).await
+    }
+
+    pub(super) async fn run_reserved_with_delivery(
+        &self,
+        task: ReservedTask,
+        delivery: Option<&FeatureDeliveryService>,
     ) -> Result<TaskResult, FeatureError> {
         if !task.fresh {
             return Ok(saved_result(task.attempt));
@@ -421,7 +459,7 @@ impl FeatureCoordinator {
                 }
                 ExecutionEvent::Message { .. } => break AttemptUpdate::Uncertain,
                 ExecutionEvent::Completed if started => {
-                    break self.validate_completed(&task, &messages).await;
+                    break self.validate_completed(&task, &messages, delivery).await;
                 }
                 ExecutionEvent::Failed => {
                     break AttemptUpdate::Failed {
@@ -443,7 +481,12 @@ impl FeatureCoordinator {
         Ok(TaskResult { attempt })
     }
 
-    async fn validate_completed(&self, task: &ReservedTask, messages: &[String]) -> AttemptUpdate {
+    async fn validate_completed(
+        &self,
+        task: &ReservedTask,
+        messages: &[String],
+        delivery: Option<&FeatureDeliveryService>,
+    ) -> AttemptUpdate {
         let role = task.attempt.claim.task.role;
         let result = if let Some(snapshot_id) = task
             .attempt
@@ -528,6 +571,12 @@ impl FeatureCoordinator {
             {
                 Ok(()) => AttemptUpdate::Validated { checkpoint: None },
                 Err(outcome) => outcome,
+            };
+        }
+        if let Some(candidate) = task.attempt.merge_resolution.as_ref() {
+            return match delivery {
+                Some(delivery) => delivery.finish_merge_resolution(task, candidate).await,
+                None => AttemptUpdate::Uncertain,
             };
         }
         match self.validate_writer(task).await {
@@ -771,7 +820,7 @@ impl FeatureCoordinator {
         feature: Uuid,
     ) -> Result<(), FeatureError> {
         let (env, project, state) = self.context(actor, feature).await?;
-        if has_stale_draft(&state) {
+        if has_stale_draft(&state) || state.merge_resolution_active() {
             return Ok(());
         }
         match state.feature.stage {

@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use factory_core::{
     environments::Environment,
     features::{
-        FeatureBranch, FeatureWorkspaceRuntime, GitSnapshot, TaskAttempt, TaskWorkspace,
-        WorkspaceAccess, WorkspaceDiff, WorkspaceError,
+        FeatureBranch, FeatureWorkspaceRuntime, GitSnapshot, MergeResolutionCandidate, TaskAttempt,
+        TaskWorkspace, WorkspaceAccess, WorkspaceDiff, WorkspaceError,
     },
     projects::{Project, ProjectState},
 };
@@ -16,6 +16,7 @@ use uuid::Uuid;
 // The feature controller has separate request/response limits from project imports.
 const REQUEST_LIMIT: usize = 192 * 1024;
 const RESPONSE_LIMIT: usize = 1024 * 1024;
+const RESOLUTION_SCOPE_LIMIT: usize = 64 * 128;
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -226,6 +227,87 @@ impl DockerProjectRuntime {
         Ok(confirmed)
     }
 
+    pub(super) async fn stage_feature_merge_resolution(
+        &self,
+        env: &Environment,
+        project: &Project,
+        workspace: &TaskWorkspace,
+        reviewed: &GitSnapshot,
+        approved_paths: &[String],
+    ) -> Result<MergeResolutionCandidate, WorkspaceError> {
+        let mut request = resolution_request(
+            env,
+            project,
+            workspace,
+            "feature_stage_resolution",
+            reviewed,
+        )?;
+        if !(1..=RESOLUTION_SCOPE_LIMIT).contains(&approved_paths.len()) {
+            return Err(WorkspaceError::Invalid);
+        }
+        request["scope"] = json!(approved_paths);
+        let reply: ResolutionReply = self
+            .run_feature(env, request)
+            .await
+            .map_err(resolution_error)?;
+        parse_resolution_candidate(reply, reviewed)
+    }
+
+    pub(super) async fn discard_feature_merge_resolution(
+        &self,
+        env: &Environment,
+        project: &Project,
+        workspace: &TaskWorkspace,
+        reviewed: &GitSnapshot,
+    ) -> Result<(), WorkspaceError> {
+        let request = resolution_request(
+            env,
+            project,
+            workspace,
+            "feature_discard_resolution",
+            reviewed,
+        )?;
+        let reply: DiscardResolutionReply = self
+            .run_feature(env, request)
+            .await
+            .map_err(resolution_error)?;
+        if !reply.discarded {
+            return Err(WorkspaceError::Uncertain);
+        }
+        Ok(())
+    }
+
+    pub(super) async fn adopt_feature_merge_resolution(
+        &self,
+        env: &Environment,
+        project: &Project,
+        workspace: &TaskWorkspace,
+        reviewed: &GitSnapshot,
+        candidate: &MergeResolutionCandidate,
+    ) -> Result<WorkspaceDiff, WorkspaceError> {
+        let mut request = resolution_request(
+            env,
+            project,
+            workspace,
+            "feature_adopt_resolution",
+            reviewed,
+        )?;
+        if !valid_resolution_candidate(candidate, reviewed) {
+            return Err(WorkspaceError::Invalid);
+        }
+        request["target_oid"] = json!(candidate.target_oid);
+        request["paths"] = json!(candidate.paths);
+        let diff = parse_snapshot(
+            self.run_feature(env, request)
+                .await
+                .map_err(resolution_error)?,
+        )?;
+        if diff.git.base_oid != candidate.target_oid || diff.git.head_oid == reviewed.head_oid {
+            return Err(WorkspaceError::Uncertain);
+        }
+        Ok(diff)
+    }
+
     async fn run_feature<T: DeserializeOwned>(
         &self,
         env: &Environment,
@@ -290,6 +372,79 @@ fn snapshot_request(
     request["head_oid"] = json!(snapshot.head_oid);
     request["patch_digest"] = json!(snapshot.patch_digest);
     Ok(request)
+}
+
+fn resolution_request(
+    env: &Environment,
+    project: &Project,
+    workspace: &TaskWorkspace,
+    op: &str,
+    reviewed: &GitSnapshot,
+) -> Result<Value, WorkspaceError> {
+    if workspace.access != WorkspaceAccess::Write
+        || workspace.attempt_id.is_nil()
+        || workspace.base_oid != reviewed.head_oid
+    {
+        return Err(WorkspaceError::Invalid);
+    }
+    let mut request = snapshot_request(env, project, workspace.feature_id, op, reviewed)?;
+    request["attempt"] = json!(workspace.attempt_id);
+    Ok(request)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiscardResolutionReply {
+    discarded: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResolutionReply {
+    target_oid: String,
+    paths: Vec<String>,
+}
+
+fn resolution_error(error: WorkspaceError) -> WorkspaceError {
+    // Older controller images reject the new operations as unknown.
+    // The adapter checks the request identity before making the call.
+    match error {
+        WorkspaceError::Invalid => WorkspaceError::Unavailable,
+        other => other,
+    }
+}
+
+fn parse_resolution_candidate(
+    reply: ResolutionReply,
+    reviewed: &GitSnapshot,
+) -> Result<MergeResolutionCandidate, WorkspaceError> {
+    let candidate = MergeResolutionCandidate {
+        target_oid: reply.target_oid,
+        paths: reply.paths,
+    };
+    if !valid_resolution_candidate(&candidate, reviewed) {
+        return Err(WorkspaceError::Uncertain);
+    }
+    Ok(candidate)
+}
+
+fn valid_resolution_candidate(
+    candidate: &MergeResolutionCandidate,
+    reviewed: &GitSnapshot,
+) -> bool {
+    valid_oid(&candidate.target_oid)
+        && candidate.target_oid != reviewed.base_oid
+        && (1..=128).contains(&candidate.paths.len())
+        && candidate.paths.windows(2).all(|pair| pair[0] < pair[1])
+        && candidate.paths.iter().all(|path| {
+            !path.trim().is_empty()
+                && path.len() <= 1024
+                && !path.contains(['\\', ':'])
+                && !path.chars().any(char::is_control)
+                && path.split('/').all(|part| {
+                    !matches!(part, "" | "." | "..") && !part.eq_ignore_ascii_case(".git")
+                })
+        })
 }
 
 fn parse_snapshot(reply: SnapshotReply) -> Result<WorkspaceDiff, WorkspaceError> {
@@ -390,5 +545,57 @@ impl From<ProjectRuntimeError> for WorkspaceError {
             ProjectRuntimeError::Unavailable => Self::Unavailable,
             ProjectRuntimeError::Uncertain => Self::Uncertain,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_resolution_reply_binds_a_new_target_and_canonical_paths() {
+        let snapshot = GitSnapshot {
+            base_oid: "a".repeat(40),
+            head_oid: "b".repeat(40),
+            patch_digest: "c".repeat(64),
+        };
+        let target = "d".repeat(40);
+        let reply = serde_json::from_value(json!({
+            "target_oid": target,
+            "paths": ["src/main.rs", "test file.txt"],
+        }))
+        .unwrap();
+        let candidate = parse_resolution_candidate(reply, &snapshot).unwrap();
+        assert_eq!(candidate.target_oid, target);
+        assert_eq!(candidate.paths, ["src/main.rs", "test file.txt"]);
+
+        for paths in [
+            vec!["src/../../outside"],
+            vec![".GiT/config"],
+            vec!["/absolute"],
+            vec!["test file.txt", "src/main.rs"],
+            vec!["src/main.rs", "src/main.rs"],
+        ] {
+            assert_eq!(
+                parse_resolution_candidate(
+                    ResolutionReply {
+                        target_oid: target.clone(),
+                        paths: paths.into_iter().map(str::to_owned).collect(),
+                    },
+                    &snapshot
+                ),
+                Err(WorkspaceError::Uncertain),
+            );
+        }
+        assert_eq!(
+            parse_resolution_candidate(
+                ResolutionReply {
+                    target_oid: snapshot.base_oid.clone(),
+                    paths: vec!["src/main.rs".into()],
+                },
+                &snapshot
+            ),
+            Err(WorkspaceError::Uncertain),
+        );
     }
 }

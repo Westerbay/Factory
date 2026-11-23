@@ -130,6 +130,8 @@ const featureSchema = z.object({
   attempts: z.array(attemptSchema),
   review: reviewSchema.nullish(),
   delivery: deliverySchema.nullish(),
+  canResolveMergeConflict: z.boolean().nullish(),
+  mergeResolutionAttemptId: id.nullish(),
 })
 const pageSchema = z.object({
   items: z.array(summarySchema),
@@ -161,6 +163,7 @@ const errorCodeSchema = z.enum([
   "feature-execution-uncertain",
   "feature-review-blocked",
   "feature-stale-snapshot",
+  "feature-merge-resolution-unsupported",
   "unavailable",
 ])
 const errorSchema = z.object({ code: errorCodeSchema })
@@ -331,6 +334,23 @@ export async function draft(
   return featureSchema.parse(
     checked(
       await apiClient.POST("/api/features/{id}/draft", {
+        params: { path: { id: featureId }, header: csrf(token) },
+        body,
+        signal,
+      })
+    )
+  )
+}
+
+export async function resolveMergeConflict(
+  featureId: string,
+  body: FeatureSnapshotBody,
+  token: string,
+  signal: AbortSignal
+): Promise<Feature> {
+  return featureSchema.parse(
+    checked(
+      await apiClient.POST("/api/features/{id}/resolve-merge-conflict", {
         params: { path: { id: featureId }, header: csrf(token) },
         body,
         signal,

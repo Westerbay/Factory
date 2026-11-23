@@ -641,6 +641,7 @@ async fn review_and_delivery_fence_project_deletion_until_outcomes_are_saved() {
         Err(ProjectError::InUse)
     ));
     let status = DeliveryStatus::Failed {
+        merge_conflict: false,
         reason: "The exact remote head had no verified ownership or draft".into(),
     };
     apply(FeatureCommand::RecordDelivery {

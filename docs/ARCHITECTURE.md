@@ -427,6 +427,20 @@ Final reviewers receive the JSON delivery contract after the approved context, w
 evidence inside findings; digest, completeness and schema validation remain strict.
 This prompt handling is compatible with existing workflow revisions and approvals.
 
+An explicit merge resolution request reserves a writer against one reviewed snapshot
+and target commit. Its staged checkout contains Git's automatic merge and the supported
+conflicts. The isolated worker starts with the image tools so conflicted manifests can
+be edited before dependency preparation. The project controller reads the resolution
+with a trusted index, verifies the scoped tree and rechecks the exact refs before
+updating the local comparison. Refreshing it is blocked while a resolution holds its
+reservation. Once the worker is confirmed stopped, Factory reclaims its scratch
+checkout and temporary Git objects while retaining the evidence for replay. The
+controller retains candidates with uncertain staging or launch state for exact replay.
+Four retained candidates block further staging for the feature until a slot can be
+reclaimed. The application keeps the previous review and schedules a new one with the
+existing integrated checks. Draft publication requires an explicit request for the new
+snapshot.
+
 The [project controller](../infra/environments/project-controller.py) uses owned Git
 checkouts and validates a writer's paths and the cumulative diff before moving the
 integration branch. Raw Git output and the complete serialized controller response

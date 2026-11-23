@@ -59,7 +59,17 @@ impl FeatureState {
                     at: now,
                 },
             ),
-            FeatureCommand::ClaimAttempt(claim) => self.claim(claim, generation),
+            FeatureCommand::ClaimAttempt(claim) => self.claim(claim, generation, None),
+            FeatureCommand::ClaimMergeResolution { claim, candidate } => {
+                require(
+                    claim.workspace.attempt_id == operation_id,
+                    FeatureError::Invalid,
+                )?;
+                self.claim(claim, generation, Some(candidate))
+            }
+            FeatureCommand::MarkDeliveryMergeConflict { snapshot_id } => {
+                self.mark_delivery_merge_conflict(snapshot_id)
+            }
             FeatureCommand::RecordAttempt { attempt_id, update } => {
                 self.record_attempt(attempt_id, generation, update)
             }
@@ -275,7 +285,12 @@ impl FeatureState {
         Ok(())
     }
 
-    fn claim(&mut self, claim: AttemptClaim, generation: i64) -> Result<(), FeatureError> {
+    fn claim(
+        &mut self,
+        claim: AttemptClaim,
+        generation: i64,
+        merge_resolution: Option<MergeResolutionCandidate>,
+    ) -> Result<(), FeatureError> {
         require(
             claim.workspace.feature_id == self.feature.id
                 && !claim.workspace.attempt_id.is_nil()
@@ -297,7 +312,11 @@ impl FeatureState {
                 .any(|attempt| attempt.id() == claim.workspace.attempt_id),
             FeatureError::Conflict,
         )?;
-        self.validate_assignment(&claim)?;
+        if let Some(candidate) = &merge_resolution {
+            self.validate_merge_resolution(&claim, candidate)?;
+        } else {
+            self.validate_assignment(&claim)?;
+        }
         if let Some(previous) = self.latest_attempt(&claim) {
             require(
                 matches!(
@@ -335,8 +354,15 @@ impl FeatureState {
             }),
             FeatureError::Conflict,
         )?;
+        if merge_resolution.is_some() && !self.review_slot_available() {
+            self.additional_review_rounds = self
+                .additional_review_rounds
+                .checked_add(1)
+                .ok_or(FeatureError::ReviewBlocked)?;
+        }
         self.attempts.push(TaskAttempt {
             claim,
+            merge_resolution,
             generation,
             status: AttemptStatus::Starting,
             launch_settled: false,
@@ -349,6 +375,95 @@ impl FeatureState {
             pending_verification: None,
         });
         Ok(())
+    }
+
+    pub fn merge_resolution_active(&self) -> bool {
+        self.attempts
+            .iter()
+            .any(|attempt| attempt.merge_resolution.is_some() && attempt.status.holds_reservation())
+    }
+
+    pub fn can_resolve_merge_conflict(&self, snapshot_id: Uuid) -> bool {
+        self.feature.stage == FeatureStage::Review
+            && self.ensure_idle().is_ok()
+            && self
+                .active_review(snapshot_id)
+                .is_ok_and(|review| review.verdict.as_ref().is_some_and(ReviewVerdict::ready))
+            && self.deliveries.last().is_some_and(|receipt| {
+                receipt.snapshot_id == snapshot_id
+                    && matches!(
+                        &receipt.status,
+                        DeliveryStatus::Failed { reason, merge_conflict }
+                            if *merge_conflict || reason == MERGE_CONFLICT_REASON
+                    )
+            })
+            && !self.deliveries.iter().any(|receipt| {
+                matches!(
+                    receipt.status,
+                    DeliveryStatus::Published { .. } | DeliveryStatus::PublishedStale { .. }
+                )
+            })
+    }
+
+    fn mark_delivery_merge_conflict(&mut self, snapshot_id: Uuid) -> Result<(), FeatureError> {
+        self.ensure_idle()?;
+        require(
+            self.feature.stage == FeatureStage::Review
+                && self
+                    .active_review(snapshot_id)?
+                    .verdict
+                    .as_ref()
+                    .is_some_and(ReviewVerdict::ready),
+            FeatureError::Conflict,
+        )?;
+        let receipt = self
+            .deliveries
+            .last_mut()
+            .filter(|receipt| receipt.snapshot_id == snapshot_id)
+            .ok_or(FeatureError::Conflict)?;
+        let DeliveryStatus::Failed {
+            reason,
+            merge_conflict,
+        } = &mut receipt.status
+        else {
+            return Err(FeatureError::Conflict);
+        };
+        *reason = MERGE_CONFLICT_REASON.into();
+        *merge_conflict = true;
+        Ok(())
+    }
+
+    fn validate_merge_resolution(
+        &self,
+        claim: &AttemptClaim,
+        candidate: &MergeResolutionCandidate,
+    ) -> Result<(), FeatureError> {
+        let id = claim.snapshot_id.ok_or(FeatureError::Invalid)?;
+        self.ensure_idle()?;
+        require(self.can_resolve_merge_conflict(id), FeatureError::Conflict)?;
+        let review = self.active_review(id)?;
+        let (architecture, approved) = self.approved_tasks()?;
+        require(
+            claim.revision.as_ref() == Some(architecture)
+                && claim.task.role == TaskRole::Correction
+                && claim.task.id == claim.workspace.attempt_id
+                && claim.retry_of.is_none()
+                && claim.task.checks.is_empty()
+                && claim.task.depends_on.is_empty()
+                && claim.workspace.base_oid == review.snapshot.git.head_oid
+                && valid_oid(&candidate.target_oid)
+                && candidate.target_oid != review.snapshot.git.base_oid
+                && candidate.paths == claim.task.paths
+                && candidate.paths.windows(2).all(|pair| pair[0] < pair[1])
+                && candidate.paths.iter().all(|path| {
+                    !path.ends_with('/')
+                        && approved
+                            .iter()
+                            .flat_map(|task| &task.paths)
+                            .any(|allowed| covers(allowed, path))
+                }),
+            FeatureError::Conflict,
+        )
     }
 
     fn validate_assignment(&self, claim: &AttemptClaim) -> Result<(), FeatureError> {
@@ -600,6 +715,7 @@ impl FeatureState {
                 && self.attempts.iter().all(|attempt| {
                     attempt.claim.revision.as_ref() != Some(architecture)
                         || attempt.claim.task.role != TaskRole::Correction
+                        || attempt.merge_resolution.is_some()
                         || self
                             .latest_attempt(&attempt.claim)
                             .is_some_and(|latest| latest.status == AttemptStatus::Validated)
@@ -825,7 +941,7 @@ impl FeatureState {
         match &status {
             DeliveryStatus::Claimed => return Err(FeatureError::Invalid),
             DeliveryStatus::Uncertain => {}
-            DeliveryStatus::Failed { reason } => {
+            DeliveryStatus::Failed { reason, .. } => {
                 require(text(reason, 4096), FeatureError::Invalid)?
             }
             DeliveryStatus::Published { draft_url }
