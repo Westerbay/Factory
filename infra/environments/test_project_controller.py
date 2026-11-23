@@ -951,8 +951,9 @@ class ProjectControllerTests(unittest.TestCase):
         subprocess.run(['git', '-C', str(origin), 'commit', '-qam', 'conflicting advance'], check=True)
         with self.assertRaises(controller.Problem) as caught:
             self.feature(origin, feature, 'refresh', **result['git'])
-        self.assertEqual(caught.exception.code, 'conflict')
+        self.assertEqual(caught.exception.code, 'merge_conflict')
         self.assertEqual(self.feature(origin, feature, 'snapshot'), result)
+        self.assertIsNone(self.feature(origin, feature, 'remote')['head_oid'])
 
     def test_refresh_rejects_a_replacement_repository_with_shared_ancestry(self):
         origin = self.origin()

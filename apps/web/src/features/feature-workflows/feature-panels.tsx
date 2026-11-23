@@ -16,6 +16,7 @@ import { Button } from "../../components/ui/button"
 import { LoadingState } from "../../components/ui/loading-state"
 import type { components } from "../../lib/api/schema"
 import { useLocale } from "../../lib/i18n"
+import { translateMessage } from "../../lib/i18n/dynamic-messages"
 import { ArtifactPreview } from "../artifacts/artifact-preview"
 import { useArtifactPreviewLabels } from "../conversations/artifact-labels"
 import { MessageMarkdown } from "../conversations/message-markdown"
@@ -771,7 +772,7 @@ export function FeaturePanels({
                 <p className="feature-delivery-status">
                   {deliveryLabel(delivery.status)}
                 </p>
-                {delivery.reason && <p>{delivery.reason}</p>}
+                {delivery.reason && <p>{translateMessage(delivery.reason)}</p>}
                 {url && (
                   <a href={url} target="_blank" rel="noopener noreferrer">
                     {m.feature_open_draft()}

@@ -821,7 +821,7 @@ fn review_title(role: TaskRole) -> &'static str {
 
 fn workspace_error(error: WorkspaceError) -> FeatureError {
     match error {
-        WorkspaceError::Conflict => FeatureError::StaleSnapshot,
+        WorkspaceError::Conflict | WorkspaceError::MergeConflict => FeatureError::StaleSnapshot,
         WorkspaceError::Uncertain => FeatureError::ExecutionUncertain,
         WorkspaceError::Invalid
         | WorkspaceError::ScopeViolation

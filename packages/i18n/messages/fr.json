@@ -447,6 +447,7 @@
   "feature_publish_draft": "Publier la PR brouillon relue",
   "feature_reconcile_draft": "Vérifier la demande de PR",
   "feature_draft_receipt": "Pull request brouillon",
+  "feature_delivery_merge_conflict": "Des modifications de la branche cible entrent en conflit avec cette feature. Résolvez les conflits sur la branche cible actuelle avant d’ouvrir une PR brouillon.",
   "feature_open_draft": "Ouvrir la PR brouillon",
   "feature_draft_scope": "La publication porte uniquement sur le diff relu affiché ici.",
   "feature_read_only_revision": "Étape précédente, affichée pour référence.",

@@ -384,6 +384,7 @@ impl From<ProjectRuntimeError> for WorkspaceError {
         match error {
             ProjectRuntimeError::Invalid => Self::Invalid,
             ProjectRuntimeError::Conflict => Self::Conflict,
+            ProjectRuntimeError::MergeConflict => Self::MergeConflict,
             ProjectRuntimeError::ScopeViolation => Self::ScopeViolation,
             ProjectRuntimeError::DiffUnrenderable => Self::DiffUnrenderable,
             ProjectRuntimeError::Unavailable => Self::Unavailable,

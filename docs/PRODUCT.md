@@ -207,7 +207,9 @@ general review. Corrections use separate writers and a fresh review when needed.
 Decisive failed or missing checks and blocking findings prevent publication. Members
 can inspect the result and explicitly request one draft pull request. If its target
 branch changes, Factory prepares the current comparison for another review. When the
-comparison is temporarily unavailable, the member can retry it. The member can check
+comparison is temporarily unavailable, the member can retry it. If the changes conflict
+with the target branch, Factory reports the conflict and preserves the reviewed snapshot.
+The conflicting changes must be resolved before opening a draft. The member can check
 an ambiguous publication again. When Factory confirms no draft exists and cannot
 attribute the exact remote branch to its own push, it closes the request without
 changing the remote branch. Findings and checks identify the snapshot they cover,

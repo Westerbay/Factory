@@ -188,6 +188,8 @@ pub enum WorkspaceError {
     Invalid,
     #[error("The workspace changed")]
     Conflict,
+    #[error("The feature and target branch have conflicting changes")]
+    MergeConflict,
     #[error("The task changed files outside its approved scope")]
     ScopeViolation,
     #[error(

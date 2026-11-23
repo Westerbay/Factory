@@ -46,6 +46,13 @@ enum Publication {
     Uncertain,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BaseRefresh {
+    Refreshed,
+    MergeConflict,
+    Unavailable,
+}
+
 enum RemoteBranch {
     NeedsPush,
     Ready,
@@ -179,6 +186,7 @@ impl FeatureDeliveryService {
             || self
                 .refresh_stale_base(actor, &env, &project, feature_id, approved)
                 .await
+                == BaseRefresh::Refreshed
         {
             Ok(())
         } else {
@@ -281,22 +289,30 @@ impl FeatureDeliveryService {
                 None,
             ),
             Publication::Stale { refresh_base } => {
-                let refreshed = if refresh_base {
+                let refresh = if refresh_base {
                     self.refresh_stale_base(actor, &env, &project, feature_id, approved)
                         .await
+                } else if &current.git != approved {
+                    BaseRefresh::Refreshed
                 } else {
-                    &current.git != approved
+                    BaseRefresh::Unavailable
                 };
-                let reason = if refreshed {
-                    "The reviewed diff changed. Review the current result before publishing."
-                } else {
-                    "The reviewed diff is stale. Factory could not prepare the current comparison."
+                let reason = match refresh {
+                    BaseRefresh::Refreshed => {
+                        "The reviewed diff changed. Review the current result before publishing."
+                    }
+                    BaseRefresh::MergeConflict => {
+                        "The target branch has changes that conflict with this feature. Resolve the conflicts against the current target branch before opening a draft."
+                    }
+                    BaseRefresh::Unavailable => {
+                        "The reviewed diff is stale. Factory could not prepare the current comparison."
+                    }
                 };
                 (
                     DeliveryStatus::Failed {
                         reason: reason.into(),
                     },
-                    Some(refreshed),
+                    Some(refresh == BaseRefresh::Refreshed),
                 )
             }
             Publication::Failed(reason) => (
@@ -339,7 +355,7 @@ impl FeatureDeliveryService {
         project: &Project,
         feature_id: Uuid,
         approved: &GitSnapshot,
-    ) -> bool {
+    ) -> BaseRefresh {
         let repository_actor = RepositoryActor {
             actor,
             environment_id: env.id,
@@ -350,21 +366,29 @@ impl FeatureDeliveryService {
             .draft_access(repository_actor, project)
             .await
         else {
-            return false;
+            return BaseRefresh::Unavailable;
         };
         // Stage only a candidate identity while the fetched refs are untrusted.
         let candidate = Uuid::new_v4();
-        let Ok(proposed) = self
+        let proposed = match self
             .git
             .stage_refresh(env, project, feature_id, candidate, approved)
             .await
-        else {
-            return false;
+        {
+            Ok(proposed) if proposed != *approved => proposed,
+            Err(WorkspaceError::MergeConflict) => {
+                return if access.recheck().await.is_ok() {
+                    BaseRefresh::MergeConflict
+                } else {
+                    BaseRefresh::Unavailable
+                };
+            }
+            _ => return BaseRefresh::Unavailable,
         };
-        if proposed == *approved || access.recheck().await.is_err() {
-            return false;
+        if access.recheck().await.is_err() {
+            return BaseRefresh::Unavailable;
         }
-        match self
+        let confirmed = match self
             .git
             .confirm_refresh(env, project, feature_id, candidate, approved, &proposed)
             .await
@@ -377,6 +401,11 @@ impl FeatureDeliveryService {
                 .await
                 .is_ok_and(|diff| diff.git == proposed),
             Err(_) => false,
+        };
+        if confirmed {
+            BaseRefresh::Refreshed
+        } else {
+            BaseRefresh::Unavailable
         }
     }
 
