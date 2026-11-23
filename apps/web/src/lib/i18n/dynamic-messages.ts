@@ -415,6 +415,10 @@ const messages = new Map<string, () => string>([
   ["admin", m.admin],
   ["high", m.high],
   ["low", m.low],
+  [
+    "The target branch has changes that conflict with this feature. Resolve the conflicts against the current target branch before opening a draft.",
+    m.feature_delivery_merge_conflict,
+  ],
   ["medium", m.medium],
   ["member", m.member],
   ["minimal", m.minimal],

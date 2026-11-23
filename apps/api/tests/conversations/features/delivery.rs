@@ -15,6 +15,7 @@ struct RemoteObservation {
     lose_push_proof: bool,
     advanced: bool,
     refresh_failures: usize,
+    merge_conflict: bool,
     replace_on_stage: bool,
     replace_on_lookup: Option<usize>,
     replaced: bool,
@@ -87,6 +88,9 @@ impl FeatureDeliveryRuntime for DeliveryGit {
         );
         let integrated = self.workers.observed.lock().unwrap().integrated.len();
         let mut state = self.remote.lock().unwrap();
+        if state.merge_conflict {
+            return Err(WorkspaceError::MergeConflict);
+        }
         assert_eq!(state.head.as_deref(), Some(approved.head_oid.as_str()));
         assert_eq!(state.managed, state.head);
         if state.refresh_failures > 0 {
@@ -511,6 +515,46 @@ async fn publication_fixture(remote: RemoteObservation) -> PublicationFixture {
 
 fn draft_body(operation_id: Uuid, snapshot_id: Uuid) -> String {
     json!({"snapshotId": snapshot_id, "operationId": operation_id}).to_string()
+}
+
+#[tokio::test]
+async fn feature_reports_a_merge_conflict_without_publishing_or_replacing_the_review() {
+    let PublicationFixture {
+        f,
+        store,
+        git,
+        provider,
+        reviewed,
+        path,
+        ..
+    } = publication_fixture(RemoteObservation {
+        base: 5,
+        merge_conflict: true,
+        ..Default::default()
+    })
+    .await;
+    let draft_path = format!("{path}/draft");
+    let request = draft_body(Uuid::new_v4(), reviewed.id);
+    let response = f.call("POST", &draft_path, 0, &request).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(response).await["code"], "feature-stale-snapshot");
+
+    let response = f.call("GET", &path, 0, "").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let state = body_json(response).await;
+    assert_eq!(state["delivery"]["status"], "failed");
+    assert!(
+        state["delivery"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("Resolve the conflicts against the current target branch")
+    );
+    assert_eq!(
+        store.inner.lock().unwrap().current_review,
+        Some(reviewed.id)
+    );
+    assert!(git.remote.lock().unwrap().pushes.is_empty());
+    assert!(provider.posts.lock().unwrap().is_empty());
 }
 
 async fn exercise_moved_base(retry_refresh: bool) {

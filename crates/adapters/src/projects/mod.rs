@@ -31,6 +31,8 @@ pub enum ProjectRuntimeError {
     Invalid,
     #[error("Project destination or key conflicts with existing files")]
     Conflict,
+    #[error("The feature and target branch have conflicting changes")]
+    MergeConflict,
     #[error("Task changes exceed the approved scope")]
     ScopeViolation,
     #[error("The combined diff cannot be displayed")]
@@ -375,6 +377,7 @@ fn parse_response(bytes: &[u8]) -> Result<Value, ProjectRuntimeError> {
     Err(match response["error"].as_str() {
         Some("invalid") => ProjectRuntimeError::Invalid,
         Some("conflict") => ProjectRuntimeError::Conflict,
+        Some("merge_conflict") => ProjectRuntimeError::MergeConflict,
         Some("scope_violation") => ProjectRuntimeError::ScopeViolation,
         Some("diff_unrenderable") => ProjectRuntimeError::DiffUnrenderable,
         Some("unavailable") => ProjectRuntimeError::Unavailable,

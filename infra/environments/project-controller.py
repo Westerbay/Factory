@@ -1396,7 +1396,7 @@ def compute_refresh(repo, remote, base_ref, expected_base, old_base, old_head):
         status, output = git_command(['merge-tree', '--write-tree', '--no-messages', old_head, new_base],
                                      repository_fd=repo, check=False)
         if status != 0:
-            raise Problem('conflict' if status == 1 else 'unavailable')
+            raise Problem('merge_conflict' if status == 1 else 'unavailable')
         tree = oid(output.decode('ascii').strip())
         new_head = feature_commit(repo, tree, (old_head, new_base), 'Refresh Factory feature base')
     return snapshot_between(repo, new_base, new_head)['git']

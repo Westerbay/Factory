@@ -447,6 +447,7 @@
   "feature_publish_draft": "Publish the reviewed draft",
   "feature_reconcile_draft": "Check the draft request",
   "feature_draft_receipt": "Draft pull request",
+  "feature_delivery_merge_conflict": "The target branch has changes that conflict with this feature. Resolve the conflicts against the current target branch before opening a draft.",
   "feature_open_draft": "Open draft pull request",
   "feature_draft_scope": "Publication applies only to the reviewed diff shown here.",
   "feature_read_only_revision": "Previous stage, shown for reference.",

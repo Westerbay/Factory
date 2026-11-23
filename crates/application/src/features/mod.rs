@@ -272,7 +272,7 @@ fn workspace_error(error: WorkspaceError) -> FeatureError {
         WorkspaceError::Invalid
         | WorkspaceError::ScopeViolation
         | WorkspaceError::DiffUnrenderable => FeatureError::Invalid,
-        WorkspaceError::Conflict => FeatureError::Conflict,
+        WorkspaceError::Conflict | WorkspaceError::MergeConflict => FeatureError::Conflict,
         WorkspaceError::Unavailable => FeatureError::Unavailable,
         WorkspaceError::Uncertain => FeatureError::ExecutionUncertain,
     }

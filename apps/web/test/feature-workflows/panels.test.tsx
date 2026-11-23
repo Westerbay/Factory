@@ -268,6 +268,27 @@ describe("feature result actions", () => {
     expect(html).toContain("Prior snapshot typecheck")
   })
 
+  it("explains a target branch conflict without offering to publish the previous patch", () => {
+    const html = render(
+      {
+        ...reviewedFeature,
+        feature: { ...reviewedFeature.feature, stage: "review" },
+        delivery: {
+          ...receipt,
+          status: "failed",
+          reason:
+            "The target branch has changes that conflict with this feature. Resolve the conflicts against the current target branch before opening a draft.",
+        },
+      },
+      { diff: reviewedDiff }
+    )
+    expect(html).toContain(
+      "Resolve the conflicts against the current target branch"
+    )
+    expect(html).not.toContain("Publish the reviewed draft")
+    expect(html).toContain('aria-label="Previous reviewed snapshot"')
+  })
+
   it("offers reopening a settled result and only exposes step continuation projected by the server", () => {
     expect(render(feature)).toContain("Revisit product decisions")
     expect(render(feature)).not.toContain("Resume this step")
